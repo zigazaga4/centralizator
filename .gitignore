@@ -1,0 +1,26 @@
+# Tauri updater signing keys — never commit. The private key is the
+# only thing that proves a release is authentic; if it leaks, anyone
+# can ship a "Centralizator update" that hijacks every installed app.
+# Add the contents of `.keys/centralizator.key` to GitHub Secrets as
+# TAURI_SIGNING_PRIVATE_KEY instead.
+.keys/
+
+# Server source — deliberately NOT published to the public client
+# repo. The Fastify backend (pricing engine, OpenRouter wiring,
+# SQLite store, deployment URL + key) stays private; only the client
+# (Tauri + React UI) lives on GitHub so the auto-updater can pull
+# signed installers from Releases.
+server/
+
+# Build artifacts from the tarball workflow.
+centralizator-server.tar.gz
+centralizator-server/
+
+# Windows installers checked out at the repo root after a local build.
+# The canonical copies live under app/src-tauri/target/.../bundle/nsis/
+# and on GitHub Releases.
+Centralizator_*_x64-setup.exe
+Centralizator_*_x64-setup.exe.sig
+
+# OS noise.
+.DS_Store

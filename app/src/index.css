@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Centralizator — Anthropic-inspired palette
+ *
+ * Background is a warm cream (not stark white) so the app feels like
+ * paper instead of an admin panel. Text is a warm dark ink, not pure
+ * black. The single accent is Anthropic's signature terracotta/coral,
+ * used sparingly for the upload CTA, editable cell focus, and the
+ * billable-total row.
+ *
+ * Tailwind 4 picks up these tokens from @theme automatically, so
+ * `bg-canvas-100`, `text-ink-700`, `border-coral-400` etc. all work.
+ * ────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+
+  /* Warm cream surfaces (paper-like, not blue-tinted white) */
+  --color-canvas-50:  #FBF8F1;
+  --color-canvas-100: #F4EFE3;
+  --color-canvas-200: #ECE5D2;
+  --color-canvas-300: #D9CFB8;
+
+  /* Warm dark inks (Anthropic body text is a soft black, not pure #000) */
+  --color-ink-50:  #F2EEE5;
+  --color-ink-100: #E5DECF;
+  --color-ink-200: #D6CDB8;
+  --color-ink-300: #B9B0A0;
+  --color-ink-400: #8F877C;
+  --color-ink-500: #6D665C;
+  --color-ink-600: #524C44;
+  --color-ink-700: #3A352F;
+  --color-ink-800: #25221E;
+  --color-ink-900: #161512;
+
+  /* Coral / terracotta — Anthropic's signature accent */
+  --color-coral-50:  #FBEEE6;
+  --color-coral-100: #F4D9C9;
+  --color-coral-200: #E9B69D;
+  --color-coral-300: #DD9476;
+  --color-coral-400: #D2805F;
+  --color-coral-500: #C56F4E;
+  --color-coral-600: #AE5C3D;
+  --color-coral-700: #8B4830;
+  --color-coral-800: #6A3624;
+}
+
+/* Tauri WebView2 inherits the system font on Windows by default; we
+ * override to a stable stack so the app looks the same across machines.
+ */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-canvas-100);
+  color: var(--color-ink-800);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Pretty drop-target focus state */
+.drop-active {
+  outline: 2px dashed var(--color-coral-500);
+  outline-offset: -6px;
+  background-color: var(--color-coral-50);
+}
+
+/* Number/date input chrome — keep editable spreadsheet cells flat */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

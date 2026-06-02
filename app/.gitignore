@@ -1,0 +1,15 @@
+node_modules
+dist
+.vite
+src-tauri/target
+src-tauri/gen
+*.log
+.DS_Store
+
+# TypeScript incremental build cache — regenerated on every `pnpm build`.
+*.tsbuildinfo
+
+# Local env (server URL etc). Track `.env.example` only.
+.env
+.env.local
+.env.*.local

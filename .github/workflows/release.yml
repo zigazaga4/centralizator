@@ -1,0 +1,91 @@
+name: release
+
+# Tag-driven release: push a tag like `v0.2.0` and this workflow builds
+# the Windows installer, signs it with the embedded minisign private
+# key, uploads it as a GitHub Release asset, AND generates the
+# `latest.json` the Tauri updater reads back. End result: every running
+# copy of the app sees the new version on next launch and offers to
+# install it.
+#
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY          base64 contents of `.keys/centralizator.key`
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD empty string (we generated without a password)
+#
+# The OpenRouter API key and Centralizator API key live in the server,
+# not the client — they are NOT needed here. The only secrets the
+# client carries are baked from app/.env at build time (VITE_API_BASE,
+# VITE_API_KEY). Set those as repo Variables or paste them into a
+# `.env` step before the build if you want a per-environment override.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual trigger from the Actions tab — useful for re-running a
+  # failed build without re-tagging.
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    permissions:
+      # tauri-action needs write to push release assets + latest.json.
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is the primary target; macOS + Linux are optional —
+        # add them here when you want signed installers for those
+        # platforms too. Each runner builds a signed installer + a
+        # platform entry in the eventual latest.json.
+        include:
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "app/src-tauri -> target"
+
+      - name: Install JS deps
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build + release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          # Use the pushed tag verbatim; falls back to a draft if
+          # workflow_dispatch ran without a tag.
+          tagName: ${{ github.ref_name }}
+          releaseName: "Centralizator ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          # tauri-action automatically uploads `latest.json` alongside
+          # the installers when `createUpdaterArtifacts: true` is set
+          # in tauri.conf.json (it is). That's the file the updater
+          # plugin downloads on every check.
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
