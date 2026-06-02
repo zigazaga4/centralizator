@@ -123,10 +123,28 @@ function wireImageToFile(w: WireImage): File {
 /* ──────────────────────────────────────────────────────────────────────
  * HTTP helper — single place that knows how to talk to /api/pairs.
  *
- * We swallow network errors at the call sites rather than here so each
- * public function can log a domain-specific message ("Failed to
- * persist new pair", etc.) and keep the queue alive.
+ * Two layers:
+ *   • `http`        — single attempt, throws on non-2xx or transport
+ *                     failure. Used for reads (loadAllPairs) where retry
+ *                     is pointless: if the read fails the caller wants
+ *                     to know immediately and surface "offline".
+ *   • `httpRetry`   — wraps `http` with bounded exponential backoff.
+ *                     Used for the MUTATING endpoints so a transient
+ *                     network blip doesn't silently lose a calculated
+ *                     pair. Without this, `setStatus(ready)` fires the
+ *                     PUT as fire-and-forget, the PUT fails (Wi-Fi
+ *                     drop, server restart, app killed mid-flight),
+ *                     and on the next launch the UI re-hydrates from
+ *                     the server and the calculation is gone.
  * ────────────────────────────────────────────────────────────────────── */
+
+/** Attempt counts: original + 2 retries. Three tries handles the common
+ *  transient-failure modes (DNS hiccup, momentary 502 from a proxy,
+ *  WebView2 burst-rate-limit) without making genuine outages slow.   */
+const RETRY_ATTEMPTS = 3;
+/** Backoff before attempt N (N=0 → no wait). 0 / 500 / 2000 ms gives a
+ *  total worst-case 2.5 s wall-clock before declaring terminal failure. */
+const RETRY_BACKOFF_MS = [0, 500, 2000];
 
 async function http(path: string, init?: RequestInit): Promise<Response> {
   // Merge auth header last so callers can't accidentally clobber it
@@ -141,6 +159,51 @@ async function http(path: string, init?: RequestInit): Promise<Response> {
     throw new Error(`${init?.method ?? "GET"} ${path} → ${res.status}: ${body}`);
   }
   return res;
+}
+
+/**
+ * 4xx responses (except 408/429) mean the SERVER understood the request
+ * and rejected it — a retry will fail identically. 5xx, 408 (timeout),
+ * and 429 (rate limit) can succeed on retry; transport errors (fetch
+ * throws before getting a response) are network problems, also worth
+ * retrying.
+ */
+function isRetryable(err: unknown): boolean {
+  if (!(err instanceof Error)) return true;
+  // Match the message shape thrown by `http`: "PUT /pairs/... → 404: ..."
+  const m = /→\s+(\d{3})\s*:/.exec(err.message);
+  if (!m) return true; // transport / fetch error — retry
+  const code = Number(m[1]);
+  if (code >= 500) return true;
+  if (code === 408 || code === 429) return true;
+  return false;
+}
+
+async function httpRetry(
+  label: string,
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+    const wait = RETRY_BACKOFF_MS[attempt] ?? 0;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    try {
+      return await http(path, init);
+    } catch (err) {
+      lastErr = err as Error;
+      if (!isRetryable(err)) {
+        // Hard rejection (400/404/etc) — don't keep trying.
+        console.error(`[db] ${label} rejected (non-retryable):`, err);
+        throw err;
+      }
+      console.warn(
+        `[db] ${label} attempt ${attempt + 1}/${RETRY_ATTEMPTS} failed:`,
+        err,
+      );
+    }
+  }
+  throw lastErr ?? new Error(`${label} failed after ${RETRY_ATTEMPTS} attempts`);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -187,12 +250,15 @@ export async function loadAllPairs(): Promise<Pair[]> {
   }
 }
 
-/** Insert a brand-new pair with its two source images. */
+/** Insert a brand-new pair with its two source images. Retries on
+ *  transient failure — see `httpRetry`. The caller awaits this so a
+ *  hard failure surfaces visibly instead of leaving an in-memory row
+ *  that the server never received. */
 export async function insertPair(pair: Pair): Promise<void> {
   // Encode image bytes to base64 in parallel — these are independent
   // reads and the encode work isn't tiny for multi-MB photos.
   const images = await Promise.all(pair.images.map(fileToWireImage));
-  await http("/pairs", {
+  await httpRetry(`insertPair ${pair.id}`, "/pairs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: pair.id, day: pair.day, images }),
@@ -207,23 +273,34 @@ export async function insertPair(pair: Pair): Promise<void> {
  * Persist a status transition. The "extracting" state is intentionally
  * a no-op (the server drops it too) — it's a purely optimistic UI
  * flip and would be misleading on rehydrate.
+ *
+ * Retries on transient failure. Callers SHOULD await this and flip the
+ * pair to "error" on rejection rather than fire-and-forget — otherwise
+ * the UI lies about a "ready" status the server never received, and
+ * the next launch re-hydrates as if the calculation never happened.
  */
 export async function persistPairStatus(id: string, status: PairStatus): Promise<void> {
   if (status.kind === "extracting") return;
-  await http(`/pairs/${encodeURIComponent(id)}/status`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(status),
-  });
+  await httpRetry(
+    `persistPairStatus ${id} → ${status.kind}`,
+    `/pairs/${encodeURIComponent(id)}/status`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(status),
+    },
+  );
 }
 
 /** Drop a single pair. The server cascades the image rows. */
 export async function deletePair(id: string): Promise<void> {
-  await http(`/pairs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await httpRetry(`deletePair ${id}`, `/pairs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 /** Clear the entire queue. Kept exported for future "Goleşte tot"
  *  flows; the current UI only deletes per-pair via `deletePair`. */
 export async function deleteAllPairs(): Promise<void> {
-  await http("/pairs", { method: "DELETE" });
+  await httpRetry("deleteAllPairs", "/pairs", { method: "DELETE" });
 }

@@ -1,5 +1,18 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { Extracted, Pair, PairPatch, PairStatus, Service } from "../types";
+import {
+  CITY_COMMISSION_KEYS,
+  CITY_COMMISSION_LABEL,
+  COLLABORATOR_LABEL,
+  dispatchSitesFor,
+  type CityKey,
+  type CollaboratorKey,
+  type Extracted,
+  type Pair,
+  type PairPatch,
+  type PairStatus,
+  type PricingBreakdown,
+  type Service,
+} from "../types";
 import { date, ron } from "../lib/format";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
@@ -7,6 +20,16 @@ const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 interface Props {
   pair: Pair;
   index: number;
+  /** Customer-city selection from the app header. The detail page
+   *  shows every city's breakdown, but the highlighted bottom-line
+   *  TOTAL CLIENT mirrors whatever is selected here. */
+  city: CityKey;
+  /** Collaborator selection from the app header. Per the user's brief
+   *  ("only that collaborator should be calculated"), the detail page
+   *  shows ONLY this collaborator's payout row + bottom-line total.
+   *  `null` means the picked city has no collaborator (Constanța) —
+   *  the per-collaborator section is hidden entirely in that case. */
+  collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
   onBack: () => void;
   onRemove: () => void;
@@ -27,7 +50,15 @@ interface Props {
  * and a status placeholder so the user can verify they uploaded the
  * right pair before pressing Calculează.
  * ────────────────────────────────────────────────────────────────────── */
-export function PairDetail({ pair, index, onPatch, onBack, onRemove }: Props) {
+export function PairDetail({
+  pair,
+  index,
+  city,
+  collaborator,
+  onPatch,
+  onBack,
+  onRemove,
+}: Props) {
   const status = pair.status;
   const title =
     status.kind === "ready"
@@ -50,6 +81,8 @@ export function PairDetail({ pair, index, onPatch, onBack, onRemove }: Props) {
               service={status.service}
               serviceFallback={status.serviceFallback}
               breakdown={status.breakdown}
+              city={city}
+              collaborator={collaborator}
               onPatch={onPatch}
             />
           ) : (
@@ -263,16 +296,22 @@ function Spreadsheet({
   service,
   serviceFallback,
   breakdown,
+  city,
+  collaborator,
   onPatch,
 }: {
   data: Extracted;
   service: Service;
   serviceFallback: boolean;
-  breakdown: { baseKey: string; weightBucket: string; distanceBucket: string; extraKm: number; baseTariff: number; extraKmCost: number; incrementKey: string; incrementCost: number; weekendSurcharge: number; totalVat19: number; net: number; vat21: number; totalVat21: number; commissionPct: number; commission: number; customerTotal: number };
+  breakdown: PricingBreakdown;
+  city: CityKey;
+  collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
 }) {
   let row = 0;
   const r = () => ++row;
+  const sites = dispatchSitesFor(city);
+  const collabRow = collaborator ? breakdown.collaboratorPrices[collaborator] : null;
 
   return (
     <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
@@ -442,9 +481,10 @@ function Spreadsheet({
       <DataRow n={r()} label="Net (col. N)" value={ron(breakdown.net)} numeric muted />
       <DataRow n={r()} label="TVA 21% (col. O)" value={ron(breakdown.vat21)} numeric muted />
       {/* Carrier subtotal — what Stalexone (transportator) gets.
-          Used to be the billable line; now it's an intermediate
-          number, surfaced muted so the eye walks to the final
-          customer total below. */}
+          Used to be the billable line; now it's the shared base every
+          city and collaborator total grosses up from, so we surface
+          it muted to let the eye walk to the per-city + per-collab
+          tables below. */}
       <DataRow
         n={r()}
         label="Tarif transportator (col. P)"
@@ -452,19 +492,74 @@ function Spreadsheet({
         numeric
         muted
       />
-      {/* Commission — the percentage and source live in
-          `commissionPct`/`commission` so the label stays clean and a
-          future tariff tweak re-renders without a UI patch. */}
-      <DataRow
-        n={r()}
-        label="Comision"
-        value={ron(breakdown.commission)}
-        numeric
-        muted
-      />
-      {/* Bottom line — what the END customer pays. This is the
-          number the user reads off to invoice. */}
-      <TotalRow n={r()} label="TOTAL CLIENT" value={ron(breakdown.customerTotal)} />
+
+      {/* ── Per-city customer totals ────────────────────────────────
+          Always shows all four dispatch sites so the user can compare
+          Ploiești vs Iași vs Constanța at a glance. The bottom-line
+          TOTAL CLIENT row picks the dispatch site(s) for the city the
+          user selected in the header dropdown. */}
+      <Section title="Tarif client per oraș" />
+      {CITY_COMMISSION_KEYS.map((k) => {
+        const cr = breakdown.cityCommissions[k];
+        const isSelected = sites.includes(k);
+        return (
+          <DataRow
+            key={k}
+            n={r()}
+            label={CITY_COMMISSION_LABEL[k]}
+            value={
+              cr
+                ? `${(cr.pct * 100).toFixed(1)} % · comision ${ron(cr.commission)} → ${ron(cr.customerTotal)}`
+                : "—"
+            }
+            numeric
+            muted={!isSelected}
+            hint={isSelected ? "selectat" : undefined}
+          />
+        );
+      })}
+
+      {/* ── Per-collaborator payout ────────────────────────────────
+          Only the SELECTED collaborator is shown ("only that
+          collaborator should be calculated"). When the city is
+          Constanța (no collaborator roster) the whole section is
+          skipped — the bottom line is just the customer total. */}
+      {collaborator && collabRow && (
+        <>
+          <Section title="Plată colaborator" />
+          <DataRow
+            n={r()}
+            label={COLLABORATOR_LABEL[collaborator]}
+            value={`${(collabRow.pct * 100).toFixed(1)} % · bonus ${ron(collabRow.bonus)} → ${ron(collabRow.total)}`}
+            numeric
+          />
+        </>
+      )}
+
+      {/* ── Bottom-line totals ──────────────────────────────────────
+          One coral row per dispatch site for the customer-facing
+          total (Iași splits into Tudor + ERA, every other city is
+          one row), then ONE coral row for the courier-side payout
+          when a collaborator is picked. Constanța skips the payout
+          row entirely since it has no partner. */}
+      {sites.map((s) => {
+        const cr = breakdown.cityCommissions[s];
+        return (
+          <TotalRow
+            key={s}
+            n={r()}
+            label={`TOTAL CLIENT · ${CITY_COMMISSION_LABEL[s]}`}
+            value={cr ? ron(cr.customerTotal) : "—"}
+          />
+        );
+      })}
+      {collaborator && collabRow && (
+        <TotalRow
+          n={r()}
+          label={`PLATĂ COLABORATOR · ${COLLABORATOR_LABEL[collaborator]}`}
+          value={ron(collabRow.total)}
+        />
+      )}
     </div>
   );
 }

@@ -14,11 +14,41 @@ import {
   persistPairStatus,
 } from "./lib/db";
 import { date as fmtDate, todayIso } from "./lib/format";
-import type { Pair, PairPatch, PairStatus } from "./types";
+import {
+  CITY_KEYS,
+  CITY_LABEL,
+  COLLABORATOR_KEYS,
+  COLLABORATOR_LABEL,
+  COLLABORATORS_BY_CITY,
+  defaultCollaboratorFor,
+  isCollaboratorValidForCity,
+  type CityKey,
+  type CollaboratorKey,
+  type Pair,
+  type PairPatch,
+  type PairStatus,
+} from "./types";
 
 /** localStorage key for the last-viewed day. Survives reloads so the
  *  user lands on the day they were working on, not a random default. */
 const LS_SELECTED_DAY = "centralizator.selectedDay";
+
+/** localStorage keys for the customer-city + collaborator dropdowns.
+ *  Both are global — one choice applies to the whole queue — and they
+ *  survive reloads so a user who invoices the same partner every day
+ *  doesn't reselect on every launch. */
+const LS_SELECTED_CITY = "centralizator.selectedCity";
+const LS_SELECTED_COLLABORATOR = "centralizator.selectedCollaborator";
+
+function readEnumLS<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored && (allowed as readonly string[]).includes(stored)) return stored as T;
+  } catch {
+    /* localStorage may be disabled — fall through. */
+  }
+  return fallback;
+}
 
 /** Maximum number of vision calls allowed in flight at once. The
  *  OpenRouter side can handle more but six is plenty for a courier
@@ -78,6 +108,76 @@ export default function App() {
     }
   }, [selectedDay]);
 
+  /* ── Customer-city + collaborator selection (global, persisted) ────── */
+
+  const [selectedCity, setSelectedCity] = useState<CityKey>(() =>
+    readEnumLS(LS_SELECTED_CITY, CITY_KEYS, "Ploiesti"),
+  );
+
+  /**
+   * Selected collaborator — nullable because Constanța has NO
+   * collaborator roster (the ODS source lists none for that city).
+   * Hydrating from localStorage uses the city at mount time to
+   * validate; if the stored value isn't valid for the current city,
+   * we fall back to the city's first collaborator (or `null` for
+   * Constanța, which means "direct, no partner").
+   */
+  const [selectedCollaborator, setSelectedCollaborator] = useState<CollaboratorKey | null>(() => {
+    const city = readEnumLS(LS_SELECTED_CITY, CITY_KEYS, "Ploiesti");
+    const stored = (() => {
+      try {
+        const s = localStorage.getItem(LS_SELECTED_COLLABORATOR);
+        if (s && (COLLABORATOR_KEYS as readonly string[]).includes(s)) {
+          return s as CollaboratorKey;
+        }
+      } catch {
+        /* fall through */
+      }
+      return null;
+    })();
+    if (stored && isCollaboratorValidForCity(stored, city)) return stored;
+    return defaultCollaboratorFor(city);
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_SELECTED_CITY, selectedCity);
+    } catch {
+      /* best-effort */
+    }
+  }, [selectedCity]);
+
+  useEffect(() => {
+    try {
+      if (selectedCollaborator) {
+        localStorage.setItem(LS_SELECTED_COLLABORATOR, selectedCollaborator);
+      } else {
+        localStorage.removeItem(LS_SELECTED_COLLABORATOR);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }, [selectedCollaborator]);
+
+  /**
+   * When the city changes, auto-correct the collaborator if it's no
+   * longer valid for the new city. Picking "Iași" while "Stalexone"
+   * (a Ploiești partner) was selected resets to EMV; picking
+   * "Constanța" wipes the selection entirely (null = direct).
+   *
+   * Runs only on `selectedCity` change — never on its own
+   * (`selectedCollaborator` is intentionally NOT in deps to avoid an
+   * infinite ping-pong with `setSelectedCollaborator`).
+   */
+  useEffect(() => {
+    setSelectedCollaborator((cur) =>
+      isCollaboratorValidForCity(cur, selectedCity)
+        ? cur
+        : defaultCollaboratorFor(selectedCity),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCity]);
+
   // Live ref so callbacks (runAll, repricePair, keydown handler) always
   // see the freshest pairs without re-creating themselves on every
   // change. We also write to it synchronously inside every mutator so
@@ -112,12 +212,22 @@ export default function App() {
         if (loaded.length > 0) {
           commit(loaded);
           // Re-validate `selectedDay` once we know which days actually
-          // have pairs. If the stored day points at nothing and isn't
-          // today either, snap to today — better default than landing
-          // on an empty past day with no way back except clicking "Azi".
-          const today = todayIso();
-          if (selectedDay !== today && !loaded.some((p) => p.day === selectedDay)) {
-            setSelectedDay(today);
+          // have pairs. The user's most common confusion after restart
+          // was "where's my data?" when the persisted day pointed at
+          // an empty tab. Smart-snap: if selectedDay has no pairs but
+          // SOME day does, land on the most recent day-with-pairs so
+          // the data is visible the moment hydration finishes. We only
+          // snap when the selected day is empty — if the user was on
+          // a day that has pairs, we respect that choice.
+          const selectedHasPairs = loaded.some((p) => p.day === selectedDay);
+          if (!selectedHasPairs) {
+            // Most-recent day-with-pairs by ISO string (lexical sort
+            // works because the format is YYYY-MM-DD). Falls back to
+            // today if somehow no day had pairs (shouldn't happen
+            // given loaded.length > 0).
+            const days = [...new Set(loaded.map((p) => p.day))].sort();
+            const mostRecent = days[days.length - 1] ?? todayIso();
+            if (mostRecent !== selectedDay) setSelectedDay(mostRecent);
           }
         }
       } catch (err) {
@@ -147,10 +257,36 @@ export default function App() {
         images: files.slice(0, 2),
         status: { kind: "pending" },
       };
+      // Optimistic add — the row appears in the UI immediately so the
+      // user sees their drop without waiting for the network. We then
+      // persist with the in-house retry from lib/db.ts; if even the
+      // retried POST fails (server down for >2.5 s, or hard rejection),
+      // we flip the row to "error" so the user SEES it didn't stick.
+      // Without this, a failed insert would leave a phantom pair that
+      // calculates to "ready" and then vanishes on the next launch
+      // because the server never had its row.
       commit([...pairsRef.current, newPair]);
-      void insertPair(newPair).catch((err) =>
-        console.error("Failed to persist new pair:", err),
-      );
+      void (async () => {
+        try {
+          await insertPair(newPair);
+        } catch (err) {
+          const msg = (err as Error).message;
+          console.error("Failed to persist new pair:", err);
+          commit(
+            pairsRef.current.map((p) =>
+              p.id === newPair.id
+                ? {
+                    ...p,
+                    status: {
+                      kind: "error",
+                      message: `Salvare eșuată — re-adaugă perechea: ${msg}`,
+                    } as PairStatus,
+                  }
+                : p,
+            ),
+          );
+        }
+      })();
     },
     [commit, selectedDay],
   );
@@ -197,22 +333,67 @@ export default function App() {
 
   /* ── Status transitions (shared by run + reprice) ─────────────────── */
 
-  /** Replace a single pair's status, sync ref + state, and mirror to
-   *  the DB. "extracting" is the one state we deliberately don't
-   *  persist — it's an optimistic UI flip; if the app dies mid-call,
-   *  rehydrate brings the row back as "pending" so the user can retry. */
-  const setStatus = useCallback(
-    (id: string, status: PairStatus, persist: boolean) => {
+  /** In-memory only — flip the row's status without touching the DB.
+   *  Used for optimistic transitions (e.g. "extracting") and for the
+   *  final UI update AFTER an awaited persist has confirmed. */
+  const setStatusLocal = useCallback(
+    (id: string, status: PairStatus) => {
       commit(
         pairsRef.current.map((p) => (p.id === id ? { ...p, status } : p)),
       );
-      if (persist) {
-        void persistPairStatus(id, status).catch((err) =>
-          console.error("Failed to persist status:", err),
-        );
-      }
     },
     [commit],
+  );
+
+  /**
+   * Persist a status AND commit the same status to memory ATOMICALLY:
+   *   • If the server PUT succeeds (with the retry from lib/db.ts),
+   *     the in-memory pair flips to that status.
+   *   • If the server PUT fails terminally, the in-memory pair flips
+   *     to an "error" status with the failure message so the user
+   *     SEES that the calculation didn't stick — instead of the old
+   *     fire-and-forget "ready" lie that vanished on next launch.
+   *
+   * "extracting" is the one state we deliberately don't persist — it's
+   * an optimistic UI flip; use `setStatusLocal` for that. If the app
+   * dies mid-call, rehydrate brings the row back as "pending" so the
+   * user can retry.
+   *
+   * Returns true on persisted success, false on terminal persist
+   * failure (UI is now showing an error row). Callers can use this to
+   * branch — e.g. the run pool should NOT mark the pair "ready" if
+   * persist failed.
+   */
+  const persistAndSet = useCallback(
+    async (id: string, status: PairStatus): Promise<boolean> => {
+      if (status.kind === "extracting") {
+        setStatusLocal(id, status);
+        return true;
+      }
+      try {
+        await persistPairStatus(id, status);
+        setStatusLocal(id, status);
+        return true;
+      } catch (err) {
+        const msg = (err as Error).message;
+        console.error("Failed to persist status:", err);
+        const errStatus: PairStatus = {
+          kind: "error",
+          message: `Salvare eșuată — recalculează: ${msg}`,
+        };
+        // Best-effort error persist (also retries internally). If THIS
+        // fails too, at least the in-memory UI is honest. We do NOT
+        // recurse — one round of retries is enough.
+        try {
+          await persistPairStatus(id, errStatus);
+        } catch (errErr) {
+          console.error("Failed to persist error status too:", errErr);
+        }
+        setStatusLocal(id, errStatus);
+        return false;
+      }
+    },
+    [setStatusLocal],
   );
 
   /* ── Per-pair edit + debounced re-price ───────────────────────────── */
@@ -232,15 +413,17 @@ export default function App() {
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever
-        // edits are now current.
+        // edits are now current. We persist-then-commit so a transient
+        // PUT failure doesn't leave the UI showing a fresh breakdown the
+        // server never received.
         const cur = pairsRef.current.find((p) => p.id === id);
         if (!cur || cur.status.kind !== "ready") return;
-        setStatus(id, { ...cur.status, breakdown: b }, true);
+        await persistAndSet(id, { ...cur.status, breakdown: b });
       } catch (err) {
-        setStatus(id, { kind: "error", message: (err as Error).message }, true);
+        await persistAndSet(id, { kind: "error", message: (err as Error).message });
       }
     },
-    [setStatus],
+    [persistAndSet],
   );
 
   const patchPair = useCallback(
@@ -262,7 +445,12 @@ export default function App() {
         },
         breakdown: cur.status.breakdown,
       };
-      setStatus(id, nextStatus, true);
+      // Optimistically reflect the edit in the UI so typing stays
+      // responsive, then persist in the background. `persistAndSet`
+      // will commit again on success (no-op visually) or flip to
+      // "error" on failure so the user knows their edit didn't stick.
+      setStatusLocal(id, nextStatus);
+      void persistAndSet(id, nextStatus);
 
       const prev = repriceTimers.current.get(id);
       if (prev) clearTimeout(prev);
@@ -271,7 +459,7 @@ export default function App() {
         setTimeout(() => repricePair(id), REPRICE_DEBOUNCE_MS),
       );
     },
-    [setStatus, repricePair],
+    [persistAndSet, setStatusLocal, repricePair],
   );
 
   /* ── Extraction (single + bounded-parallel pool) ──────────────────── */
@@ -280,22 +468,26 @@ export default function App() {
     async (id: string, images: File[]) => {
       try {
         const res = await extractAndPrice(images);
-        setStatus(
-          id,
-          {
-            kind: "ready",
-            service: res.resolvedService,
-            serviceFallback: res.serviceFallback,
-            edits: res.extracted,
-            breakdown: res.breakdown,
-          },
-          true,
-        );
+        // Persist FIRST, then flip UI to "ready". This is the central
+        // fix for the "calculate-then-restart-and-data-is-gone" bug —
+        // the old fire-and-forget would show "ready" even if the PUT
+        // failed, so the next launch re-hydrated as "pending" and the
+        // calculation was effectively lost. Now: a terminal persist
+        // failure surfaces as an "error" row (via persistAndSet's
+        // catch arm) so the user knows to retry instead of trusting a
+        // ghost result.
+        await persistAndSet(id, {
+          kind: "ready",
+          service: res.resolvedService,
+          serviceFallback: res.serviceFallback,
+          edits: res.extracted,
+          breakdown: res.breakdown,
+        });
       } catch (err) {
-        setStatus(id, { kind: "error", message: (err as Error).message }, true);
+        await persistAndSet(id, { kind: "error", message: (err as Error).message });
       }
     },
-    [setStatus],
+    [persistAndSet],
   );
 
   const runAll = useCallback(async () => {
@@ -310,8 +502,9 @@ export default function App() {
     if (toRun.length === 0) return;
 
     // Optimistic transition so the UI flips to "extracting" immediately,
-    // before the first HTTP round-trip resolves. NOT persisted — see the
-    // comment on setStatus.
+    // before the first HTTP round-trip resolves. NOT persisted — see
+    // the comment on persistAndSet (and rowToStatus in server db.ts
+    // coerces any "extracting" row back to "pending" on rehydrate).
     const ids = new Set(toRun.map((p) => p.id));
     commit(
       pairsRef.current.map((p) =>
@@ -440,10 +633,31 @@ export default function App() {
               label={`Procesez ${globalExtracting} pereche${globalExtracting === 1 ? "" : "i"}…`}
             />
           )}
+          {/* Global selectors: which customer city to invoice for, and
+              which collaborator to pay. Both apply to the entire queue
+              (table totals, footer sums, exports). The collaborator
+              roster is city-dependent (sourced from
+              PRETURI COLABORATORI.ods): Ploiești has 3 partners, Iași
+              has 2, Constanța has none. */}
+          <HeaderSelect<CityKey>
+            label="Oraș"
+            value={selectedCity}
+            options={CITY_KEYS}
+            labelFor={(k) => CITY_LABEL[k]}
+            onChange={setSelectedCity}
+            title="Oraș client — alege ce variantă de tarif client să afişeze tabelul"
+          />
+          <CollaboratorSelect
+            city={selectedCity}
+            value={selectedCollaborator}
+            onChange={setSelectedCollaborator}
+          />
           {dayPairs.length > 0 && (
             <ExportMenu
               pairs={dayPairs}
               day={selectedDay}
+              city={selectedCity}
+              collaborator={selectedCollaborator}
               disabled={counts.ready === 0}
             />
           )}
@@ -493,6 +707,8 @@ export default function App() {
           <PairDetail
             pair={selectedPair}
             index={selectedIdx}
+            city={selectedCity}
+            collaborator={selectedCollaborator}
             onPatch={(patch) => patchPair(selectedPair.id, patch)}
             onBack={() => setSelectedId(null)}
             onRemove={() => removePair(selectedPair.id)}
@@ -534,6 +750,8 @@ export default function App() {
             ) : (
               <PairsTable
                 pairs={dayPairs}
+                city={selectedCity}
+                collaborator={selectedCollaborator}
                 onPatchPair={patchPair}
                 onRemovePair={removePair}
                 onSelectPair={setSelectedId}
@@ -573,6 +791,108 @@ function HydratingSplash() {
  * any pairs on yet. Lives below the add-card so the next thing on the
  * screen explains both why the table is missing and how to fill it.
  * ────────────────────────────────────────────────────────────────────── */
+
+/* ──────────────────────────────────────────────────────────────────────
+ * HeaderSelect — labelled dropdown used for the two global selectors
+ * (customer city, collaborator) in the app header.
+ *
+ * Generic over the option type so the same component drives both the
+ * 3-way City picker and the 5-way Collaborator picker. The label sits
+ * above the select as a tiny uppercase caption so the bar reads
+ * "Oraș · Colaborator · Exportă · Calculează" at a glance instead of
+ * a row of unlabelled controls. The current selection is shown by
+ * looking up `labelFor(value)` — the option keys stay machine-friendly
+ * (no diacritics) while the visible text is the Romanian display name.
+ * ────────────────────────────────────────────────────────────────────── */
+function HeaderSelect<T extends string>({
+  label,
+  value,
+  options,
+  labelFor,
+  onChange,
+  title,
+}: {
+  label: string;
+  value: T;
+  options: readonly T[];
+  labelFor: (key: T) => string;
+  onChange: (next: T) => void;
+  title?: string;
+}) {
+  return (
+    <label
+      className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-ink-500"
+      title={title}
+    >
+      <span>{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        className="rounded-md border border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm font-medium normal-case tracking-normal text-ink-800 outline-none transition hover:border-coral-400 focus:border-coral-400 focus:ring-2 focus:ring-coral-200"
+      >
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {labelFor(o)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * CollaboratorSelect — city-aware variant of HeaderSelect for the
+ * collaborator picker.
+ *
+ * The roster is read from `COLLABORATORS_BY_CITY` per the user's ODS
+ * source. When the picked city has no collaborators (Constanța), the
+ * select renders a disabled "Direct (fără colaborator)" placeholder
+ * instead of an empty list — clearer than a phantom dropdown that
+ * does nothing on click. The labels show the full "<Company>
+ * (<person>)" string so the user recognises the partner; the data key
+ * stays the machine-friendly company name.
+ * ────────────────────────────────────────────────────────────────────── */
+function CollaboratorSelect({
+  city,
+  value,
+  onChange,
+}: {
+  city: CityKey;
+  value: CollaboratorKey | null;
+  onChange: (next: CollaboratorKey | null) => void;
+}) {
+  const options = COLLABORATORS_BY_CITY[city];
+  const empty = options.length === 0;
+  return (
+    <label
+      className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-ink-500"
+      title={
+        empty
+          ? "Constanța — fără colaborator (plată directă)"
+          : "Colaborator — alege ce variantă de plată să afişeze tabelul"
+      }
+    >
+      <span>Colaborator</span>
+      {empty ? (
+        <span className="rounded-md border border-dashed border-ink-300 bg-canvas-100 px-2 py-1.5 text-sm font-medium normal-case tracking-normal text-ink-500">
+          Direct (fără colaborator)
+        </span>
+      ) : (
+        <select
+          value={value ?? ""}
+          onChange={(e) => onChange((e.target.value || null) as CollaboratorKey | null)}
+          className="rounded-md border border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm font-medium normal-case tracking-normal text-ink-800 outline-none transition hover:border-coral-400 focus:border-coral-400 focus:ring-2 focus:ring-coral-200"
+        >
+          {options.map((o) => (
+            <option key={o} value={o}>
+              {COLLABORATOR_LABEL[o]}
+            </option>
+          ))}
+        </select>
+      )}
+    </label>
+  );
+}
 
 function EmptyDayNotice({ day }: { day: string }) {
   return (

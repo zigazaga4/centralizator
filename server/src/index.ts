@@ -32,9 +32,30 @@ const app = Fastify({
   bodyLimit: 25 * 1024 * 1024, // 25 MB headroom for high-DPI invoice scans
 });
 
+/**
+ * CORS — must allow every HTTP verb the pair queue uses, not just
+ * GET/POST. The WebView fires a preflight OPTIONS for any non-simple
+ * request (PUT, DELETE, requests with custom headers like x-api-key),
+ * and if the verb isn't in `Access-Control-Allow-Methods` the browser
+ * BLOCKS the actual request and `fetch` throws "Load failed" — silently
+ * losing every persisted status transition and every pair deletion.
+ *
+ * Endpoints in play:
+ *   GET    /pairs                (list)
+ *   POST   /pairs                (insertPair)
+ *   PUT    /pairs/:id/status     (persistPairStatus)   ← was blocked
+ *   DELETE /pairs/:id            (deletePair)          ← was blocked
+ *   DELETE /pairs                (deleteAllPairs)      ← was blocked
+ *   POST   /extract-and-price    (vision OCR)
+ *   POST   /price                (reprice)
+ *   GET    /health               (liveness probe)
+ *
+ * PATCH is included for forward compatibility — cheap, and Fastify
+ * doesn't echo verbs that no route handles, so it costs nothing.
+ */
 await app.register(cors, {
   origin: true,
-  methods: ["GET", "POST", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 });
 
 await app.register(multipart, {

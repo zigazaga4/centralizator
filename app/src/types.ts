@@ -54,6 +54,173 @@ export interface Extracted {
   invoice_total_gross?: number | null;
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ * City + collaborator keys
+ *
+ * The pricing engine returns commissions for FOUR dispatch sites
+ * (Ploiești, two Iași sites, Constanța) and bonuses for FIVE
+ * collaborators. The user-facing city dropdown has only THREE options
+ * though — Iași is a single choice that fans out into both Iași dispatch
+ * sites at render time. Keeping these two key sets separate (CityKey vs
+ * CityCommissionKey) makes the asymmetry explicit; the UI always picks
+ * one of three, the data always carries four.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** Dropdown choices — what the user picks. Three options. */
+export type CityKey = "Ploiesti" | "Iasi" | "Constanta";
+
+/** Data-side keys — what the server actually keys its commission map on.
+ *  Four entries because Iași splits into Tudor + ERA dispatch sites. */
+export type CityCommissionKey = "Ploiesti" | "IasiTudor" | "IasiERA" | "Constanta";
+
+/** The five courier-collaborator partners. Each runs their own bonus
+ *  schedule on top of the carrier subtotal. */
+export type CollaboratorKey =
+  | "Stalexone"
+  | "EMV"
+  | "Bitlo"
+  | "VicDinamicExpert"
+  | "Tiberiu";
+
+/** Romanian display label for each dropdown city. */
+export const CITY_LABEL: Record<CityKey, string> = {
+  Ploiesti: "Ploiești",
+  Iasi: "Iași",
+  Constanta: "Constanța",
+};
+
+/** Romanian display label for each dispatch-site key (4-way breakdown). */
+export const CITY_COMMISSION_LABEL: Record<CityCommissionKey, string> = {
+  Ploiesti: "Ploiești",
+  IasiTudor: "Iași Tudor",
+  IasiERA: "Iași ERA",
+  Constanta: "Constanța",
+};
+
+/** "<Company> (<person>)" label per collaborator — the contact-name
+ *  cue helps the user recognise the partner at a glance from the
+ *  dropdown. Display only; the data key stays the company name. */
+export const COLLABORATOR_LABEL: Record<CollaboratorKey, string> = {
+  Stalexone: "Stalexone (Ștefan)",
+  EMV: "EMV (Escariu)",
+  Bitlo: "Bitlo (George)",
+  VicDinamicExpert: "Vic Dinamic Expert (Bogdan)",
+  Tiberiu: "Tiberiu (Dube)",
+};
+
+/** Compact label used in tight spaces (PairsTable column header,
+ *  PDF/XLSX/DOCX header rows). Drops the contact-name parenthetical
+ *  and abbreviates "Vic Dinamic Expert" → "Vic Dinamic" so the column
+ *  stays narrow without truncation. */
+export const COLLABORATOR_SHORT_LABEL: Record<CollaboratorKey, string> = {
+  Stalexone: "Stalexone",
+  EMV: "EMV",
+  Bitlo: "Bitlo",
+  VicDinamicExpert: "Vic Dinamic",
+  Tiberiu: "Tiberiu",
+};
+
+/**
+ * Per-city collaborator roster.
+ *
+ * Source: `PRETURI COLABORATORI.ods` — col 2 = Ploiești, col 3 =
+ * Iași Tudor, col 4 = Iași ERA, col 5 = Constanța. The ODS lists
+ * collaborators in each city's column; we read them off directly:
+ *
+ *   • Ploiești: Stalexone (Ștefan) 25 %, Vic Dinamic Expert (Bogdan) 25 %,
+ *     Tiberiu (Dube) 29 %. (The "Macara Ploiești · scădem lunar 2000 LEI"
+ *     line is a monthly flat adjustment, not a per-row collaborator, so
+ *     it's NOT in the dropdown.)
+ *   • Iași: EMV (Escariu) 30.1 % serves Iași Tudor, Bitlo (George) 12 %
+ *     serves Iași ERA. The city dropdown unifies Iași as one option, so
+ *     both partners are listed; the user picks whichever the row was
+ *     dispatched through.
+ *   • Constanța: no per-row collaborator. Empty list — the dropdown
+ *     shows "Direct (fără colaborator)" and the Plată-colab. column
+ *     drops to "—".
+ *
+ * Iași Tudor's EMV-Macara and Iași ERA's EMV-Macara are *macara* (crane)
+ * variants paid at PREȚ ÎNTREG (full price, no bonus), which is identical
+ * to the carrier subtotal — they're a no-op pricing-wise and so the
+ * dropdown skips them.
+ */
+export const COLLABORATORS_BY_CITY: Record<CityKey, readonly CollaboratorKey[]> = {
+  Ploiesti: ["Stalexone", "VicDinamicExpert", "Tiberiu"],
+  Iasi: ["EMV", "Bitlo"],
+  Constanta: [],
+};
+
+/**
+ * First collaborator for a city — the default selection when the
+ * user changes city. Returns `null` for Constanța (no roster), in
+ * which case the UI surfaces "direct, no collaborator" everywhere.
+ */
+export function defaultCollaboratorFor(city: CityKey): CollaboratorKey | null {
+  return COLLABORATORS_BY_CITY[city][0] ?? null;
+}
+
+/**
+ * Whether the currently-selected collaborator is still valid for the
+ * picked city. Used by App.tsx to auto-correct the selection when the
+ * user switches city (e.g. picking Iași while Stalexone — a Ploiești
+ * partner — is selected forces a reset to EMV).
+ */
+export function isCollaboratorValidForCity(
+  collaborator: CollaboratorKey | null,
+  city: CityKey,
+): boolean {
+  if (collaborator === null) return COLLABORATORS_BY_CITY[city].length === 0;
+  return (COLLABORATORS_BY_CITY[city] as readonly CollaboratorKey[]).includes(collaborator);
+}
+
+/** Ordered city options for the dropdown. */
+export const CITY_KEYS: readonly CityKey[] = ["Ploiesti", "Iasi", "Constanta"];
+
+/** Ordered dispatch-site keys, used by full-breakdown views (PairDetail
+ *  + exports). */
+export const CITY_COMMISSION_KEYS: readonly CityCommissionKey[] = [
+  "Ploiesti",
+  "IasiTudor",
+  "IasiERA",
+  "Constanta",
+];
+
+/** Ordered collaborator options for the dropdown. */
+export const COLLABORATOR_KEYS: readonly CollaboratorKey[] = [
+  "Stalexone",
+  "EMV",
+  "Bitlo",
+  "VicDinamicExpert",
+  "Tiberiu",
+];
+
+/**
+ * Map a user-facing city choice to the 1-or-2 dispatch-site keys that
+ * should be rendered for it. Ploiești / Constanța → single entry; Iași
+ * fans out into Tudor + ERA. Centralising this here keeps every
+ * surface — table cell, footer sum, detail page, export — consistent.
+ */
+export function dispatchSitesFor(city: CityKey): CityCommissionKey[] {
+  return city === "Iasi" ? ["IasiTudor", "IasiERA"] : [city];
+}
+
+/** Per-dispatch-site commission row. `pct` is the multiplier the
+ *  carrier subtotal is grossed up by; `commission = totalVat21 × pct`;
+ *  `customerTotal = totalVat21 × (1 + pct)`. */
+export interface CityCommissionRow {
+  pct: number;
+  commission: number;
+  customerTotal: number;
+}
+
+/** Per-collaborator bonus row. `pct` is the bonus rate, `bonus` is its
+ *  RON amount, `total` is what the collaborator gets paid in total. */
+export interface CollaboratorPriceRow {
+  pct: number;
+  bonus: number;
+  total: number;
+}
+
 export interface PricingBreakdown {
   weightBucket: WeightBucket;
   distanceBucket: DistanceBucket;
@@ -71,21 +238,24 @@ export interface PricingBreakdown {
   vat21: number;
   /**
    * Carrier subtotal — what Stalexone (the carrier) gets, gross of
-   * VAT @ 21%. Used to be the billable line; now it's the carrier's
-   * cut and the UI labels it "Tarif transportator".
+   * VAT @ 21%. The shared base every per-city customer total and
+   * per-collaborator payout grosses up from. Surfaced in the UI as
+   * "Tarif transportator".
    */
   totalVat21: number;
-  /** Ploiești commission rate, currently 0.501 (50.1 %). */
-  commissionPct: number;
-  /** Ploiești commission, in RON. */
-  commission: number;
   /**
-   * What the END customer pays. This is now the billable bottom
-   * line — `totalVat21 + commission`. Surfaced in the UI as
-   * "Total client" / "De plătit"; replaces every prior use of
-   * `totalVat21` as the customer-facing total.
+   * Per-dispatch-site customer totals. Four entries even though the
+   * dropdown only has three — Iași splits into Tudor + ERA, which the
+   * UI stacks when the user picks "Iași". Math is server-side:
+   * `customerTotal = totalVat21 × (1 + pct)`.
    */
-  customerTotal: number;
+  cityCommissions: Record<CityCommissionKey, CityCommissionRow>;
+  /**
+   * Per-collaborator payouts. The user picks one in the header
+   * dropdown and the table + detail page show that one's total.
+   * Math is server-side: `total = totalVat21 × (1 + pct)`.
+   */
+  collaboratorPrices: Record<CollaboratorKey, CollaboratorPriceRow>;
 }
 
 export interface ExtractResponse {

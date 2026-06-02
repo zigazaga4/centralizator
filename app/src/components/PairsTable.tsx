@@ -1,28 +1,55 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
-import type { Pair, PairPatch, PairStatus, Service } from "../types";
+import {
+  CITY_COMMISSION_LABEL,
+  COLLABORATOR_LABEL,
+  COLLABORATOR_SHORT_LABEL,
+  dispatchSitesFor,
+  type CityKey,
+  type CityCommissionKey,
+  type CollaboratorKey,
+  type Pair,
+  type PairPatch,
+  type PairStatus,
+  type PricingBreakdown,
+  type Service,
+} from "../types";
 import { date, ron } from "../lib/format";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
-/* Each width below is chosen so the 16-column grid lines up cleanly
+/* Each width below is chosen so the 17-column grid lines up cleanly
  * even when a row is still pending (no extracted data yet). All
- * fixed-width columns sum to 1360 px (40+56+64+148+148+120+120+72+72
- * +60+88+72+72+72+120+36); the wrapper scrolls horizontally on
+ * fixed-width columns sum to 1540 px (40+56+64+148+148+120+120+72+72
+ * +60+88+72+72+72+160+140+36); the wrapper scrolls horizontally on
  * smaller windows.
  *
  * The two free-text columns (AWB #, Factură #) are `minmax(148px, 1fr)`
- * instead of `148px` so they absorb any width beyond 1360 px. Without
+ * instead of `148px` so they absorb any width beyond 1540 px. Without
  * this, on a desktop window wider than the grid total the columns stay
  * packed at the left and the row backgrounds, cell borders, and the
  * sticky coral total row visually "stop" mid-page — the table fails to
  * fill the available width. With 1fr on those two columns the grid
  * always spans the full wrapper, and cells, borders, header and footer
- * all extend cleanly to the right edge. */
+ * all extend cleanly to the right edge.
+ *
+ * Column 15 ("Total client") was widened 120 → 160 to fit the Iași
+ * stacked content (two labelled lines "TUDOR 1.234,56 RON" / "ERA …")
+ * without overflowing. Column 16 ("Plată colab.") was widened 120 →
+ * 140 so the longest short-label "Plată Vic Dinamic" header doesn't
+ * overflow the uppercase tracking-widest band. */
 const GRID =
-  "grid grid-cols-[40px_56px_64px_minmax(148px,1fr)_minmax(148px,1fr)_120px_120px_72px_72px_60px_88px_72px_72px_72px_120px_36px]";
+  "grid grid-cols-[40px_56px_64px_minmax(148px,1fr)_minmax(148px,1fr)_120px_120px_72px_72px_60px_88px_72px_72px_72px_160px_140px_36px]";
 
 interface Props {
   pairs: Pair[];
+  /** Customer city the user picked in the header. Drives col 15 (Total
+   *  client) — Iași stacks Tudor + ERA in the same cell. */
+  city: CityKey;
+  /** Collaborator the user picked in the header. Drives col 16 (Plată
+   *  colab.) and its footer sum. `null` means "no collaborator"
+   *  (Constanța is the only city in that situation today) — the
+   *  column renders "—" and the sum is skipped. */
+  collaborator: CollaboratorKey | null;
   onPatchPair: (id: string, patch: PairPatch) => void;
   onRemovePair: (id: string) => void;
   /** Opens the per-pair detail page. The row is the click target — form
@@ -41,28 +68,62 @@ interface Props {
  *
  * The footer row sums the billable totals across every "ready" pair.
  * ────────────────────────────────────────────────────────────────────── */
-export function PairsTable({ pairs, onPatchPair, onRemovePair, onSelectPair }: Props) {
-  // Footer sum is the end-customer billable, not the carrier subtotal.
-  const sumTotal = pairs.reduce((acc, p) => {
-    return p.status.kind === "ready" ? acc + p.status.breakdown.customerTotal : acc;
-  }, 0);
-  const readyCount = pairs.filter((p) => p.status.kind === "ready").length;
+export function PairsTable({
+  pairs,
+  city,
+  collaborator,
+  onPatchPair,
+  onRemovePair,
+  onSelectPair,
+}: Props) {
+  // City dropdown maps to 1 or 2 dispatch-site keys (Iași splits).
+  const sites = dispatchSitesFor(city);
+
+  // Footer sums — one per dispatch site (so Iași gets two stacked
+  // totals) and one for the selected collaborator. We walk the queue
+  // once and accumulate everything in parallel; readyCount is a
+  // by-product of the same pass. When there's no collaborator (city
+  // = Constanța) `sumCollab` stays at 0 and the cell renders "—".
+  const sumPerSite: Record<string, number> = {};
+  for (const s of sites) sumPerSite[s] = 0;
+  let sumCollab = 0;
+  let readyCount = 0;
+  for (const p of pairs) {
+    if (p.status.kind !== "ready") continue;
+    readyCount += 1;
+    const b = p.status.breakdown;
+    for (const s of sites) {
+      sumPerSite[s] = (sumPerSite[s] ?? 0) + (b.cityCommissions[s]?.customerTotal ?? 0);
+    }
+    if (collaborator) {
+      sumCollab += b.collaboratorPrices[collaborator]?.total ?? 0;
+    }
+  }
 
   return (
     <div className="overflow-x-auto rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
-      <div className="min-w-[1360px]">
-        <Header />
+      <div className="min-w-[1540px]">
+        <Header collaborator={collaborator} />
         {pairs.map((p, i) => (
           <PairRow
             key={p.id}
             index={i}
             pair={p}
+            sites={sites}
+            collaborator={collaborator}
             onPatch={(patch) => onPatchPair(p.id, patch)}
             onRemove={() => onRemovePair(p.id)}
             onSelect={() => onSelectPair(p.id)}
           />
         ))}
-        <SumRow total={sumTotal} readyCount={readyCount} totalCount={pairs.length} />
+        <SumRow
+          sites={sites}
+          sumPerSite={sumPerSite}
+          sumCollab={sumCollab}
+          collaborator={collaborator}
+          readyCount={readyCount}
+          totalCount={pairs.length}
+        />
       </div>
     </div>
   );
@@ -70,7 +131,11 @@ export function PairsTable({ pairs, onPatchPair, onRemovePair, onSelectPair }: P
 
 /* ─── Header ────────────────────────────────────────────────────────── */
 
-function Header() {
+function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
+  // 17 columns. The penultimate one (Plată colab.) needs special
+  // rendering — it's a two-line header so the collaborator's name fits
+  // even when it's the longest ("Vic Dinamic") without forcing the
+  // column wider than its content needs.
   const cols = [
     { label: "#", align: "center" },
     { label: "Stare", align: "center" },
@@ -87,7 +152,6 @@ function Header() {
     { label: "Inc.", align: "right" },
     { label: "Wkd", align: "right" },
     { label: "Total client", align: "right" },
-    { label: "", align: "center" },
   ] as const;
 
   return (
@@ -97,13 +161,27 @@ function Header() {
       {cols.map((c, i) => (
         <div
           key={i}
-          className={`border-r border-ink-300 px-2 py-2 last:border-r-0 ${
+          className={`border-r border-ink-300 px-2 py-2 ${
             c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left"
           }`}
         >
           {c.label}
         </div>
       ))}
+      <div
+        className="flex flex-col items-end justify-center border-r border-ink-300 px-2 py-1 leading-tight"
+        title={
+          collaborator
+            ? `Plată colaborator: ${COLLABORATOR_LABEL[collaborator]}`
+            : "Constanța · fără colaborator"
+        }
+      >
+        <span>Plată colab.</span>
+        <span className="text-[9px] font-medium normal-case tracking-normal text-ink-500">
+          {collaborator ? COLLABORATOR_SHORT_LABEL[collaborator] : "—"}
+        </span>
+      </div>
+      <div className="px-2 py-2 text-center" />
     </div>
   );
 }
@@ -113,12 +191,16 @@ function Header() {
 function PairRow({
   index,
   pair,
+  sites,
+  collaborator,
   onPatch,
   onRemove,
   onSelect,
 }: {
   index: number;
   pair: Pair;
+  sites: CityCommissionKey[];
+  collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
   onRemove: () => void;
   onSelect: () => void;
@@ -277,25 +359,20 @@ function PairRow({
         notAppliedReason="Livrare în zi lucrătoare — fără supliment de weekend."
       />
 
-      {/* Total client — what the END customer pays (carrier total
-          + Ploiești commission). The carrier subtotal is still in
-          PairDetail, but the single column on the queue grid is the
-          customer-facing one because that's what the user reads off
+      {/* Total client — what the END customer pays. City-aware: one
+          value for Ploiești / Constanța, two stacked values (Tudor +
+          ERA) when the dropdown is set to Iași. The carrier subtotal
+          is still in PairDetail; the queue grid only shows the
+          customer-facing line because that's what the user reads off
           to invoice. */}
-      <div
-        className={`flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums ${
-          breakdown
-            ? "bg-coral-50 text-base font-bold text-coral-700"
-            : "text-ink-400"
-        }`}
-        title={
-          breakdown
-            ? `Tarif transportator ${ron(breakdown.totalVat21)} + comision ${ron(breakdown.commission)}`
-            : undefined
-        }
-      >
-        {breakdown ? ron(breakdown.customerTotal) : <Dash />}
-      </div>
+      <CityTotalCell breakdown={breakdown} sites={sites} />
+
+      {/* Plată colab. — what the selected courier-side collaborator
+          gets paid for this row. Same coral accent as the customer
+          total because both are bottom-line numbers; the column
+          header carries the collaborator name so the user knows
+          whose total this is. */}
+      <CollaboratorTotalCell breakdown={breakdown} collaborator={collaborator} />
 
       {/* Remove */}
       <button
@@ -328,15 +405,40 @@ function PairRow({
 /* ─── Footer sum row ────────────────────────────────────────────────── */
 
 function SumRow({
-  total,
+  sites,
+  sumPerSite,
+  sumCollab,
+  collaborator,
   readyCount,
   totalCount,
 }: {
-  total: number;
+  sites: CityCommissionKey[];
+  sumPerSite: Record<string, number>;
+  sumCollab: number;
+  collaborator: CollaboratorKey | null;
   readyCount: number;
   totalCount: number;
 }) {
   if (totalCount === 0) return null;
+  // For a 1-site city, render the bare total; for Iași (Tudor + ERA)
+  // stack two labelled lines so the user can see each dispatch site's
+  // total without switching dropdowns.
+  const cityCell =
+    sites.length === 1 ? (
+      <span>{ron(sumPerSite[sites[0]!] ?? 0)}</span>
+    ) : (
+      <span className="flex flex-col items-end gap-0.5 leading-tight">
+        {sites.map((s) => (
+          <span key={s} className="flex items-baseline gap-1">
+            <span className="text-[10px] uppercase tracking-wider opacity-80">
+              {CITY_COMMISSION_LABEL[s].replace("Iași ", "")}
+            </span>
+            <span>{ron(sumPerSite[s] ?? 0)}</span>
+          </span>
+        ))}
+      </span>
+    );
+
   return (
     <div className={`${GRID} sticky bottom-0 bg-coral-500 text-canvas-50`}>
       <div className="border-r border-coral-600 px-2 py-2.5 text-center text-[11px] tabular-nums opacity-80">
@@ -345,10 +447,123 @@ function SumRow({
       <div className="col-span-13 border-r border-coral-600 px-3 py-2.5 text-right text-sm font-semibold uppercase tracking-wide">
         Total {readyCount} / {totalCount} perech{totalCount === 1 ? "e" : "i"}
       </div>
-      <div className="border-r border-coral-600 px-3 py-2.5 text-right text-base font-bold tabular-nums">
-        {ron(total)}
+      <div className="flex items-center justify-end border-r border-coral-600 px-3 py-2.5 text-right text-base font-bold tabular-nums">
+        {cityCell}
+      </div>
+      <div
+        className="flex items-center justify-end border-r border-coral-600 px-3 py-2.5 text-right text-base font-bold tabular-nums"
+        title={collaborator ? undefined : "Constanța · fără colaborator"}
+      >
+        {collaborator ? ron(sumCollab) : "—"}
       </div>
       <div />
+    </div>
+  );
+}
+
+/* ─── City + collaborator total cells ───────────────────────────────── */
+
+/**
+ * Customer-total cell. Renders the carrier subtotal × (1 + pct) for the
+ * picked city; when the dropdown is set to Iași we stack Tudor + ERA in
+ * one cell, each labelled, so the user reads both numbers without
+ * switching the global selector.
+ */
+function CityTotalCell({
+  breakdown,
+  sites,
+}: {
+  breakdown: PricingBreakdown | null;
+  sites: CityCommissionKey[];
+}) {
+  if (!breakdown) {
+    return (
+      <div className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400">
+        <Dash />
+      </div>
+    );
+  }
+  const carrierTip = `Tarif transportator ${ron(breakdown.totalVat21)}`;
+
+  if (sites.length === 1) {
+    const s = sites[0]!;
+    const row = breakdown.cityCommissions[s];
+    return (
+      <div
+        className="flex items-center justify-end border-r border-ink-200 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+        title={
+          row
+            ? `${carrierTip} + comision ${ron(row.commission)} (${(row.pct * 100).toFixed(1)} %)`
+            : carrierTip
+        }
+      >
+        {row ? ron(row.customerTotal) : <Dash />}
+      </div>
+    );
+  }
+
+  // Iași — two stacked rows. Smaller font + tighter prefix so both
+  // numbers fit the 160 px column without overflow even with the
+  // "RON" suffix from Intl.NumberFormat.
+  return (
+    <div
+      className="flex flex-col items-end justify-center gap-0.5 overflow-hidden border-r border-ink-200 bg-coral-50 px-2 py-2 text-right font-bold leading-tight tabular-nums text-coral-700"
+      title={carrierTip}
+    >
+      {sites.map((s) => {
+        const row = breakdown.cityCommissions[s];
+        return (
+          <span key={s} className="flex items-baseline gap-1 whitespace-nowrap">
+            <span className="text-[10px] uppercase tracking-wider opacity-70">
+              {CITY_COMMISSION_LABEL[s].replace("Iași ", "")}
+            </span>
+            <span className="text-xs">{row ? ron(row.customerTotal) : "—"}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Collaborator payout cell — single number, mirrors the customer-total
+ *  cell's coral accent so both bottom-line numbers read at the same
+ *  visual weight. Renders "—" when no collaborator is configured for
+ *  the city (Constanța) so the column still aligns. */
+function CollaboratorTotalCell({
+  breakdown,
+  collaborator,
+}: {
+  breakdown: PricingBreakdown | null;
+  collaborator: CollaboratorKey | null;
+}) {
+  if (!collaborator) {
+    return (
+      <div
+        className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400"
+        title="Constanța · fără colaborator"
+      >
+        —
+      </div>
+    );
+  }
+  if (!breakdown) {
+    return (
+      <div className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400">
+        <Dash />
+      </div>
+    );
+  }
+  const row = breakdown.collaboratorPrices[collaborator];
+  return (
+    <div
+      className="flex items-center justify-end border-r border-ink-200 bg-coral-50/60 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+      title={
+        row
+          ? `${COLLABORATOR_LABEL[collaborator]} · bonus ${ron(row.bonus)} (${(row.pct * 100).toFixed(1)} %)`
+          : COLLABORATOR_LABEL[collaborator]
+      }
+    >
+      {row ? ron(row.total) : <Dash />}
     </div>
   );
 }

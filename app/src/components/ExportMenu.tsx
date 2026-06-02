@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Pair } from "../types";
+import type { CityKey, CollaboratorKey, Pair } from "../types";
 import { exportToDocx, exportToPdf, exportToXlsx } from "../lib/export";
 
 type Format = "pdf" | "xlsx" | "docx";
@@ -11,6 +11,15 @@ interface Props {
    *  "Ziua: DD.MM.YYYY" header line. Optional so the menu still works
    *  in any future caller that hasn't day-scoped its pairs. */
   day?: string;
+  /** Customer city — drives the per-city total column(s) in the file
+   *  (one column, or Tudor + ERA for Iași). Forwarded straight to
+   *  `lib/export`; the menu itself never reads it. */
+  city: CityKey;
+  /** Collaborator — drives the per-collaborator payout column.
+   *  Forwarded as-is to `lib/export`. `null` means the city has no
+   *  collaborator roster (Constanța) and the export drops the column
+   *  entirely. */
+  collaborator: CollaboratorKey | null;
   /** Disabled when there's nothing to export (no ready pair yet). */
   disabled: boolean;
 }
@@ -33,7 +42,7 @@ interface Props {
  * because the export is fire-and-forget from App's point of view —
  * no need to lift it.
  * ────────────────────────────────────────────────────────────────────── */
-export function ExportMenu({ pairs, day, disabled }: Props) {
+export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Format | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +77,7 @@ export function ExportMenu({ pairs, day, disabled }: Props) {
       try {
         const fn =
           fmt === "pdf" ? exportToPdf : fmt === "xlsx" ? exportToXlsx : exportToDocx;
-        const path = await fn(pairs, { day });
+        const path = await fn(pairs, { day, city, collaborator });
         // path === null → user cancelled the save dialog. Treat that
         // as a no-op: close the menu, no error toast.
         setOpen(false);
@@ -83,7 +92,7 @@ export function ExportMenu({ pairs, day, disabled }: Props) {
         setBusy(null);
       }
     },
-    [busy, pairs, day],
+    [busy, pairs, day, city, collaborator],
   );
 
   return (
