@@ -57,20 +57,36 @@ export interface Extracted {
 /* ──────────────────────────────────────────────────────────────────────
  * City + collaborator keys
  *
- * The pricing engine returns commissions for FOUR dispatch sites
- * (Ploiești, two Iași sites, Constanța) and bonuses for FIVE
- * collaborators. The user-facing city dropdown has only THREE options
- * though — Iași is a single choice that fans out into both Iași dispatch
- * sites at render time. Keeping these two key sets separate (CityKey vs
- * CityCommissionKey) makes the asymmetry explicit; the UI always picks
- * one of three, the data always carries four.
+ * Direct port of the `PRETURI COLABORATORI.ods` sheet, one column per
+ * series:
+ *
+ *     col 2  PLOIESTI  : LUAM 50.1%
+ *     col 3  IASI      : LUAM 33.7%
+ *     col 4  IASI 2    : LUAM 33.7%
+ *     col 5  CONSTANTA : LUAM 33.7%
+ *
+ * Each column is its OWN dispatch series with its OWN collaborator
+ * roster — Iași is two distinct series (not a unified dropdown that
+ * stacks two sites), because EMV serves the first Iași series and
+ * Bitlo serves the second. Mixing them under a single "Iași" choice
+ * (the previous design) made the table show two cells per row and
+ * caused the "collaborators look mixed" symptom the user reported.
+ *
+ * The four user-facing city options map 1-to-1 to the four data-side
+ * cityCommissions keys, so the dropdown is a pure DISPLAY switch —
+ * the server already calculates all four city totals and all five
+ * collaborator payouts in one extract-and-price call.
  * ────────────────────────────────────────────────────────────────────── */
 
-/** Dropdown choices — what the user picks. Three options. */
-export type CityKey = "Ploiesti" | "Iasi" | "Constanta";
+/** Dropdown choices = ODS columns. Four options, one per series. */
+export type CityKey = "Ploiesti" | "Iasi" | "Iasi2" | "Constanta";
 
-/** Data-side keys — what the server actually keys its commission map on.
- *  Four entries because Iași splits into Tudor + ERA dispatch sites. */
+/** Data-side keys the server returns in `breakdown.cityCommissions`.
+ *  Same cardinality as `CityKey` (4) but with the original dispatch-site
+ *  names from `TARIFE MACARA` — "IasiTudor" for the first Iași series
+ *  (EMV) and "IasiERA" for the second (Bitlo). Kept distinct from
+ *  CityKey so the user-facing label (Iași / Iași 2) stays decoupled
+ *  from the dispatch-site identifier the server emits. */
 export type CityCommissionKey = "Ploiesti" | "IasiTudor" | "IasiERA" | "Constanta";
 
 /** The five courier-collaborator partners. Each runs their own bonus
@@ -82,18 +98,26 @@ export type CollaboratorKey =
   | "VicDinamicExpert"
   | "Tiberiu";
 
-/** Romanian display label for each dropdown city. */
+/** Romanian display label for each dropdown city.
+ *  "Iași (Tudor)" / "Iași (ERA)" carry the dispatch-site identity so
+ *  the user knows which series is which without having to memorise
+ *  the column ordering from the ODS. */
 export const CITY_LABEL: Record<CityKey, string> = {
   Ploiesti: "Ploiești",
-  Iasi: "Iași",
+  Iasi: "Iași (Tudor)",
+  Iasi2: "Iași (ERA)",
   Constanta: "Constanța",
 };
 
-/** Romanian display label for each dispatch-site key (4-way breakdown). */
+/** Romanian display label for each dispatch-site key. Same strings as
+ *  CITY_LABEL — kept as a separate constant because the data-side
+ *  keys (IasiTudor/IasiERA) and the user-facing keys (Iasi/Iasi2) are
+ *  different types, even though every entry resolves to the same
+ *  visible label. */
 export const CITY_COMMISSION_LABEL: Record<CityCommissionKey, string> = {
   Ploiesti: "Ploiești",
-  IasiTudor: "Iași Tudor",
-  IasiERA: "Iași ERA",
+  IasiTudor: "Iași (Tudor)",
+  IasiERA: "Iași (ERA)",
   Constanta: "Constanța",
 };
 
@@ -121,32 +145,27 @@ export const COLLABORATOR_SHORT_LABEL: Record<CollaboratorKey, string> = {
 };
 
 /**
- * Per-city collaborator roster.
+ * Per-series collaborator roster — column-by-column read of the ODS.
  *
- * Source: `PRETURI COLABORATORI.ods` — col 2 = Ploiești, col 3 =
- * Iași Tudor, col 4 = Iași ERA, col 5 = Constanța. The ODS lists
- * collaborators in each city's column; we read them off directly:
- *
- *   • Ploiești: Stalexone (Ștefan) 25 %, Vic Dinamic Expert (Bogdan) 25 %,
- *     Tiberiu (Dube) 29 %. (The "Macara Ploiești · scădem lunar 2000 LEI"
- *     line is a monthly flat adjustment, not a per-row collaborator, so
- *     it's NOT in the dropdown.)
- *   • Iași: EMV (Escariu) 30.1 % serves Iași Tudor, Bitlo (George) 12 %
- *     serves Iași ERA. The city dropdown unifies Iași as one option, so
- *     both partners are listed; the user picks whichever the row was
- *     dispatched through.
- *   • Constanța: no per-row collaborator. Empty list — the dropdown
- *     shows "Direct (fără colaborator)" and the Plată-colab. column
- *     drops to "—".
- *
- * Iași Tudor's EMV-Macara and Iași ERA's EMV-Macara are *macara* (crane)
- * variants paid at PREȚ ÎNTREG (full price, no bonus), which is identical
- * to the carrier subtotal — they're a no-op pricing-wise and so the
- * dropdown skips them.
+ *   col 2  Ploiești   →  Stalexone (Ștefan) 25 %, Vic Dinamic Expert
+ *                        (Bogdan) 25 %, Tiberiu (Dube) 29 %.
+ *                        (The "Macara Ploiești · scădem lunar 2000 LEI"
+ *                        entry is a monthly flat adjustment, not a
+ *                        per-row collaborator — excluded from this
+ *                        dropdown.)
+ *   col 3  Iași        →  EMV (Escariu) 30.1 %.
+ *                        (The "EMV Macara · PREȚ ÎNTREG" entry is a
+ *                        no-bonus crane variant — excluded.)
+ *   col 4  Iași 2      →  Bitlo (George) 12 %.
+ *                        (Same "EMV Macara · PREȚ ÎNTREG" exclusion.)
+ *   col 5  Constanța   →  none.  Dropdown shows "Direct (fără
+ *                        colaborator)" and the Plată-colab. column
+ *                        drops to "—".
  */
 export const COLLABORATORS_BY_CITY: Record<CityKey, readonly CollaboratorKey[]> = {
   Ploiesti: ["Stalexone", "VicDinamicExpert", "Tiberiu"],
-  Iasi: ["EMV", "Bitlo"],
+  Iasi: ["EMV"],
+  Iasi2: ["Bitlo"],
   Constanta: [],
 };
 
@@ -162,8 +181,8 @@ export function defaultCollaboratorFor(city: CityKey): CollaboratorKey | null {
 /**
  * Whether the currently-selected collaborator is still valid for the
  * picked city. Used by App.tsx to auto-correct the selection when the
- * user switches city (e.g. picking Iași while Stalexone — a Ploiești
- * partner — is selected forces a reset to EMV).
+ * user switches city (picking "Iași (Tudor)" while Stalexone — a
+ * Ploiești partner — is selected forces a reset to EMV).
  */
 export function isCollaboratorValidForCity(
   collaborator: CollaboratorKey | null,
@@ -174,7 +193,7 @@ export function isCollaboratorValidForCity(
 }
 
 /** Ordered city options for the dropdown. */
-export const CITY_KEYS: readonly CityKey[] = ["Ploiesti", "Iasi", "Constanta"];
+export const CITY_KEYS: readonly CityKey[] = ["Ploiesti", "Iasi", "Iasi2", "Constanta"];
 
 /** Ordered dispatch-site keys, used by full-breakdown views (PairDetail
  *  + exports). */
@@ -195,13 +214,32 @@ export const COLLABORATOR_KEYS: readonly CollaboratorKey[] = [
 ];
 
 /**
- * Map a user-facing city choice to the 1-or-2 dispatch-site keys that
- * should be rendered for it. Ploiești / Constanța → single entry; Iași
- * fans out into Tudor + ERA. Centralising this here keeps every
- * surface — table cell, footer sum, detail page, export — consistent.
+ * Map a user-facing city choice to the SINGLE dispatch-site key that
+ * provides its customerTotal. 1-to-1 mapping (the old "stack two Iași
+ * sites under one option" was wrong — Iași is two independent series
+ * with different collaborators per the ODS).
+ *
+ * Centralising this here keeps every surface — table cell, footer sum,
+ * detail page, export — consistent.
  */
 export function dispatchSitesFor(city: CityKey): CityCommissionKey[] {
-  return city === "Iasi" ? ["IasiTudor", "IasiERA"] : [city];
+  switch (city) {
+    case "Ploiesti":  return ["Ploiesti"];
+    case "Iasi":      return ["IasiTudor"];
+    case "Iasi2":     return ["IasiERA"];
+    case "Constanta": return ["Constanta"];
+  }
+}
+
+/**
+ * Single-dispatch-site convenience for the common case (every CityKey
+ * now maps 1:1 to one CityCommissionKey). Keeps `dispatchSitesFor` as
+ * the array API for surfaces that still want a loopable shape, but
+ * lets new call sites just `cityCommissions[primaryDispatchSite(city)]`
+ * without an array index.
+ */
+export function primaryDispatchSite(city: CityKey): CityCommissionKey {
+  return dispatchSitesFor(city)[0]!;
 }
 
 /** Per-dispatch-site commission row. `pct` is the multiplier the

@@ -3,7 +3,7 @@ import {
   CITY_COMMISSION_KEYS,
   CITY_COMMISSION_LABEL,
   COLLABORATOR_LABEL,
-  dispatchSitesFor,
+  primaryDispatchSite,
   type CityKey,
   type CollaboratorKey,
   type Extracted,
@@ -310,7 +310,10 @@ function Spreadsheet({
 }) {
   let row = 0;
   const r = () => ++row;
-  const sites = dispatchSitesFor(city);
+  // Each city now maps to exactly one dispatch site (the four series
+  // from `PRETURI COLABORATORI.ods` are top-level options, not stacked
+  // under "Iași"). One coral TOTAL CLIENT row at the bottom.
+  const site = primaryDispatchSite(city);
   const collabRow = collaborator ? breakdown.collaboratorPrices[collaborator] : null;
 
   return (
@@ -495,13 +498,13 @@ function Spreadsheet({
 
       {/* ── Per-city customer totals ────────────────────────────────
           Always shows all four dispatch sites so the user can compare
-          Ploiești vs Iași vs Constanța at a glance. The bottom-line
-          TOTAL CLIENT row picks the dispatch site(s) for the city the
-          user selected in the header dropdown. */}
+          Ploiești vs Iași (Tudor) vs Iași (ERA) vs Constanța at a
+          glance. The bottom-line TOTAL CLIENT row uses the single
+          dispatch site for the city the user selected in the header. */}
       <Section title="Tarif client per oraș" />
       {CITY_COMMISSION_KEYS.map((k) => {
         const cr = breakdown.cityCommissions[k];
-        const isSelected = sites.includes(k);
+        const isSelected = k === site;
         return (
           <DataRow
             key={k}
@@ -537,22 +540,19 @@ function Spreadsheet({
       )}
 
       {/* ── Bottom-line totals ──────────────────────────────────────
-          One coral row per dispatch site for the customer-facing
-          total (Iași splits into Tudor + ERA, every other city is
-          one row), then ONE coral row for the courier-side payout
-          when a collaborator is picked. Constanța skips the payout
-          row entirely since it has no partner. */}
-      {sites.map((s) => {
-        const cr = breakdown.cityCommissions[s];
-        return (
-          <TotalRow
-            key={s}
-            n={r()}
-            label={`TOTAL CLIENT · ${CITY_COMMISSION_LABEL[s]}`}
-            value={cr ? ron(cr.customerTotal) : "—"}
-          />
-        );
-      })}
+          ONE coral row for the customer-facing total of the selected
+          city's single dispatch site, then ONE coral row for the
+          courier-side payout when a collaborator is picked. Constanța
+          skips the payout row entirely since it has no partner. */}
+      <TotalRow
+        n={r()}
+        label={`TOTAL CLIENT · ${CITY_COMMISSION_LABEL[site]}`}
+        value={
+          breakdown.cityCommissions[site]
+            ? ron(breakdown.cityCommissions[site].customerTotal)
+            : "—"
+        }
+      />
       {collaborator && collabRow && (
         <TotalRow
           n={r()}

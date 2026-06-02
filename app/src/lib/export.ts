@@ -1,7 +1,7 @@
 import {
   CITY_COMMISSION_LABEL,
   COLLABORATOR_SHORT_LABEL,
-  dispatchSitesFor,
+  primaryDispatchSite,
   type CityKey,
   type CityCommissionKey,
   type CollaboratorKey,
@@ -57,11 +57,11 @@ interface Row {
   increment: number;
   weekend: number;
   carrier: number;      // carrier subtotal (was `totalVat21`); muted in exports
-  /** Customer totals for the selected city. One entry for Ploiești /
-   *  Constanța, two for Iași (Tudor + ERA). Kept as an aligned vector
-   *  so every exporter (PDF / XLSX / DOCX) iterates over the same
-   *  shape regardless of which city the user picked. */
-  cityTotals: number[];
+  /** Customer total for the selected city's single dispatch site.
+   *  Every CityKey maps 1-to-1 to a CityCommissionKey now (Iași Tudor
+   *  and Iași ERA are top-level options, not stacked), so this is a
+   *  scalar instead of a vector. */
+  cityTotal: number;
   /** What the picked collaborator gets paid for this row, or `null`
    *  when the city has no collaborator (Constanța → direct, no
    *  partner). When null, every exporter drops the column entirely
@@ -71,21 +71,20 @@ interface Row {
 
 interface Projection {
   rows: Row[];
-  /** Sum across all rows for each city-total column, aligned to the
-   *  same length as `Row.cityTotals` (1 or 2). */
-  cityTotals: number[];
+  /** Sum across all rows for the selected city's customer total. */
+  cityTotal: number;
   /** Sum across all rows for the collaborator-payout column, or
    *  `null` when the city has no collaborator (Constanța). */
   collabTotal: number | null;
-  /** Header labels for the city-total columns ("Total Ploiești" / "Total
-   *  Iași Tudor" + "Total Iași ERA" / "Total Constanța"). */
-  cityHeaders: string[];
+  /** Header label for the city-total column ("Total Ploiești" /
+   *  "Total Iași (Tudor)" / "Total Iași (ERA)" / "Total Constanța"). */
+  cityHeader: string;
   /** Header label for the collaborator-payout column, or `null` when
    *  the column is omitted entirely (Constanța). */
   collabHeader: string | null;
-  /** Dispatch-site keys aligned 1:1 with `cityHeaders` — used by the
+  /** The dispatch-site key the selected city maps to — used by the
    *  XLSX worksheet name and for any future per-site tooling. */
-  sites: CityCommissionKey[];
+  site: CityCommissionKey;
   readyCount: number;
   totalCount: number;
   generatedAt: Date;
@@ -115,17 +114,18 @@ export interface ExportOptions {
  *  Used by all three exporters. Exposed for tests / debugging.
  *
  *  `city` + `collaborator` decide which columns the projection carries:
- *  one customer-total column for Ploiești / Constanța, two stacked
- *  Tudor + ERA columns for Iași, and always one collaborator-payout
- *  column for the picked partner. Defaults match the App.tsx
- *  initial-state defaults so direct callers still get a sane file. */
+ *  one customer-total column for the selected city's single dispatch
+ *  site, and always one collaborator-payout column for the picked
+ *  partner (dropped entirely when `collaborator === null`). Defaults
+ *  match the App.tsx initial-state defaults so direct callers still
+ *  get a sane file. */
 export function pairsToRows(
   pairs: Pair[],
   city: CityKey = "Ploiesti",
   collaborator: CollaboratorKey | null = "Stalexone",
 ): Projection {
-  const sites = dispatchSitesFor(city);
-  const cityHeaders = sites.map((s) => `Total ${CITY_COMMISSION_LABEL[s]}`);
+  const site = primaryDispatchSite(city);
+  const cityHeader = `Total ${CITY_COMMISSION_LABEL[site]}`;
   // Constanța has no collaborator → drop the column entirely instead
   // of emitting a "Plată —" placeholder. Every downstream exporter
   // checks `collabHeader === null` to decide whether to include the
@@ -134,7 +134,7 @@ export function pairsToRows(
     collaborator !== null ? `Plată ${COLLABORATOR_SHORT_LABEL[collaborator]}` : null;
 
   const rows: Row[] = [];
-  const cityRunningTotals: number[] = sites.map(() => 0);
+  let cityRunningTotal = 0;
   let collabRunningTotal = collaborator !== null ? 0 : null;
   for (let i = 0; i < pairs.length; i++) {
     const p = pairs[i];
@@ -142,9 +142,7 @@ export function pairsToRows(
     // the undefined branch unreachable at runtime.
     if (!p || p.status.kind !== "ready") continue;
     const { service, edits, breakdown } = p.status;
-    const cityTotals = sites.map(
-      (s) => breakdown.cityCommissions[s]?.customerTotal ?? 0,
-    );
+    const cityTotal = breakdown.cityCommissions[site]?.customerTotal ?? 0;
     const collabTotal =
       collaborator !== null
         ? (breakdown.collaboratorPrices[collaborator]?.total ?? 0)
@@ -164,23 +162,21 @@ export function pairsToRows(
       increment: breakdown.incrementCost,
       weekend: breakdown.weekendSurcharge,
       carrier: breakdown.totalVat21,
-      cityTotals,
+      cityTotal,
       collabTotal,
     });
-    for (let j = 0; j < cityTotals.length; j++) {
-      cityRunningTotals[j] = (cityRunningTotals[j] ?? 0) + (cityTotals[j] ?? 0);
-    }
+    cityRunningTotal += cityTotal;
     if (collabRunningTotal !== null && collabTotal !== null) {
       collabRunningTotal += collabTotal;
     }
   }
   return {
     rows,
-    cityTotals: cityRunningTotals,
+    cityTotal: cityRunningTotal,
     collabTotal: collabRunningTotal,
-    cityHeaders,
+    cityHeader,
     collabHeader,
-    sites,
+    site,
     readyCount: rows.length,
     totalCount: pairs.length,
     generatedAt: new Date(),
@@ -236,17 +232,13 @@ async function saveBinary(
 
 /** "Ziua: 30.05.2026 · 12 / 20 perechi · Total Ploiești: 1234,56 RON" —
  *  the one-liner that anchors every export header to the day it
- *  represents. For Iași (two dispatch sites) we list both totals
- *  inline. Falls back to today's generated-at when the caller didn't
- *  pass a day, so older callers still get a sensible header. */
+ *  represents. Falls back to today's generated-at when the caller
+ *  didn't pass a day, so older callers still get a sensible header. */
 function metaLine(proj: Projection, day?: string): string {
   const dayPart = day ? `Ziua: ${fmtDate(day)} · ` : "";
-  const cityTotalStrings = proj.sites.map(
-    (s, i) => `${CITY_COMMISSION_LABEL[s]}: ${fmtRon(proj.cityTotals[i] ?? 0)}`,
-  );
   return (
     `${dayPart}${proj.readyCount} din ${proj.totalCount} perechi calculate · ` +
-    `Total client (${cityTotalStrings.join(" · ")})`
+    `Total client ${CITY_COMMISSION_LABEL[proj.site]}: ${fmtRon(proj.cityTotal)}`
   );
 }
 
@@ -273,9 +265,10 @@ export async function exportToPdf(
   const { jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
-  // A4 landscape: the static 13 columns plus 1–2 city-total columns
-  // plus 1 collaborator-total column fit cleanly across ~760pt of
-  // usable width. (Iași is the worst case at 16 columns.)
+  // A4 landscape: the static 13 columns plus 1 city-total column plus
+  // (optionally) 1 collaborator-total column fit cleanly across ~760pt
+  // of usable width — 14 or 15 columns depending on whether the city
+  // has a collaborator.
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -297,17 +290,17 @@ export async function exportToPdf(
   );
   doc.text(metaLine(proj, opts.day), 40, 72);
 
-  // Header + body assembled around the dynamic city/collab columns so
-  // a single autoTable call handles both the 1-city / 2-city (Iași)
-  // shape AND the no-collaborator case (Constanța) without forking
-  // the rendering path. The collab column is omitted entirely when
+  // Header + body assembled around the one city column and the
+  // (optional) collaborator column so a single autoTable call handles
+  // both with-collab and Constanța-no-collab cases without forking the
+  // rendering path. The collab column is omitted entirely when
   // `collabHeader === null`.
   const head = [
     "#", "AWB", "Factură", "Data", "Serviciu",
     "kg", "km", "Liv.",
     "Bază", "Km+", "Inc.", "Wkd",
     "Tarif transp.",
-    ...proj.cityHeaders,
+    proj.cityHeader,
     ...(proj.collabHeader !== null ? [proj.collabHeader] : []),
   ];
 
@@ -325,11 +318,11 @@ export async function exportToPdf(
     fmtCur(r.increment, true),
     fmtCur(r.weekend, true),
     fmtCur(r.carrier),
-    ...r.cityTotals.map((v) => fmtCur(v)),
+    fmtCur(r.cityTotal),
     ...(r.collabTotal !== null ? [fmtCur(r.collabTotal)] : []),
   ]);
 
-  // Footer: "Total" label in col 5, blanks through carrier, then each
+  // Footer: "Total" label in col 5, blanks through carrier, then the
   // city total + (optionally) the collab total. Length matches the
   // head row so autoTable's column count stays consistent.
   const foot = [
@@ -337,16 +330,16 @@ export async function exportToPdf(
     "", "", "",
     "", "", "", "",
     "",
-    ...proj.cityTotals.map((v) => fmtRon(v)),
+    fmtRon(proj.cityTotal),
     ...(proj.collabTotal !== null ? [fmtRon(proj.collabTotal)] : []),
   ];
 
-  // Column-style map: 13 fixed leading columns, then per-city totals,
-  // then the collaborator total. The last (collab) gets the bold coral
-  // accent because it's the bottom-line courier payout. autoTable
-  // accepts columnStyles as `{ [key: string]: Partial<Styles> }`, so
-  // we use string keys + Partial<Styles> values to keep `fontStyle`
-  // narrowed to its literal "bold" type instead of widening to string.
+  // Column-style map: 13 fixed leading columns, then the city total,
+  // then (optionally) the collaborator total. Both bottom-line columns
+  // get the bold coral accent. autoTable accepts columnStyles as
+  // `{ [key: string]: Partial<Styles> }`, so string keys + Partial
+  // values keep `fontStyle` narrowed to its literal "bold" type instead
+  // of widening to string.
   const baseStyles: Record<string, Partial<JsPdfStyles>> = {
     "0": { halign: "center", cellWidth: 22 },
     "1": { halign: "left", cellWidth: 88 },
@@ -361,20 +354,15 @@ export async function exportToPdf(
     "10": { halign: "right", cellWidth: 42 },
     "11": { halign: "right", cellWidth: 42 },
     "12": { halign: "right", cellWidth: 56 }, // carrier subtotal
-  };
-  // Dynamic columns get a tighter cellWidth when Iași doubles them.
-  const cityWidth = proj.cityHeaders.length === 1 ? 68 : 56;
-  for (let i = 0; i < proj.cityHeaders.length; i++) {
-    baseStyles[String(13 + i)] = {
+    "13": {
       halign: "right",
-      cellWidth: cityWidth,
+      cellWidth: 68,
       fontStyle: "bold",
       textColor: [139, 72, 48],
-    };
-  }
-  // Optional collaborator column — only when the city has one.
+    },
+  };
   if (proj.collabHeader !== null) {
-    baseStyles[String(13 + proj.cityHeaders.length)] = {
+    baseStyles["14"] = {
       halign: "right",
       cellWidth: 64,
       fontStyle: "bold",
@@ -441,18 +429,14 @@ export async function exportToXlsx(
     properties: { defaultRowHeight: 18 },
   });
 
-  // Column count = 13 static + 1-2 city totals + 0-1 collab total.
+  // Column count = 13 static + 1 city total + 0-1 collab total = 14 or 15.
   const hasCollab = proj.collabHeader !== null;
-  const TOTAL_COLS = 13 + proj.cityHeaders.length + (hasCollab ? 1 : 0);
+  const TOTAL_COLS = 13 + 1 + (hasCollab ? 1 : 0);
   // Spreadsheet column letter for col `c` (1-based). 26 columns is
   // enough for our shape; we never cross into AA territory.
   const colLetter = (c: number) => String.fromCharCode("A".charCodeAt(0) + c - 1);
 
   // Excel "character" widths roughly proportional to the in-app grid.
-  const dynamicCityCols = proj.cityHeaders.map((_, i) => ({
-    key: `city${i}`,
-    width: proj.cityHeaders.length === 1 ? 18 : 14,
-  }));
   ws.columns = [
     { key: "idx", width: 5 },
     { key: "awb", width: 18 },
@@ -467,7 +451,7 @@ export async function exportToXlsx(
     { key: "increment", width: 13 },
     { key: "weekend", width: 13 },
     { key: "carrier", width: 15 },
-    ...dynamicCityCols,
+    { key: "city", width: 18 },
     ...(hasCollab ? [{ key: "collab", width: 16 }] : []),
   ];
 
@@ -496,7 +480,7 @@ export async function exportToXlsx(
     "kg", "km", "Liv.",
     "Bază (RON)", "Km+ (RON)", "Inc. (RON)", "Wkd (RON)",
     "Tarif transp. (RON)",
-    ...proj.cityHeaders.map((h) => `${h} (RON)`),
+    `${proj.cityHeader} (RON)`,
     ...(hasCollab ? [`${proj.collabHeader} (RON)`] : []),
   ]);
   headerRow.font = { bold: true, color: { argb: "FF3A352F" } };
@@ -514,13 +498,13 @@ export async function exportToXlsx(
   // and SUM later (Bază, Km+, Inc., Wkd, Tarif transp., city totals,
   // collab total).
   const firstMoneyCol = 9;
-  // Column indices that hold the bottom-line accents (the city totals
+  // Column indices that hold the bottom-line accents (the city total
   // + the collab total). Computed once so cell-formatting in the loop
   // doesn't re-derive them per row. When the city has no collaborator
-  // we still want the city-total columns accented, so we don't add
+  // we still want the city-total column accented, so we don't add
   // TOTAL_COLS for that case.
   const accentCols = new Set<number>();
-  for (let i = 0; i < proj.cityHeaders.length; i++) accentCols.add(13 + 1 + i);
+  accentCols.add(14); // city total
   if (hasCollab) accentCols.add(TOTAL_COLS);
 
   for (const r of proj.rows) {
@@ -538,7 +522,7 @@ export async function exportToXlsx(
       r.increment,
       r.weekend,
       r.carrier,
-      ...r.cityTotals,
+      r.cityTotal,
       ...(r.collabTotal !== null ? [r.collabTotal] : []),
     ]);
     row.getCell(1).alignment = { horizontal: "center" };
@@ -673,18 +657,16 @@ export async function exportToDocx(
     });
   }
 
-  // Column layout = 13 static + N city totals + 0–1 collab total.
-  // Count varies (14 for Constanța-no-collab, 15 for single-site
-  // cities, 16 for Iași), so we assemble headers/aligns as arrays
-  // and let the row builders below iterate over them — no per-column
-  // branches.
+  // Column layout = 13 static + 1 city total + 0–1 collab total = 14
+  // or 15. Assembled as arrays so the row builders below iterate
+  // uniformly — no per-column branches.
   const hasCollab = proj.collabHeader !== null;
   const headerLabels = [
     "#", "AWB", "Factură", "Data", "Serviciu",
     "kg", "km", "Liv.",
     "Bază", "Km+", "Inc.", "Wkd",
     "Tarif transp.",
-    ...proj.cityHeaders,
+    proj.cityHeader,
     ...(hasCollab ? [proj.collabHeader as string] : []),
   ];
 
@@ -693,7 +675,7 @@ export async function exportToDocx(
     "right", "right", "right",
     "right", "right", "right", "right",
     "right",
-    ...proj.cityHeaders.map<Align>(() => "right"),
+    "right",
     ...(hasCollab ? [("right" as Align)] : []),
   ];
 
@@ -720,9 +702,7 @@ export async function exportToDocx(
         tcell(fmtCur(r.increment, true), { align: "right" }),
         tcell(fmtCur(r.weekend, true), { align: "right" }),
         tcell(fmtCur(r.carrier), { align: "right" }),
-        ...r.cityTotals.map((v) =>
-          tcell(fmtCur(v), { align: "right", bold: true, color: CORAL_700 }),
-        ),
+        tcell(fmtCur(r.cityTotal), { align: "right", bold: true, color: CORAL_700 }),
         ...(r.collabTotal !== null
           ? [
               tcell(fmtCur(r.collabTotal), {
@@ -737,20 +717,17 @@ export async function exportToDocx(
   );
 
   // Totals row: coral background, cream text — same accent as the
-  // in-app sticky bottom row. "Total" label sits in col 5; every
-  // city-total column gets its column sum, the collab column gets
-  // its sum, and everything else stays blank.
-  const cityTotalCount = proj.cityHeaders.length;
+  // in-app sticky bottom row. "Total" label sits in col 5; the city
+  // total sits at index 13, the (optional) collab total at the last
+  // index, and everything else stays blank.
   const totalsCells: DocxTableCell[] = headerLabels.map((_, i) => {
     if (i === 4) {
       return tcell("Total", {
         bg: CORAL_500, bold: true, color: CANVAS_50, align: "right",
       });
     }
-    // City totals occupy indexes 13..13+cityTotalCount-1; the collab
-    // total sits at the last index (headerLabels.length - 1).
-    if (i >= 13 && i < 13 + cityTotalCount) {
-      return tcell(fmtRon(proj.cityTotals[i - 13] ?? 0), {
+    if (i === 13) {
+      return tcell(fmtRon(proj.cityTotal), {
         bg: CORAL_500, bold: true, color: CANVAS_50, align: "right",
       });
     }
