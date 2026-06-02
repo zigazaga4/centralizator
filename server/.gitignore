@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+.DS_Store
+
+# SQLite database (pair queue). The DB and its WAL sidecars are
+# per-machine working state, not source.
+centralizator.db
+centralizator.db-shm
+centralizator.db-wal

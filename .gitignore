@@ -5,14 +5,36 @@
 # TAURI_SIGNING_PRIVATE_KEY instead.
 .keys/
 
-# Server source — deliberately NOT published to the public client
-# repo. The Fastify backend (pricing engine, OpenRouter wiring,
-# SQLite store, deployment URL + key) stays private; only the client
-# (Tauri + React UI) lives on GitHub so the auto-updater can pull
-# signed installers from Releases.
-server/
+# Build outputs / installed deps
+node_modules/
+**/node_modules/
+**/dist/
+**/build/
 
-# Build artifacts from the tarball workflow.
+# Local env files (contain secrets — OpenRouter key + CENTRALIZATOR_API_KEY)
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Logs
+*.log
+**/*.log
+
+# OS / editor cruft
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+
+# SQLite working state (not source)
+**/centralizator.db
+**/centralizator.db-shm
+**/centralizator.db-wal
+
+# Auto-generated discovery file
+.api-port
+
+# Build artifacts from the server tarball workflow.
 centralizator-server.tar.gz
 centralizator-server/
 
@@ -22,5 +44,11 @@ centralizator-server/
 Centralizator_*_x64-setup.exe
 Centralizator_*_x64-setup.exe.sig
 
-# OS noise.
-.DS_Store
+# Operator-uploaded pricing source documents — the source-of-truth
+# tariffs live in server/src/tariffs.ts, not in these files.
+*.docx
+*.ods
+*.odt
+*.xlsx
+# Note: *.pdf intentionally NOT ignored here because the repo already
+# tracks Centralizator-Formule-de-calcul.pdf.
