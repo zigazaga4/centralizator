@@ -6,6 +6,7 @@ import {
   type CityKey,
   type CityCommissionKey,
   type CollaboratorKey,
+  type Extracted,
   type Pair,
   type PairPatch,
   type PairStatus,
@@ -257,23 +258,18 @@ function PairRow({
 
       {/* AWB # */}
       <div className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
-        {edits?.awb_number || <Dash />}
+        {edits?.awb.awb_number || <Dash />}
       </div>
 
-      {/* Factură # */}
-      <div className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
-        <span className="flex-1 truncate">{edits?.invoice_number || <Dash />}</span>
-        {edits?.invoice_is_duplicate && (
-          <span className="ml-1 rounded bg-coral-100 px-1 py-0.5 text-[9px] font-medium uppercase text-coral-700">
-            DUP
-          </span>
-        )}
-      </div>
+      {/* Factură # — for a pair carrying multiple invoices we show the
+          first invoice number with a "+N" badge so the row stays
+          single-line. The detail view lists every invoice in full. */}
+      <FacturaCell edits={edits} />
 
       {/* Data */}
       <div className="border-r border-ink-200">
         {isReady && edits ? (
-          <DateCell value={edits.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
+          <DateCell value={edits.awb.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
         ) : (
           <PlaceholderCell />
         )}
@@ -288,8 +284,8 @@ function PairRow({
             onChange={(v) => onPatch({ service: v as Service })}
             hint={
               status.serviceFallback
-                ? `AWB: ${edits?.service_text || "—"} → Express`
-                : edits?.service_text || undefined
+                ? `AWB: ${edits?.awb.service_text || "—"} → Express`
+                : edits?.awb.service_text || undefined
             }
           />
         ) : (
@@ -301,7 +297,7 @@ function PairRow({
       <div className="border-r border-ink-200">
         {isReady && edits ? (
           <NumberCell
-            value={edits.weight_kg}
+            value={edits.awb.weight_kg}
             step={0.01}
             min={0}
             onChange={(v) => onPatch({ weight_kg: v })}
@@ -315,7 +311,7 @@ function PairRow({
       <div className="border-r border-ink-200">
         {isReady && edits ? (
           <NumberCell
-            value={edits.distance_extra_km}
+            value={edits.awb.distance_extra_km}
             step={1}
             min={0}
             onChange={(v) => onPatch({ distance_extra_km: v })}
@@ -329,7 +325,7 @@ function PairRow({
       <div className="border-r border-ink-200">
         {isReady && edits ? (
           <NumberCell
-            value={edits.num_deliveries}
+            value={edits.awb.num_deliveries}
             step={1}
             min={1}
             integer
@@ -438,6 +434,54 @@ function SumRow({
         {collaborator ? ron(sumCollab) : "—"}
       </div>
       <div />
+    </div>
+  );
+}
+
+/* ─── Factură cell ──────────────────────────────────────────────────── */
+
+/**
+ * Single-line invoice column for a row.
+ *
+ * A pair carries N invoices; the cell still needs to fit on one row of
+ * the queue table, so we show the FIRST invoice's number, mark it
+ * DUPLICAT if applicable, and append a compact "+N" badge when there
+ * are more invoices below. The detail view is where the full list
+ * lives — this cell exists to identify the row at a glance.
+ */
+function FacturaCell({ edits }: { edits: Extracted | null }) {
+  if (!edits || edits.invoices.length === 0) {
+    return (
+      <div className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
+        <Dash />
+      </div>
+    );
+  }
+  const first = edits.invoices[0]!;
+  const extras = edits.invoices.length - 1;
+  return (
+    <div
+      className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800"
+      title={
+        extras > 0
+          ? edits.invoices.map((i) => i.invoice_number).join(" · ")
+          : undefined
+      }
+    >
+      <span className="flex-1 truncate">{first.invoice_number || <Dash />}</span>
+      {first.invoice_is_duplicate && (
+        <span className="ml-1 rounded bg-coral-100 px-1 py-0.5 text-[9px] font-medium uppercase text-coral-700">
+          DUP
+        </span>
+      )}
+      {extras > 0 && (
+        <span
+          className="ml-1 rounded bg-ink-200 px-1 py-0.5 text-[9px] font-medium text-ink-700"
+          title={`${extras + 1} facturi pe această pereche`}
+        >
+          +{extras}
+        </span>
+      )}
     </div>
   );
 }

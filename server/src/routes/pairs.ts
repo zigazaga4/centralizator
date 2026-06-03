@@ -57,10 +57,16 @@ const ImageWireSchema = z.object({
   dataB64: z.string().min(1),
 });
 
+/**
+ * Image cap matches `MAX_IMAGES` in routes/extract.ts: 1 AWB + up to
+ * 11 invoices. `min(2)` is the floor because a pair without an
+ * invoice makes no sense (the model needs one AWB and at least one
+ * invoice to produce a valid Extracted struct).
+ */
 const NewPairSchema = z.object({
   id: z.string().min(1),
   day: isoDay,
-  images: z.array(ImageWireSchema).min(1).max(4),
+  images: z.array(ImageWireSchema).min(2).max(12),
 });
 
 /**

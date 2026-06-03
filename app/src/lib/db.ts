@@ -13,8 +13,11 @@
  *   • `pairs`        — one row per pair, scalars + two JSON blobs
  *                      for the OCR-extracted struct and the pricing
  *                      breakdown, plus the `day` filing bucket.
- *   • `pair_images`  — two rows per pair (slot 0 / slot 1), real
- *                      SQLite BLOBs for the image bytes.
+ *   • `pair_images`  — N rows per pair (one slot per attached image,
+ *                      in submit order), real SQLite BLOBs for the
+ *                      image bytes. One slot is conventionally the AWB
+ *                      and the rest are invoices, but the role is
+ *                      decided by the vision model, not the schema.
  *
  * Failure mode: if the server is unreachable, every export here logs
  * the error and resolves to a safe no-op (empty list / silent skip).
@@ -211,7 +214,7 @@ async function httpRetry(
  * ────────────────────────────────────────────────────────────────────── */
 
 /**
- * Pull every pair (with its two images) back into memory, ordered by
+ * Pull every pair (with its N images) back into memory, ordered by
  * insertion time so the queue rebuilds in the exact order the user
  * created it.
  *
@@ -250,7 +253,7 @@ export async function loadAllPairs(): Promise<Pair[]> {
   }
 }
 
-/** Insert a brand-new pair with its two source images. Retries on
+/** Insert a brand-new pair with its N source images. Retries on
  *  transient failure — see `httpRetry`. The caller awaits this so a
  *  hard failure surfaces visibly instead of leaving an in-memory row
  *  that the server never received. */

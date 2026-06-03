@@ -1,11 +1,16 @@
 import { useCallback, useRef, useState } from "react";
 
 interface Props {
-  /** Called once per discovered (image, image) pair. Drop 6 files → fires 3 times. */
+  /** Called once per drop. The dropped files form a single pair:
+   *  one AWB image + one or more invoice images. */
   onAddPair: (pair: File[]) => void;
   /** Whether to render the big hero variant (empty state) or the compact bar. */
   hero?: boolean;
 }
+
+/** Hard cap mirrored from the server's `MAX_IMAGES` in routes/extract.ts.
+ *  Keeps any single pair under the vision model's token budget. */
+const MAX_IMAGES_PER_PAIR = 12;
 
 /**
  * Persistent "+ Add a pair" card. Sits above the table and stays put as
@@ -15,9 +20,11 @@ interface Props {
  *   • drop   → drag-and-drop one or many files
  *   • paste  → Ctrl+V images from clipboard
  *
- * Batching: any even number of dropped images is split into consecutive
- * pairs of two, and each pair fires `onAddPair` once. An odd file at
- * the end is reported as a warning so the user can re-add it.
+ * One pair per drop. The dropped images form a single (1 AWB +
+ * N-1 invoices) bundle — the vision model identifies which one is the
+ * AWB and treats the rest as invoices in the same order they were
+ * dropped. The previous "N×2 images = N pairs" batching is gone now
+ * that a pair can carry more than two images.
  */
 export function PairAddCard({ onAddPair, hero }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -32,21 +39,23 @@ export function PairAddCard({ onAddPair, hero }: Props) {
         return;
       }
       if (imgs.length === 1) {
-        setWarning("Selectează DOUĂ imagini deodată pentru o pereche.");
+        setWarning("O singură imagine — selectează cel puțin DOUĂ (1 AWB + 1 factură).");
         return;
       }
-      // Split into consecutive pairs. Drop the trailing odd one with a hint.
-      let added = 0;
-      for (let i = 0; i + 1 < imgs.length; i += 2) {
-        onAddPair([imgs[i]!, imgs[i + 1]!]);
-        added += 1;
+      if (imgs.length > MAX_IMAGES_PER_PAIR) {
+        setWarning(
+          `Prea multe imagini (${imgs.length}). Maxim ${MAX_IMAGES_PER_PAIR} per pereche — am ignorat surplusul.`,
+        );
+        onAddPair(imgs.slice(0, MAX_IMAGES_PER_PAIR));
+        return;
       }
-      const leftover = imgs.length % 2 === 1;
+      const invoices = imgs.length - 1;
       setWarning(
-        leftover
-          ? `Am adăugat ${added} pereche${added === 1 ? "" : "i"} — ultima imagine a fost ignorată (număr impar).`
-          : null,
+        invoices === 1
+          ? null
+          : `Pereche cu ${invoices} facturi — modelul identifică AWB-ul automat.`,
       );
+      onAddPair(imgs);
     },
     [onAddPair],
   );
@@ -81,7 +90,7 @@ export function PairAddCard({ onAddPair, hero }: Props) {
         }}
         role="button"
         tabIndex={0}
-        aria-label="Adaugă o pereche AWB + Factură"
+        aria-label="Adaugă o pereche AWB + Facturi"
         className={`cursor-pointer rounded-2xl border-2 border-dashed bg-canvas-50 shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-coral-400 ${
           over
             ? "border-coral-500 bg-coral-50"
@@ -121,11 +130,11 @@ export function PairAddCard({ onAddPair, hero }: Props) {
               </div>
             </div>
             <p className="text-base font-medium text-ink-900">
-              Adaugă prima pereche AWB + Factură
+              Adaugă prima pereche AWB + Facturi
             </p>
             <p className="mt-1.5 text-sm text-ink-500">
-              Două imagini deodată — modelul identifică automat care e care.
-              Repetă pentru fiecare pereche.
+              Drop AWB-ul + una sau mai multe facturi deodată — modelul
+              identifică automat care e care. O pereche per drop.
             </p>
           </>
         ) : (
@@ -150,7 +159,7 @@ export function PairAddCard({ onAddPair, hero }: Props) {
                   Adaugă o pereche
                 </p>
                 <p className="text-xs text-ink-500">
-                  AWB + Factură (în orice ordine) · drop N×2 imagini pentru N perechi
+                  1 AWB + 1 sau mai multe facturi (în orice ordine) · o pereche per drop
                 </p>
               </div>
             </div>

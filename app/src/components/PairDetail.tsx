@@ -7,6 +7,7 @@ import {
   type CityKey,
   type CollaboratorKey,
   type Extracted,
+  type Invoice,
   type Pair,
   type PairPatch,
   type PairStatus,
@@ -62,7 +63,7 @@ export function PairDetail({
   const status = pair.status;
   const title =
     status.kind === "ready"
-      ? `Pereche #${index + 1} · AWB ${status.edits.awb_number}`
+      ? `Pereche #${index + 1} · AWB ${status.edits.awb.awb_number}`
       : `Pereche #${index + 1}`;
 
   return (
@@ -316,19 +317,26 @@ function Spreadsheet({
   const site = primaryDispatchSite(city);
   const collabRow = collaborator ? breakdown.collaboratorPrices[collaborator] : null;
 
+  // Split for readability — the spreadsheet renders the AWB section
+  // once, then loops through every invoice as its own section. Pricing
+  // depends only on `awb`; the invoices are display-only billable
+  // documents.
+  const { awb, invoices } = data;
+  const multipleInvoices = invoices.length > 1;
+
   return (
     <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
       <ColumnHeader />
 
       <Section title="AWB" />
-      <DataRow n={r()} label="Număr AWB" value={data.awb_number} />
+      <DataRow n={r()} label="Număr AWB" value={awb.awb_number} />
       <DataRow n={r()} label="Data livrare" editable>
-        <DateCell value={data.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
+        <DateCell value={awb.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
       </DataRow>
       <DataRow
         n={r()}
         label="Serviciu (AWB)"
-        value={data.service_text || "—"}
+        value={awb.service_text || "—"}
         hint={serviceFallback ? "necunoscut → Express" : undefined}
       />
       <DataRow n={r()} label="Serviciu (calcul)" editable>
@@ -340,7 +348,7 @@ function Spreadsheet({
       </DataRow>
       <DataRow n={r()} label="Greutate (kg)" editable>
         <NumberCell
-          value={data.weight_kg}
+          value={awb.weight_kg}
           step={0.01}
           min={0}
           onChange={(v) => onPatch({ weight_kg: v })}
@@ -348,7 +356,7 @@ function Spreadsheet({
       </DataRow>
       <DataRow n={r()} label="Distanță extra (km)" editable>
         <NumberCell
-          value={data.distance_extra_km}
+          value={awb.distance_extra_km}
           step={1}
           min={0}
           onChange={(v) => onPatch({ distance_extra_km: v })}
@@ -356,65 +364,97 @@ function Spreadsheet({
       </DataRow>
       <DataRow n={r()} label="Număr livrări" editable>
         <NumberCell
-          value={data.num_deliveries}
+          value={awb.num_deliveries}
           step={1}
           min={1}
           integer
           onChange={(v) => onPatch({ num_deliveries: Math.max(1, Math.floor(v)) })}
         />
       </DataRow>
-      <DataRow n={r()} label="Tip expediție" value={data.shipment_type} />
-      <DataRow n={r()} label="Hub destinație" value={data.hub_destination} />
-      <DataRow n={r()} label="Cod conținut" value={data.content_code} />
-      <DataRow n={r()} label="Expeditor" value={data.sender_name} />
-      <DataRow n={r()} label="Telefon expeditor" value={data.sender_phone} />
-      <DataRow n={r()} label="Adresa expeditor" value={data.sender_address} />
-      <DataRow n={r()} label="Destinatar" value={data.recipient_name} />
-      <DataRow n={r()} label="Telefon destinatar" value={data.recipient_phone} />
-      <DataRow n={r()} label="Adresa destinatar" value={data.recipient_address} />
+      <DataRow n={r()} label="Tip expediție" value={awb.shipment_type} />
+      <DataRow n={r()} label="Hub destinație" value={awb.hub_destination} />
+      <DataRow n={r()} label="Cod conținut" value={awb.content_code} />
+      <DataRow n={r()} label="Expeditor" value={awb.sender_name} />
+      <DataRow n={r()} label="Telefon expeditor" value={awb.sender_phone} />
+      <DataRow n={r()} label="Adresa expeditor" value={awb.sender_address} />
+      <DataRow n={r()} label="Destinatar" value={awb.recipient_name} />
+      <DataRow n={r()} label="Telefon destinatar" value={awb.recipient_phone} />
+      <DataRow n={r()} label="Adresa destinatar" value={awb.recipient_address} />
 
-      <Section title="Factură" />
-      <DataRow
-        n={r()}
-        label="Număr factură"
-        value={data.invoice_number}
-        badge={data.invoice_is_duplicate ? "DUPLICAT" : undefined}
-      />
-      <DataRow n={r()} label="Data factură" value={date(data.invoice_date)} />
-      <DataRow n={r()} label="Furnizor" value={data.supplier_name} />
-      <DataRow n={r()} label="CIF furnizor" value={data.supplier_cui} />
-      <DataRow n={r()} label="Cumpărător" value={data.buyer_name} />
-      <DataRow n={r()} label="CIF cumpărător" value={data.buyer_cui} />
-      <DataRow n={r()} label="Nr. comandă" value={data.order_number} />
-      <DataRow
-        n={r()}
-        label="Total fără TVA"
-        value={data.invoice_total_net != null ? ron(data.invoice_total_net) : "—"}
-        numeric
-      />
-      <DataRow
-        n={r()}
-        label="TVA (factură)"
-        value={data.invoice_total_vat != null ? ron(data.invoice_total_vat) : "—"}
-        numeric
-      />
-      <DataRow
-        n={r()}
-        label="Total cu TVA (factură)"
-        value={data.invoice_total_gross != null ? ron(data.invoice_total_gross) : "—"}
-        numeric
-      />
+      {/* One Factură section per attached invoice. Header is numbered
+          when there's more than one so the user can pair each section
+          back to its image in the gallery on the left. */}
+      {invoices.map((inv, i) => {
+        const heading = multipleInvoices
+          ? `Factură ${i + 1} / ${invoices.length}`
+          : "Factură";
+        const rows: ReactNode[] = [];
+        rows.push(
+          <DataRow
+            key="num"
+            n={r()}
+            label="Număr factură"
+            value={inv.invoice_number}
+            badge={inv.invoice_is_duplicate ? "DUPLICAT" : undefined}
+          />,
+        );
+        rows.push(<DataRow key="date" n={r()} label="Data factură" value={date(inv.invoice_date)} />);
+        rows.push(<DataRow key="supplier" n={r()} label="Furnizor" value={inv.supplier_name} />);
+        rows.push(<DataRow key="supplier_cui" n={r()} label="CIF furnizor" value={inv.supplier_cui} />);
+        rows.push(<DataRow key="buyer" n={r()} label="Cumpărător" value={inv.buyer_name} />);
+        rows.push(<DataRow key="buyer_cui" n={r()} label="CIF cumpărător" value={inv.buyer_cui} />);
+        rows.push(<DataRow key="order" n={r()} label="Nr. comandă" value={inv.order_number} />);
+        rows.push(
+          <DataRow
+            key="net"
+            n={r()}
+            label="Total fără TVA"
+            value={inv.invoice_total_net != null ? ron(inv.invoice_total_net) : "—"}
+            numeric
+          />,
+        );
+        rows.push(
+          <DataRow
+            key="vat"
+            n={r()}
+            label="TVA (factură)"
+            value={inv.invoice_total_vat != null ? ron(inv.invoice_total_vat) : "—"}
+            numeric
+          />,
+        );
+        rows.push(
+          <DataRow
+            key="gross"
+            n={r()}
+            label="Total cu TVA (factură)"
+            value={inv.invoice_total_gross != null ? ron(inv.invoice_total_gross) : "—"}
+            numeric
+          />,
+        );
 
-      {data.items.length > 0 && (
-        <>
-          <Section title={`Articole factură (${data.items.length})`} />
-          <ItemsHeader />
-          {data.items.map((it, i) => {
+        const itemNodes: ReactNode[] = [];
+        if (inv.items.length > 0) {
+          itemNodes.push(<ItemsHeader key="hdr" />);
+          for (let k = 0; k < inv.items.length; k++) {
             row += 1;
-            return <ItemRow key={i} n={row} item={it} />;
-          })}
-        </>
-      )}
+            const it = inv.items[k]!;
+            itemNodes.push(<ItemRow key={`it-${k}`} n={row} item={it} />);
+          }
+        }
+
+        return (
+          <div key={i}>
+            <Section title={heading} />
+            {rows}
+            {inv.items.length > 0 && (
+              <>
+                <Section title={`Articole factură (${inv.items.length})`} />
+                {itemNodes}
+              </>
+            )}
+          </div>
+        );
+      })}
 
       <Section title="Calcul tarif" />
       <DataRow n={r()} label="Cheie tarif" value={breakdown.baseKey} />
@@ -668,7 +708,7 @@ function ItemsHeader() {
   );
 }
 
-function ItemRow({ n, item }: { n: number; item: Extracted["items"][number] }) {
+function ItemRow({ n, item }: { n: number; item: Invoice["items"][number] }) {
   return (
     <div
       className={`${ITEMS_GRID} border-b border-ink-200 bg-canvas-50 text-sm transition hover:bg-canvas-100`}

@@ -251,10 +251,13 @@ export default function App() {
     (files: File[]) => {
       // New pairs inherit the currently-viewed day so a drop on
       // "tomorrow's tab" files under tomorrow without an extra click.
+      // PairAddCard already clamps to MAX_IMAGES_PER_PAIR (12), so we
+      // accept whatever it hands over. A pair carries one AWB plus N-1
+      // invoices; the vision model decides which slot is which.
       const newPair: Pair = {
         id: uuid(),
         day: selectedDay,
-        images: files.slice(0, 2),
+        images: files,
         status: { kind: "pending" },
       };
       // Optimistic add — the row appears in the UI immediately so the
@@ -406,10 +409,10 @@ export default function App() {
       try {
         const b = await reprice({
           service,
-          weight_kg: edits.weight_kg,
-          distance_km: edits.distance_extra_km,
-          num_deliveries: edits.num_deliveries,
-          delivery_date: edits.delivery_date,
+          weight_kg: edits.awb.weight_kg,
+          distance_km: edits.awb.distance_extra_km,
+          num_deliveries: edits.awb.num_deliveries,
+          delivery_date: edits.awb.delivery_date,
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever
@@ -431,17 +434,21 @@ export default function App() {
       const cur = pairsRef.current.find((p) => p.id === id);
       if (!cur || cur.status.kind !== "ready") return;
 
+      const curAwb = cur.status.edits.awb;
       const nextStatus: PairStatus = {
         kind: "ready",
         service: patch.service ?? cur.status.service,
         serviceFallback: cur.status.serviceFallback,
         edits: {
           ...cur.status.edits,
-          weight_kg: patch.weight_kg ?? cur.status.edits.weight_kg,
-          distance_extra_km:
-            patch.distance_extra_km ?? cur.status.edits.distance_extra_km,
-          num_deliveries: patch.num_deliveries ?? cur.status.edits.num_deliveries,
-          delivery_date: patch.delivery_date ?? cur.status.edits.delivery_date,
+          awb: {
+            ...curAwb,
+            weight_kg: patch.weight_kg ?? curAwb.weight_kg,
+            distance_extra_km:
+              patch.distance_extra_km ?? curAwb.distance_extra_km,
+            num_deliveries: patch.num_deliveries ?? curAwb.num_deliveries,
+            delivery_date: patch.delivery_date ?? curAwb.delivery_date,
+          },
         },
         breakdown: cur.status.breakdown,
       };

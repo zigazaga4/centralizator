@@ -22,17 +22,17 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
- * Send both images in one multipart request under a generic `images`
- * field. The server hands them to the vision model unlabelled — the
- * model decides which one is the AWB and which is the invoice based on
- * visible content.
+ * Send N images (1 AWB + 1..N invoices) in one multipart request
+ * under a generic `images` field. The server hands them to the vision
+ * model unlabelled — the model decides which one is the AWB; all
+ * others are invoices, in the order they appeared in the form.
  */
 export async function extractAndPrice(images: File[]): Promise<ExtractResponse> {
   if (images.length < 2) {
-    throw new Error("extractAndPrice needs exactly two images.");
+    throw new Error("extractAndPrice needs at least two images (1 AWB + 1 invoice).");
   }
   const form = new FormData();
-  for (const img of images.slice(0, 2)) form.append("images", img);
+  for (const img of images) form.append("images", img);
   // Don't set Content-Type — the browser must compute the multipart
   // boundary itself. Auth header rides alongside.
   const res = await fetch(`${BASE}/extract-and-price`, {

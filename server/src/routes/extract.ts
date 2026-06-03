@@ -1,14 +1,15 @@
 /**
- * POST /extract-and-price — accept AWB + invoice images, return both the
- * raw extracted fields and the computed pricing breakdown.
+ * POST /extract-and-price — accept N images (1 AWB + 1..N invoices),
+ * return both the raw extracted fields and the computed pricing
+ * breakdown.
  *
- * The pricing is derived deterministically from the extracted fields, so
+ * The pricing is derived deterministically from the AWB-side fields, so
  * the caller can re-run only the pricing step via POST /price after the
  * user edits anything by hand.
  */
 
 import type { FastifyInstance } from "fastify";
-import { extractFromImages } from "../gemini.js";
+import { extractFromImages, type ImageInput } from "../gemini.js";
 import { calculatePrice, type PricingBreakdown } from "../pricing.js";
 import { SERVICE_TEXT_MAP, type Service } from "../tariffs.js";
 import {
@@ -24,6 +25,12 @@ const ACCEPTED_MIME = new Set([
   "image/heic",
   "image/heif",
 ]);
+
+/** Hard cap on images per pair. Generous enough for any realistic AWB
+ *  (one of our biggest in practice has been a handful of invoices on
+ *  one waybill); keeps a runaway upload from blowing up the vision
+ *  call's token budget. */
+const MAX_IMAGES = 12;
 
 /**
  * Best-effort map from the AWB's free-text `Serviciu` field to one of the
@@ -52,11 +59,11 @@ export default async function extractRoutes(app: FastifyInstance) {
   app.post("/extract-and-price", async (req, reply) => {
     const parts = req.parts();
 
-    // The client now sends two unordered image parts (any field name).
-    // The vision model decides which one is the AWB and which is the
-    // invoice based on visible content, so we don't care about ordering
-    // or labelling here.
-    const images: { data: Buffer; mimeType: string }[] = [];
+    // The client now sends N unordered image parts (any field name).
+    // Exactly one of them is the AWB; the rest are invoices. The
+    // vision model picks the AWB based on visible content, so we
+    // don't care about ordering or labelling here.
+    const images: ImageInput[] = [];
 
     for await (const part of parts) {
       if (part.type !== "file") continue;
@@ -66,34 +73,39 @@ export default async function extractRoutes(app: FastifyInstance) {
       }
       const buf = await part.toBuffer();
       images.push({ data: buf, mimeType });
+      if (images.length > MAX_IMAGES) {
+        return reply.code(413).send({
+          error: `Too many images: cap is ${MAX_IMAGES} per pair (1 AWB + up to ${MAX_IMAGES - 1} invoices).`,
+        });
+      }
     }
 
-    const [first, second] = images;
-    if (!first || !second) {
+    if (images.length < 2) {
       return reply.code(400).send({
-        error: "Send exactly TWO image parts (any field name, any order; the model identifies AWB vs invoice).",
+        error:
+          "Send at least TWO image parts (1 AWB + 1 invoice). " +
+          "Field names and order do not matter; the model identifies the AWB.",
       });
     }
 
     let extracted: Extracted;
     try {
-      // Extra parts beyond the first two (if any) are ignored.
-      extracted = await extractFromImages(first, second);
+      extracted = await extractFromImages(images);
     } catch (err) {
       req.log.error({ err }, "Vision extraction failed");
       return reply.code(502).send({ error: (err as Error).message });
     }
 
-    const { service, serviceFallback } = resolveService(extracted.service_text);
+    const { service, serviceFallback } = resolveService(extracted.awb.service_text);
 
     let breakdown: PricingBreakdown;
     try {
       breakdown = calculatePrice({
         service,
-        weightKg: extracted.weight_kg,
-        distanceKm: extracted.distance_extra_km,
-        numDeliveries: extracted.num_deliveries ?? 1,
-        deliveryDate: extracted.delivery_date,
+        weightKg: extracted.awb.weight_kg,
+        distanceKm: extracted.awb.distance_extra_km,
+        numDeliveries: extracted.awb.num_deliveries ?? 1,
+        deliveryDate: extracted.awb.delivery_date,
       });
     } catch (err) {
       req.log.error({ err, extracted }, "Pricing failed");

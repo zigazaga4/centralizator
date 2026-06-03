@@ -142,21 +142,28 @@ export function pairsToRows(
     // the undefined branch unreachable at runtime.
     if (!p || p.status.kind !== "ready") continue;
     const { service, edits, breakdown } = p.status;
+    const { awb, invoices } = edits;
     const cityTotal = breakdown.cityCommissions[site]?.customerTotal ?? 0;
     const collabTotal =
       collaborator !== null
         ? (breakdown.collaboratorPrices[collaborator]?.total ?? 0)
         : null;
+    // `factura` cell: join every invoice number with " · " so the
+    // export shows all of them on one row, each suffixed with " (DUP)"
+    // when the invoice is marked DUPLICAT. Most pairs still carry one
+    // invoice; in that case the join is a no-op.
+    const facturaCell = invoices
+      .map((inv) => inv.invoice_number + (inv.invoice_is_duplicate ? " (DUP)" : ""))
+      .join(" · ");
     rows.push({
       idx: i + 1,
-      awb: edits.awb_number,
-      factura:
-        edits.invoice_number + (edits.invoice_is_duplicate ? " (DUP)" : ""),
-      date: edits.delivery_date,
+      awb: awb.awb_number,
+      factura: facturaCell,
+      date: awb.delivery_date,
       service,
-      kg: edits.weight_kg,
-      km: edits.distance_extra_km,
-      livrari: edits.num_deliveries,
+      kg: awb.weight_kg,
+      km: awb.distance_extra_km,
+      livrari: awb.num_deliveries,
       baza: breakdown.baseTariff,
       kmExtra: breakdown.extraKmCost,
       increment: breakdown.incrementCost,

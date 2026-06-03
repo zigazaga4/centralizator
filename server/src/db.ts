@@ -22,10 +22,14 @@
  *   • `pairs`        — one row per pair, scalars + two JSON blobs
  *                      (the OCR-extracted struct and the pricing
  *                      breakdown), plus the `day` filing bucket.
- *   • `pair_images`  — two rows per pair (slot 0 / slot 1), each
- *                      carrying the original image bytes as a real
- *                      BLOB so thumbnails and the detail page survive
- *                      restart.
+ *   • `pair_images`  — N rows per pair (one per attached image, in the
+ *                      order the user dropped them), each carrying the
+ *                      original image bytes as a real BLOB so thumbnails
+ *                      and the detail page survive restart. Conventionally
+ *                      one of the slots is the AWB and the rest are
+ *                      invoices, but the vision model decides which is
+ *                      which from visible content — the DB stays
+ *                      agnostic about role-per-slot.
  *
  * The "extracting" status is intentionally NOT persisted: any pair
  * that was mid-flight when the server died comes back as "pending"
@@ -320,7 +324,7 @@ function imageRowToWire(r: ImageRow): PairImageWire {
  * ────────────────────────────────────────────────────────────────────── */
 
 /**
- * Pull every pair (with its two images) ordered by insertion time so
+ * Pull every pair (with its N images) ordered by insertion time so
  * the queue rebuilds in the exact order the user created it. We fetch
  * pairs and images in two queries and bucket images by `pair_id` in
  * a single pass — O(n) reconstruction, no N+1.
@@ -364,9 +368,9 @@ export interface InsertPairInput {
 }
 
 /**
- * Insert a brand-new pair with its two source images, atomically.
- * Wrapping both inserts in a single `better-sqlite3` transaction
- * guarantees either both land or neither — we lose the "orphan
+ * Insert a brand-new pair with its N source images, atomically.
+ * Wrapping all inserts in a single `better-sqlite3` transaction
+ * guarantees either every row lands or none — we lose the "orphan
  * parent row" failure mode the old Tauri client had to tolerate.
  */
 export function insertPair(input: InsertPairInput): PairWire {

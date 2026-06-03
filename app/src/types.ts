@@ -23,7 +23,11 @@ export interface InvoiceItem {
   vat_amount?: number | null;
 }
 
-export interface Extracted {
+/**
+ * The AWB side. Every pricing-relevant field lives here — pricing.ts on
+ * the server reads exclusively from this struct.
+ */
+export interface Awb {
   awb_number: string;
   delivery_date: string;
   service_text: string;
@@ -39,7 +43,13 @@ export interface Extracted {
   recipient_name?: string | null;
   recipient_phone?: string | null;
   recipient_address?: string | null;
+}
 
+/**
+ * One invoice attached to a pair. Multiple invoices may share the
+ * same AWB — same delivery, several billable documents.
+ */
+export interface Invoice {
   invoice_number: string;
   invoice_date: string;
   invoice_is_duplicate?: boolean;
@@ -52,6 +62,15 @@ export interface Extracted {
   invoice_total_net?: number | null;
   invoice_total_vat?: number | null;
   invoice_total_gross?: number | null;
+}
+
+/**
+ * One AWB + one or more invoices. Pricing depends only on `awb`; the
+ * invoices are attached billable documents the detail view lists.
+ */
+export interface Extracted {
+  awb: Awb;
+  invoices: Invoice[];
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -350,7 +369,9 @@ export interface Pair {
    * filing yesterday's paperwork today).
    */
   day: string;
-  /** Exactly two images, in submit order. The vision model decides AWB vs invoice. */
+  /** N images in submit order (one AWB + one or more invoices). The
+   *  vision model decides which one is the AWB; all others are
+   *  invoices, ordered as the user dropped them. */
   images: File[];
   status: PairStatus;
 }
