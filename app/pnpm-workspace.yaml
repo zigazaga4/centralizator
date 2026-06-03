@@ -1,4 +1,10 @@
 allowBuilds:
-  core-js: true
-  esbuild: true
-onlyBuiltDependencies: '["core-js","esbuild"]'
+  core-js: set this to true or false
+  esbuild: set this to true or false
+# pnpm settings. `onlyBuiltDependencies` MUST be a YAML list — when it was
+# a quoted JSON string, pnpm 10/11 crashed with
+# "settings.onlyBuiltDependencies.push is not a function" during
+# `pnpm install --frozen-lockfile` in CI (the release build).
+onlyBuiltDependencies:
+  - core-js
+  - esbuild
