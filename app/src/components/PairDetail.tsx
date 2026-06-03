@@ -13,8 +13,10 @@ import {
   type PairStatus,
   type PricingBreakdown,
   type Service,
+  type Verification,
 } from "../types";
 import { date, ron } from "../lib/format";
+import { ProductBadge, ProductCheckSummary } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
@@ -31,6 +33,8 @@ interface Props {
    *  `null` means the picked city has no collaborator (Constanța) —
    *  the per-collaborator section is hidden entirely in that case. */
   collaborator: CollaboratorKey | null;
+  /** True while this pair's Leroy Merlin product check is in flight. */
+  verifying?: boolean;
   onPatch: (patch: PairPatch) => void;
   onBack: () => void;
   onRemove: () => void;
@@ -56,11 +60,13 @@ export function PairDetail({
   index,
   city,
   collaborator,
+  verifying,
   onPatch,
   onBack,
   onRemove,
 }: Props) {
   const status = pair.status;
+  const verification = status.kind === "ready" ? status.verification : undefined;
   const title =
     status.kind === "ready"
       ? `Pereche #${index + 1} · AWB ${status.edits.awb.awb_number}`
@@ -68,24 +74,52 @@ export function PairDetail({
 
   return (
     <div className="flex flex-col gap-6">
-      <DetailHeader title={title} status={status} onBack={onBack} onRemove={onRemove} />
+      <DetailHeader
+        title={title}
+        status={status}
+        verification={verification}
+        verifying={verifying}
+        onBack={onBack}
+        onRemove={onRemove}
+      />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <aside className="lg:col-span-5 xl:col-span-4">
           <ImageGallery files={pair.images} />
         </aside>
 
-        <section className="lg:col-span-7 xl:col-span-8">
+        <section className="lg:col-span-7 xl:col-span-8 space-y-6">
           {status.kind === "ready" ? (
-            <Spreadsheet
-              data={status.edits}
-              service={status.service}
-              serviceFallback={status.serviceFallback}
-              breakdown={status.breakdown}
-              city={city}
-              collaborator={collaborator}
-              onPatch={onPatch}
-            />
+            <>
+              <Spreadsheet
+                data={status.edits}
+                service={status.service}
+                serviceFallback={status.serviceFallback}
+                breakdown={status.breakdown}
+                city={city}
+                collaborator={collaborator}
+                onPatch={onPatch}
+              />
+              {verification && (
+                <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-ink-200 bg-canvas-200/60 px-4 py-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-coral-700">
+                      Verificare produse · leroymerlin.ro
+                    </span>
+                    {verification.hasWarning ? (
+                      <span className="rounded bg-coral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-coral-700">
+                        Discrepanță
+                      </span>
+                    ) : (
+                      <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                        ✓ Tot corespunde
+                      </span>
+                    )}
+                  </div>
+                  <ProductCheckSummary verification={verification} />
+                </div>
+              )}
+            </>
           ) : (
             <StatusPlaceholder status={status} />
           )}
@@ -100,11 +134,15 @@ export function PairDetail({
 function DetailHeader({
   title,
   status,
+  verification,
+  verifying,
   onBack,
   onRemove,
 }: {
   title: string;
   status: PairStatus;
+  verification?: Verification;
+  verifying?: boolean;
   onBack: () => void;
   onRemove: () => void;
 }) {
@@ -133,6 +171,7 @@ function DetailHeader({
         </button>
         <h2 className="text-lg font-semibold tracking-tight text-ink-900">{title}</h2>
         <StatusBadge status={status} />
+        <ProductBadge verification={verification} verifying={verifying} />
       </div>
       <div className="flex items-center gap-2">
         <button

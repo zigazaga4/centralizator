@@ -19,6 +19,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import extractRoutes from "./routes/extract.js";
 import pairRoutes from "./routes/pairs.js";
+import verifyRoutes from "./routes/verify.js";
 import { closeDb } from "./db.js";
 
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -131,6 +132,7 @@ app.get("/health", async () => ({
 
 await app.register(extractRoutes);
 await app.register(pairRoutes);
+await app.register(verifyRoutes);
 
 /**
  * Race-free port probe — open a throw-away TCP server on the candidate

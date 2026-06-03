@@ -38,6 +38,23 @@ export const InvoiceItemSchema = z.object({
   value_net: z.number(),
   vat_rate: z.number().optional().nullable(),
   vat_amount: z.number().optional().nullable(),
+  /**
+   * True when this line is bulky-but-light insulation — polystyrene
+   * (polistiren EPS/XPS) or mineral/glass/basalt wool (vată). These take
+   * up a full truck regardless of weight, so they drive the extra-transport
+   * surcharge (one extra transport per 24 units). The vision model sets it
+   * per line; everything else is false.
+   */
+  is_bulky: z.boolean().optional().default(false),
+  /**
+   * Physical size of ONE unit of this product as printed on the invoice
+   * line — length × width × thickness, diameter, etc. WITH its unit, e.g.
+   * "10 x 100 x 50 cm" or "Ø 50 mm". The vision model reads it from the
+   * product name/description or a dedicated size column. Null when the
+   * line states no physical size. Area (m²) and volume (l) are NOT a
+   * size. Cross-checked against the matched leroymerlin.ro product.
+   */
+  dimensions: z.string().optional().nullable(),
 });
 export type InvoiceItem = z.infer<typeof InvoiceItemSchema>;
 
@@ -104,6 +121,65 @@ export const ExtractedSchema = z.object({
 });
 export type Extracted = z.infer<typeof ExtractedSchema>;
 
+/* ──────────────────────────────────────────────────────────────────────
+ * Product verification (Leroy Merlin cross-check)
+ *
+ * After extraction, each invoice line's product code is resolved on
+ * leroymerlin.ro and the site's size + weight are compared against the
+ * invoice. The warning icon fires ONLY on a size or weight mismatch;
+ * everything else (found/not-found, name, brand, price, link) is shown
+ * in the dialog but never raises the alarm.
+ *
+ * This schema is the contract for both the /verify response and the
+ * `verification` field persisted on a "ready" pair. It is intentionally
+ * tolerant (`.passthrough()` on the envelope) so additive tweaks on the
+ * client don't break round-trips.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** match | mismatch | unknown (not comparable — no data on one side). */
+const CheckStatusSchema = z.enum(["match", "mismatch", "unknown"]);
+
+export const ItemCheckSchema = z.object({
+  /** Which invoice (index) and which line within it this check is for. */
+  invoiceIndex: z.number().int().nonnegative(),
+  itemIndex: z.number().int().nonnegative(),
+  /** Invoice-side facts (echoed so the dialog needs no cross-lookup). */
+  name: z.string(),
+  query: z.string().nullable(),
+  invoiceDimsMm: z.array(z.number()).default([]),
+  quantity: z.number().default(0),
+  unit: z.string().nullable().optional(),
+  /** Site-side facts. `found=false` ⇒ the code resolved to no product. */
+  found: z.boolean(),
+  url: z.string().nullable().optional(),
+  siteName: z.string().nullable().optional(),
+  brand: z.string().nullable().optional(),
+  priceBuc: z.number().nullable().optional(),
+  weightKg: z.number().nullable().optional(),
+  siteDimsMm: z.array(z.number()).default([]),
+  /** Verdict for THIS line's size. Only "mismatch" raises a warning. */
+  sizeStatus: CheckStatusSchema,
+});
+export type ItemCheck = z.infer<typeof ItemCheckSchema>;
+
+export const VerificationSchema = z
+  .object({
+    checkedAt: z.number(),
+    items: z.array(ItemCheckSchema).default([]),
+    /** AWB declared weight vs. the sum of catalog weights × quantity. */
+    awbWeightKg: z.number(),
+    estimatedWeightKg: z.number().nullable(),
+    /** full = every line weighable; partial/none otherwise. The weight
+     *  warning only fires on "full" coverage to avoid false positives. */
+    weightCoverage: z.enum(["full", "partial", "none"]),
+    weightStatus: CheckStatusSchema,
+    /** = any item size mismatch OR a weight mismatch. Drives the icon. */
+    hasWarning: z.boolean(),
+    note: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type Verification = z.infer<typeof VerificationSchema>;
+
 /**
  * The shape the UI POSTs to /price for live recalculation when the
  * user edits one of the four pricing-relevant fields. Lean on purpose:
@@ -115,5 +191,13 @@ export const PricingRequestSchema = z.object({
   distance_km: z.number().nonnegative(),
   num_deliveries: z.number().int().positive().default(1),
   delivery_date: isoDate,
+  /**
+   * Bulky-but-light unit count (polystyrene / mineral wool) across the
+   * shipment, and whether non-bulky products ride along. Optional so the
+   * current client (which does not send them) still reprices; they default
+   * to "no bulky goods" and the surcharge is simply absent on that path.
+   */
+  bulky_units: z.number().int().nonnegative().default(0),
+  has_other_products: z.boolean().default(false),
 });
 export type PricingRequest = z.infer<typeof PricingRequestSchema>;

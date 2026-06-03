@@ -18,6 +18,18 @@ const MODEL = process.env.OPENROUTER_MODEL ?? "google/gemini-3.5-flash";
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
+/**
+ * Hard ceiling on a single vision extraction, in ms. The OpenAI SDK
+ * default request timeout is 10 minutes — far too long for a UI that
+ * blocks on this call, and the cause of the "AI hangs for minutes"
+ * symptom when the upstream stalls on a hard image (e.g. a small AWB
+ * label laid on top of an invoice). We enforce a 3-minute TOTAL ceiling
+ * (across any retry) via an AbortSignal so a stalled call fails fast and
+ * the queue item flips to an error the operator can retry, instead of
+ * spinning forever. Override with EXTRACT_TIMEOUT_MS.
+ */
+const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS ?? 180_000);
+
 if (!API_KEY) {
   console.warn("[llm] OPENROUTER_API_KEY is not set — vision calls will fail.");
 }
@@ -25,6 +37,11 @@ if (!API_KEY) {
 const client = new OpenAI({
   apiKey: API_KEY ?? "",
   baseURL: BASE_URL,
+  // Per-attempt timeout matches the hard ceiling; maxRetries kept low so
+  // a genuine stall can't silently multiply into a 6-minute wait. The
+  // AbortSignal on the call below is the real total-time guarantee.
+  timeout: EXTRACT_TIMEOUT_MS,
+  maxRetries: 1,
   defaultHeaders: {
     // OpenRouter recommends these so requests are attributable & rate-limited
     // against your account rather than the anonymous bucket.
@@ -53,6 +70,22 @@ const invoiceItemSchema = {
     value_net: { type: "number", description: "quantity × unit_price_net." },
     vat_rate: { type: "number", description: "VAT percent (e.g. 21)." },
     vat_amount: { type: "number" },
+    is_bulky: {
+      type: "boolean",
+      description:
+        "TRUE only when this line is polystyrene (polistiren — EPS/XPS, expandat/extrudat) " +
+        "or mineral/glass/basalt wool (vată minerală/bazaltică/de sticlă) — light but bulky " +
+        "insulation that fills truck volume. FALSE for every other product.",
+    },
+    dimensions: {
+      type: "string",
+      description:
+        "Physical size of ONE unit of this product WITH its unit — length × width × " +
+        "thickness, or diameter, e.g. '10 x 100 x 50 cm' or 'Ø 50 mm'. Read it from the " +
+        "product name/description or a dedicated size column. Copy the size token exactly " +
+        "(keep the unit). OMIT when the line states no physical size. Area (e.g. '2.5 m²') " +
+        "and volume (e.g. '5 l') are NOT a size — never put them here.",
+    },
   },
   required: ["name", "quantity", "unit_price_net", "value_net"],
 } as const;
@@ -137,14 +170,23 @@ const extractTool = {
 
 const SYSTEM_INSTRUCTION =
   "You are an OCR and structured-extraction assistant. " +
-  "You will receive N images (N >= 2). Exactly ONE of them is a Romanian courier waybill (AWB); " +
-  "every OTHER image is a Romanian fiscal invoice (factură) attached to that AWB. " +
+  "You will receive N images (N >= 2). ONE of them carries the Romanian courier waybill (AWB) — " +
+  "usually on its own page, but SOMETIMES as a small label laid or taped on TOP of an invoice in the " +
+  "same photo. Every other image is a Romanian fiscal invoice (factură) attached to that AWB. " +
   "The caller does NOT tell you which image is which — you must decide.\n" +
   "Heuristics:\n" +
   "  - AWB: portrait-oriented printed shipping label; barcode; fields like 'AWB', 'Hub destinație', " +
-  "    'Greutate (kg)', 'Distanță extra (km)', 'Serviciu', 'Continut', 'Expeditor', 'Destinatar'.\n" +
+  "    'Greutate (kg)', 'Distanță extra (km)', 'Serviciu', 'Continut', 'Expeditor', 'Destinatar', " +
+  "    and often a courier brand such as 'couriermanager'.\n" +
   "  - Invoice: A4 landscape or portrait; header reads 'FACTURĂ' / 'FACTURA' (sometimes 'DUPLICAT'); " +
   "    has a Furnizor + Cumpărător block, a line-items table, and totals (Total fără TVA / TVA / Total).\n" +
+  "  - The AWB label may be SMALL, rotated, photographed at an angle, partly wet/blurry, or laid ON TOP " +
+  "    of an invoice so it covers only a corner of the photo. If a single photo shows BOTH a courier " +
+  "    label AND invoice content, the courier label IS the AWB: read every AWB field from that label " +
+  "    (awb number, Greutate, Distanță extra, Serviciu, Hub destinatie, Expeditor/Destinatar) and treat " +
+  "    the rest of that photo as invoice content. Locate the AWB by its markers, not by which is bigger. " +
+  "    Do NOT stall or loop deciding which is which — pick the best candidate, extract whatever is " +
+  "    legible, use null for the rest, and call extract_shipment_data EXACTLY ONCE.\n" +
   "After identifying the AWB, extract every visible field from it into `awb`. For EACH invoice image, " +
   "extract every visible field into its own entry in `invoices` (one array element per invoice image, " +
   "in the same order the invoice images appeared in the request). Then call extract_shipment_data ONCE " +
@@ -158,7 +200,14 @@ const SYSTEM_INSTRUCTION =
   "those are package-of-N annotations, not delivery counts.\n" +
   "• invoice_number: strip OCR fragments like 'FACTURA', 'JRA', 'URA' from the front; keep only the actual " +
   "invoice number tokens (e.g. 'I26 M007 0072600052396').\n" +
-  "• Dates must be ISO YYYY-MM-DD. Romanian invoices write dates as DD.MM.YYYY — convert correctly.";
+  "• Dates must be ISO YYYY-MM-DD. Romanian invoices write dates as DD.MM.YYYY — convert correctly.\n" +
+  "• is_bulky: on EACH invoice line item, set is_bulky=true ONLY when the product is polystyrene " +
+  "(polistiren — EPS/XPS, expandat/extrudat) or mineral/glass/basalt wool (vată minerală/bazaltică/de sticlă). " +
+  "These are light but bulky and are billed per extra transport. Every other product is is_bulky=false.\n" +
+  "• dimensions: on EACH invoice line, copy the product's physical SIZE token verbatim with its unit " +
+  "(e.g. '10 x 100 x 50 cm', '2000 x 1000 mm', 'Ø 50 mm') from the product name/description or a size " +
+  "column. This is cross-checked against the leroymerlin.ro product page, so accuracy matters. Do NOT " +
+  "put area (m²) or volume (l) here, and omit the field entirely when the line states no physical size.";
 
 export interface ImageInput {
   data: Buffer;
@@ -205,19 +254,45 @@ export async function extractFromImages(
       "invoice image under `invoices` (preserving the order in which the invoice images appeared above).",
   });
 
-  const completion = await client.chat.completions.create({
-    model: MODEL,
-    temperature: 0.05,
-    messages: [
-      { role: "system", content: SYSTEM_INSTRUCTION },
-      { role: "user", content: userContent },
-    ],
-    tools: [extractTool],
-    tool_choice: {
-      type: "function",
-      function: { name: "extract_shipment_data" },
-    },
-  });
+  // AbortSignal.timeout caps the TOTAL wall-clock of this extraction
+  // (including the one allowed retry) at EXTRACT_TIMEOUT_MS. When it
+  // fires, the SDK throws an abort error which we translate into a clear,
+  // actionable message below — instead of letting the request hang.
+  let completion;
+  try {
+    completion = await client.chat.completions.create(
+      {
+        model: MODEL,
+        temperature: 0.05,
+        messages: [
+          { role: "system", content: SYSTEM_INSTRUCTION },
+          { role: "user", content: userContent },
+        ],
+        tools: [extractTool],
+        tool_choice: {
+          type: "function",
+          function: { name: "extract_shipment_data" },
+        },
+      },
+      { signal: AbortSignal.timeout(EXTRACT_TIMEOUT_MS) },
+    );
+  } catch (err) {
+    const e = err as { name?: string; message?: string };
+    const aborted =
+      e?.name === "APIUserAbortError" ||
+      e?.name === "APIConnectionTimeoutError" ||
+      e?.name === "AbortError" ||
+      e?.name === "TimeoutError" ||
+      /abort|timed?\s*out|timeout/i.test(e?.message ?? "");
+    if (aborted) {
+      throw new Error(
+        `Vision extraction timed out after ${Math.round(EXTRACT_TIMEOUT_MS / 1000)}s. ` +
+          "The image is likely hard to read — e.g. a small AWB label laid on top of an invoice, " +
+          "or a blurry/angled photo. Re-shoot the AWB clearly (ideally on its own) and retry.",
+      );
+    }
+    throw err;
+  }
 
   const choice = completion.choices[0];
   const toolCall = choice?.message?.tool_calls?.[0];

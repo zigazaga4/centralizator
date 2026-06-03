@@ -197,6 +197,20 @@ export const PER_KM_SURCHARGE = 1.90;
 export const EXTRA_KM_THRESHOLD = 50;
 
 /**
+ * Bulky-but-light goods (polystyrene / mineral wool) fill a truck by
+ * volume, not by weight. Ops rule 2026-06-03: one extra transport per
+ * this many bulky units. Each extra transport is charged like a real
+ * extra trip — one increment tariff plus another round of the per-km
+ * surcharge.
+ *
+ * When the shipment is ALL bulky, the first 24 units ride in the base
+ * transport (so 24 → 0 extra, 25 → 1 extra). When there are also other
+ * products, the base transport is taken by those, so every 24 bulky
+ * units needs its own extra transport (24 → 1, 25 → 2).
+ */
+export const BULKY_UNITS_PER_TRANSPORT = 24;
+
+/**
  * Per-city dispatcher commission, applied on top of the carrier total.
  * The base tariffs above are what the CARRIER charges; the company
  * marks them up by this percentage on a per-hub basis, and that

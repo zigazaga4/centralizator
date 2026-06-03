@@ -6,7 +6,7 @@ import { PairsTable } from "./components/PairsTable";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { extractAndPrice, reprice } from "./lib/api";
+import { extractAndPrice, reprice, verifyProducts } from "./lib/api";
 import {
   deletePair,
   insertPair,
@@ -24,6 +24,7 @@ import {
   isCollaboratorValidForCity,
   type CityKey,
   type CollaboratorKey,
+  type Extracted,
   type Pair,
   type PairPatch,
   type PairStatus,
@@ -79,6 +80,12 @@ export default function App() {
   // Initial hydration from SQLite. Hidden behind a tiny splash so the
   // empty-hero state doesn't flash before the loaded queue paints.
   const [hydrating, setHydrating] = useState(true);
+
+  // Pair ids whose Leroy Merlin product check is currently running. Drives
+  // the per-row spinner that precedes the warning/ok icon. Purely runtime
+  // (never persisted) — a reload just shows the stored verification, or
+  // nothing for pairs that were never verified.
+  const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
 
   // The day the user is currently viewing. The queue is grouped into
   // one bucket per day (like Excel sheet tabs) and `selectedDay` drives
@@ -471,6 +478,42 @@ export default function App() {
 
   /* ── Extraction (single + bounded-parallel pool) ──────────────────── */
 
+  /**
+   * Cross-check a ready pair's products against leroymerlin.ro, then
+   * merge the result into its status and persist it. Runs in the
+   * background after the price lands (so the price is never blocked by
+   * the slower search+scrape). Failure is non-fatal: the pair stays
+   * "ready" with no verification rather than flipping to error. The
+   * server caches by product code, so repeat codes resolve instantly.
+   */
+  const verifyPairProducts = useCallback(
+    async (id: string, extracted: Extracted) => {
+      setVerifyingIds((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+      try {
+        const verification = await verifyProducts(extracted);
+        // Re-read: the user may have edited/repriced during the round-trip.
+        // Merge onto the CURRENT ready status so we don't clobber edits.
+        const cur = pairsRef.current.find((p) => p.id === id);
+        if (cur && cur.status.kind === "ready") {
+          await persistAndSet(id, { ...cur.status, verification });
+        }
+      } catch (err) {
+        console.error("Verificarea produselor a eșuat:", err);
+      } finally {
+        setVerifyingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [persistAndSet],
+  );
+
   const runOne = useCallback(
     async (id: string, images: File[]) => {
       try {
@@ -483,18 +526,21 @@ export default function App() {
         // failure surfaces as an "error" row (via persistAndSet's
         // catch arm) so the user knows to retry instead of trusting a
         // ghost result.
-        await persistAndSet(id, {
+        const ok = await persistAndSet(id, {
           kind: "ready",
           service: res.resolvedService,
           serviceFallback: res.serviceFallback,
           edits: res.extracted,
           breakdown: res.breakdown,
         });
+        // Auto-trigger the Leroy Merlin product check once the price is
+        // saved. Fire-and-forget: it updates the pair again when it lands.
+        if (ok) void verifyPairProducts(id, res.extracted);
       } catch (err) {
         await persistAndSet(id, { kind: "error", message: (err as Error).message });
       }
     },
-    [persistAndSet],
+    [persistAndSet, verifyPairProducts],
   );
 
   const runAll = useCallback(async () => {
@@ -716,6 +762,7 @@ export default function App() {
             index={selectedIdx}
             city={selectedCity}
             collaborator={selectedCollaborator}
+            verifying={verifyingIds.has(selectedPair.id)}
             onPatch={(patch) => patchPair(selectedPair.id, patch)}
             onBack={() => setSelectedId(null)}
             onRemove={() => removePair(selectedPair.id)}
@@ -759,6 +806,7 @@ export default function App() {
                 pairs={dayPairs}
                 city={selectedCity}
                 collaborator={selectedCollaborator}
+                verifyingIds={verifyingIds}
                 onPatchPair={patchPair}
                 onRemovePair={removePair}
                 onSelectPair={setSelectedId}

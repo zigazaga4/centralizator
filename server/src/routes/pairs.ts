@@ -36,7 +36,7 @@ import {
   persistPairStatus,
   type PairStatus,
 } from "../db.js";
-import { ExtractedSchema } from "../schema.js";
+import { ExtractedSchema, VerificationSchema } from "../schema.js";
 
 /* ──────────────────────────────────────────────────────────────────────
  * Request schemas
@@ -138,6 +138,9 @@ const StatusSchema = z.discriminatedUnion("kind", [
     serviceFallback: z.boolean(),
     edits: ExtractedSchema,
     breakdown: PricingBreakdownSchema,
+    // Optional: arrives on a second persist after the Leroy Merlin
+    // cross-check completes (the price persist has no verification yet).
+    verification: VerificationSchema.optional(),
   }),
   z.object({ kind: z.literal("error"), message: z.string() }),
 ]);

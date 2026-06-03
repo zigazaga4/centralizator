@@ -40,7 +40,8 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { Extracted } from "./schema.js";
+import type { Extracted, Verification } from "./schema.js";
+import type { LmProduct } from "./leroymerlin.js";
 import type { PricingBreakdown } from "./pricing.js";
 import type { Service } from "./tariffs.js";
 
@@ -115,7 +116,40 @@ const MIGRATIONS: { version: number; up: string }[] = [
       CREATE INDEX IF NOT EXISTS pairs_day_idx        ON pairs(day);
     `,
   },
+  {
+    // v2 — Leroy Merlin product verification.
+    //   • `pairs.verification_json` stores the cross-check report on a
+    //     ready pair so the warning icon survives a reload.
+    //   • `lm_products` is a persistent cache keyed by the invoice code:
+    //     each unique code is scraped via ScrapingDog at most once (until
+    //     its TTL lapses), so repeat products — the common case — cost
+    //     zero credits. Negative hits (found=0) are cached too, on a
+    //     shorter TTL enforced in the read path.
+    version: 2,
+    up: `
+      ALTER TABLE pairs ADD COLUMN verification_json TEXT;
+      CREATE TABLE IF NOT EXISTS lm_products (
+        query      TEXT    PRIMARY KEY,
+        found      INTEGER NOT NULL,
+        url        TEXT,
+        name       TEXT,
+        brand      TEXT,
+        price_buc  REAL,
+        weight_kg  REAL,
+        area_m2    REAL,
+        dims_mm    TEXT,
+        fetched_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Cache TTLs (ms). A found product is stable for a month; a miss is kept
+ * far shorter so a code that gets indexed later gets a fresh chance soon.
+ * ────────────────────────────────────────────────────────────────────── */
+const LM_TTL_FOUND_MS = Number(process.env.LM_CACHE_TTL_FOUND_MS ?? 30 * 24 * 60 * 60 * 1000);
+const LM_TTL_MISS_MS = Number(process.env.LM_CACHE_TTL_MISS_MS ?? 3 * 24 * 60 * 60 * 1000);
 
 function runMigrations(): void {
   const current = (db.pragma("user_version", { simple: true }) as number) ?? 0;
@@ -153,6 +187,10 @@ export type PairStatus =
       serviceFallback: boolean;
       edits: Extracted;
       breakdown: PricingBreakdown;
+      /** Leroy Merlin cross-check. Optional + arrives after the price
+       *  (a second persist), so a freshly-calculated pair may be "ready"
+       *  with no verification yet. */
+      verification?: Verification;
     }
   | { kind: "error"; message: string };
 
@@ -186,6 +224,7 @@ interface PairRow {
   service_fallback: number | null;
   edits_json: string | null;
   breakdown_json: string | null;
+  verification_json: string | null;
 }
 
 interface ImageRow {
@@ -208,7 +247,8 @@ interface ImageRow {
 const stmt = {
   selectAllPairs: db.prepare<[], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
-            service, service_fallback, edits_json, breakdown_json
+            service, service_fallback, edits_json, breakdown_json,
+            verification_json
        FROM pairs
        ORDER BY created_at ASC`,
   ),
@@ -225,7 +265,8 @@ const stmt = {
   ),
   selectPair: db.prepare<[string], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
-            service, service_fallback, edits_json, breakdown_json
+            service, service_fallback, edits_json, breakdown_json,
+            verification_json
        FROM pairs
        WHERE id = ?`,
   ),
@@ -248,6 +289,7 @@ const stmt = {
             service_fallback = @service_fallback,
             edits_json       = @edits_json,
             breakdown_json   = @breakdown_json,
+            verification_json = @verification_json,
             updated_at       = @updated_at
       WHERE id = @id`,
   ),
@@ -269,7 +311,32 @@ const stmt = {
   deletePair: db.prepare(`DELETE FROM pairs WHERE id = ?`),
   deleteAllImages: db.prepare(`DELETE FROM pair_images`),
   deleteAllPairs: db.prepare(`DELETE FROM pairs`),
+  selectLmProduct: db.prepare<[string], LmProductRow>(
+    `SELECT query, found, url, name, brand, price_buc, weight_kg, area_m2, dims_mm, fetched_at
+       FROM lm_products WHERE query = ?`,
+  ),
+  upsertLmProduct: db.prepare(
+    `INSERT INTO lm_products
+       (query, found, url, name, brand, price_buc, weight_kg, area_m2, dims_mm, fetched_at)
+     VALUES (@query, @found, @url, @name, @brand, @price_buc, @weight_kg, @area_m2, @dims_mm, @fetched_at)
+     ON CONFLICT(query) DO UPDATE SET
+       found=@found, url=@url, name=@name, brand=@brand, price_buc=@price_buc,
+       weight_kg=@weight_kg, area_m2=@area_m2, dims_mm=@dims_mm, fetched_at=@fetched_at`,
+  ),
 };
+
+interface LmProductRow {
+  query: string;
+  found: number;
+  url: string | null;
+  name: string | null;
+  brand: string | null;
+  price_buc: number | null;
+  weight_kg: number | null;
+  area_m2: number | null;
+  dims_mm: string | null;
+  fetched_at: number;
+}
 
 /* ──────────────────────────────────────────────────────────────────────
  * Row → status reconstruction
@@ -296,12 +363,21 @@ function rowToStatus(r: PairRow): PairStatus {
     try {
       const edits = JSON.parse(r.edits_json) as Extracted;
       const breakdown = JSON.parse(r.breakdown_json) as PricingBreakdown;
+      let verification: Verification | undefined;
+      if (r.verification_json) {
+        try {
+          verification = JSON.parse(r.verification_json) as Verification;
+        } catch {
+          verification = undefined; // corrupt blob — drop it, keep the pair
+        }
+      }
       return {
         kind: "ready",
         service: r.service,
         serviceFallback: r.service_fallback === 1,
         edits,
         breakdown,
+        verification,
       };
     } catch {
       return { kind: "pending" };
@@ -446,6 +522,7 @@ export function persistPairStatus(id: string, status: PairStatus): boolean {
       service_fallback: status.serviceFallback ? 1 : 0,
       edits_json: JSON.stringify(status.edits),
       breakdown_json: JSON.stringify(status.breakdown),
+      verification_json: status.verification ? JSON.stringify(status.verification) : null,
       updated_at: now,
     });
   } else if (status.kind === "error") {
@@ -481,6 +558,58 @@ export function deleteAllPairs(): number {
   });
   tx();
   return before;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Leroy Merlin product cache
+ *
+ * Keyed by the exact invoice code searched. A row is returned only while
+ * fresh (TTL by found/miss); a stale row is treated as a miss so the
+ * caller re-fetches. Both hits and misses are cached — a miss is cheap
+ * to remember and stops us re-searching a non-existent code every run.
+ * ────────────────────────────────────────────────────────────────────── */
+
+export function getCachedLmProduct(query: string): LmProduct | null {
+  const r = stmt.selectLmProduct.get(query);
+  if (!r) return null;
+  const found = r.found === 1;
+  const ttl = found ? LM_TTL_FOUND_MS : LM_TTL_MISS_MS;
+  if (Date.now() - r.fetched_at > ttl) return null; // stale → re-fetch
+  let dimsMm: number[] = [];
+  if (r.dims_mm) {
+    try {
+      const parsed = JSON.parse(r.dims_mm);
+      if (Array.isArray(parsed)) dimsMm = parsed.filter((n): n is number => typeof n === "number");
+    } catch {
+      dimsMm = [];
+    }
+  }
+  return {
+    query: r.query,
+    found,
+    url: r.url,
+    name: r.name,
+    brand: r.brand,
+    priceBuc: r.price_buc,
+    weightKg: r.weight_kg,
+    areaM2: r.area_m2,
+    dimsMm,
+  };
+}
+
+export function putCachedLmProduct(p: LmProduct): void {
+  stmt.upsertLmProduct.run({
+    query: p.query,
+    found: p.found ? 1 : 0,
+    url: p.url,
+    name: p.name,
+    brand: p.brand,
+    price_buc: p.priceBuc,
+    weight_kg: p.weightKg,
+    area_m2: p.areaM2,
+    dims_mm: JSON.stringify(p.dimsMm ?? []),
+    fetched_at: Date.now(),
+  });
 }
 
 /** Close the DB handle. Wired to the server's shutdown hooks so WAL

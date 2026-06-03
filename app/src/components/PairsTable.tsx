@@ -14,6 +14,7 @@ import {
   type Service,
 } from "../types";
 import { date, ron } from "../lib/format";
+import { ProductBadge } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
@@ -60,6 +61,9 @@ interface Props {
    *  controls and the remove button stop propagation, so editing or
    *  deleting never accidentally navigates. */
   onSelectPair: (id: string) => void;
+  /** Pair ids whose Leroy Merlin product check is currently running —
+   *  drives the per-row spinner before the warning/ok icon resolves. */
+  verifyingIds: Set<string>;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -79,6 +83,7 @@ export function PairsTable({
   onPatchPair,
   onRemovePair,
   onSelectPair,
+  verifyingIds,
 }: Props) {
   // City dropdown → single dispatch-site key. The server already
   // calculates customerTotal for ALL four sites in `breakdown
@@ -118,6 +123,7 @@ export function PairsTable({
             onPatch={(patch) => onPatchPair(p.id, patch)}
             onRemove={() => onRemovePair(p.id)}
             onSelect={() => onSelectPair(p.id)}
+            verifying={verifyingIds.has(p.id)}
           />
         ))}
         <SumRow
@@ -199,6 +205,7 @@ function PairRow({
   onPatch,
   onRemove,
   onSelect,
+  verifying,
 }: {
   index: number;
   pair: Pair;
@@ -207,6 +214,7 @@ function PairRow({
   onPatch: (patch: PairPatch) => void;
   onRemove: () => void;
   onSelect: () => void;
+  verifying: boolean;
 }) {
   const status = pair.status;
   const isReady = status.kind === "ready";
@@ -256,9 +264,13 @@ function PairRow({
         <Thumbs files={pair.images} />
       </div>
 
-      {/* AWB # */}
-      <div className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
-        {edits?.awb.awb_number || <Dash />}
+      {/* AWB # + product-check badge (warning / ok / spinner) */}
+      <div className="flex items-center gap-1.5 border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
+        <span className="flex-1 truncate">{edits?.awb.awb_number || <Dash />}</span>
+        <ProductBadge
+          verification={status.kind === "ready" ? status.verification : undefined}
+          verifying={verifying}
+        />
       </div>
 
       {/* Factură # — for a pair carrying multiple invoices we show the

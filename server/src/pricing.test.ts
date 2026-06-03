@@ -125,13 +125,14 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.carrierTotal).toBe(36.10);
   });
 
-  // Per-city company commissions land on top of carrierTotal with
-  // city-specific percentages. Reuses the >50 km case (carrier 326.90):
-  //   Ploiești   50.1% → commission 163.78 → customerTotal 490.68
-  //   IasiTudor  33.7% → commission 110.17 → customerTotal 437.07
-  //   IasiERA    33.7% → commission 110.17 → customerTotal 437.07
-  //   Constanța  33.7% → commission 110.17 → customerTotal 437.07
-  it("city commissions: all 4 cities surface their own customerTotal", () => {
+  // Per-city company commissions are applied to commissionBase ONLY
+  // (base + increment + weekend), NOT to the per-km surcharge. The km
+  // cost is added flat at the end. Reuses the >50 km case:
+  //   commissionBase = 133.10  ·  extraKmCost = 193.80  ·  carrier 326.90
+  //   Ploiești   50.1% → commission 66.68 → customer 133.10 + 66.68 + 193.80 = 393.58
+  //   IasiTudor  33.7% → commission 44.85 → customer 133.10 + 44.85 + 193.80 = 371.75
+  //   IasiERA / Constanța share the 33.7% → same 371.75
+  it("city commissions: percentage on base only, km added flat at the end", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 600,
@@ -139,30 +140,30 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
       numDeliveries: 1,
       deliveryDate: "2026-05-20",
     });
+    expect(r.commissionBase).toBe(133.10);
+    expect(r.extraKmCost).toBe(193.80);
     expect(r.carrierTotal).toBe(326.90);
 
     expect(r.cityCommissions.Ploiesti.pct).toBe(0.501);
-    expect(r.cityCommissions.Ploiesti.commission).toBe(163.78);
-    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(490.68);
+    expect(r.cityCommissions.Ploiesti.commission).toBe(66.68);
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(393.58);
 
     expect(r.cityCommissions.IasiTudor.pct).toBe(0.337);
-    expect(r.cityCommissions.IasiTudor.commission).toBe(110.17);
-    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(437.07);
+    expect(r.cityCommissions.IasiTudor.commission).toBe(44.85);
+    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(371.75);
 
-    expect(r.cityCommissions.IasiERA.commission).toBe(110.17);
-    expect(r.cityCommissions.Constanta.commission).toBe(110.17);
+    expect(r.cityCommissions.IasiERA.customerTotal).toBe(371.75);
+    expect(r.cityCommissions.Constanta.customerTotal).toBe(371.75);
   });
 
-  // Per-collaborator bonuses use the same formula on carrierTotal with
-  // collaborator-specific percentages (carrier = 326.90):
-  //   Stalexone        25%   → bonus  81.72 → total 408.62
-  //   EMV              30.1% → bonus  98.40 → total 425.30
-  //   Bitlo            12%   → bonus  39.23 → total 366.13
-  //   VicDinamicExpert 25%   → bonus  81.72 → total 408.62
-  //   Tiberiu          29%   → bonus  94.80 → total 421.70
-  // (81.725 rounds down at the float level — 326.9 × 0.25 yields
-  //  81.72499... in IEEE-754 so the half-up rule lands on 81.72.)
-  it("collaborator bonuses: all 5 collaborators surface their own total", () => {
+  // Per-collaborator bonuses use the same rule on commissionBase (133.10),
+  // then the flat km cost (193.80) is added on top:
+  //   Stalexone        25%   → bonus 33.28 → total 360.18
+  //   EMV              30.1% → bonus 40.06 → total 366.96
+  //   Bitlo            12%   → bonus 15.97 → total 342.87
+  //   VicDinamicExpert 25%   → bonus 33.28 → total 360.18
+  //   Tiberiu          29%   → bonus 38.60 → total 365.50
+  it("collaborator bonuses: percentage on base only, km added flat at the end", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 600,
@@ -170,21 +171,22 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
       numDeliveries: 1,
       deliveryDate: "2026-05-20",
     });
-    expect(r.carrierTotal).toBe(326.90);
+    expect(r.commissionBase).toBe(133.10);
+    expect(r.extraKmCost).toBe(193.80);
 
     expect(r.collaboratorPrices.Stalexone.pct).toBe(0.25);
-    expect(r.collaboratorPrices.Stalexone.bonus).toBe(81.72);
-    expect(r.collaboratorPrices.Stalexone.total).toBe(408.62);
+    expect(r.collaboratorPrices.Stalexone.bonus).toBe(33.28);
+    expect(r.collaboratorPrices.Stalexone.total).toBe(360.18);
 
     expect(r.collaboratorPrices.EMV.pct).toBe(0.301);
-    expect(r.collaboratorPrices.EMV.bonus).toBe(98.40);
-    expect(r.collaboratorPrices.EMV.total).toBe(425.30);
+    expect(r.collaboratorPrices.EMV.bonus).toBe(40.06);
+    expect(r.collaboratorPrices.EMV.total).toBe(366.96);
 
-    expect(r.collaboratorPrices.Bitlo.bonus).toBe(39.23);
-    expect(r.collaboratorPrices.Bitlo.total).toBe(366.13);
+    expect(r.collaboratorPrices.Bitlo.bonus).toBe(15.97);
+    expect(r.collaboratorPrices.Bitlo.total).toBe(342.87);
 
-    expect(r.collaboratorPrices.VicDinamicExpert.total).toBe(408.62);
-    expect(r.collaboratorPrices.Tiberiu.total).toBe(421.70);
+    expect(r.collaboratorPrices.VicDinamicExpert.total).toBe(360.18);
+    expect(r.collaboratorPrices.Tiberiu.total).toBe(365.50);
   });
 
   // Tiny-AWB sanity (the 24.20 RON test row) with the worked example
@@ -203,5 +205,229 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.carrierTotal).toBe(24.20);
     expect(r.cityCommissions.Ploiesti.customerTotal).toBe(36.32);
     expect(r.collaboratorPrices.Stalexone.total).toBe(30.25);
+  });
+
+  // >1200kg path. LEROY doc: "Pentru comenzi cu o greutate mai mare de
+  // 1200 kg se vor adauga la tarifele standard costurile de mai jos la
+  // fiecare 1000 kg ce depasesc cele 1200 kg din tariful de baza."
+  //
+  // Worked by an ops dispatcher manually for AWB 038112124:
+  //   • weight 1500 kg → 1 extra 1000 kg over 1200 → 2 truck rounds.
+  //   • distance 81 km → 31 km past the 50 km threshold.
+  //   • Express tier, 1 delivery, weekday (Mon 2026-06-01).
+  //
+  //   base    = BASE_TARIFFS[Express / 800-1200kg / >50 km]   = 130.66
+  //   incr    = INCREMENT_TARIFFS[Express / >1200kg / >50 km] = 124.66
+  //   extraKm = 31 km × 1.90 × 2 (round) × 2 (rounds) × 1 (deliv) = 235.60
+  //   commissionBase = 130.66 + 124.66 = 255.32   (km NOT included)
+  //   carrier        = 255.32 + 235.60 = 490.92
+  //   Iași 33.7% → commission 86.04 → customer 255.32 + 86.04 + 235.60 = 576.96
+  //   (the per-km 235.60 is added flat AFTER the commission, not marked up)
+  it("AWB 038112124: 1500kg / 81km / 1 delivery → carrier 490.92, Iași 576.96", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 1500,
+      distanceKm: 81,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01", // Monday
+    });
+    expect(r.weightBucket).toBe(">1200kg");
+    expect(r.distanceBucket).toBe(">50 km");
+    expect(r.weightIncrements).toBe(1);
+    expect(r.rounds).toBe(2);
+    expect(r.baseTariff).toBe(130.66);
+    expect(r.incrementTariff).toBe(124.66);
+    expect(r.incrementCost).toBe(124.66);
+    expect(r.extraKm).toBe(31);
+    expect(r.extraKmCost).toBe(235.60);
+    expect(r.weekendSurcharge).toBe(0);
+    expect(r.commissionBase).toBe(255.32);
+    expect(r.carrierTotal).toBe(490.92);
+
+    expect(r.cityCommissions.IasiTudor.commission).toBe(86.04);
+    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(576.96);
+    expect(r.cityCommissions.IasiERA.customerTotal).toBe(576.96);
+    expect(r.cityCommissions.Constanta.customerTotal).toBe(576.96);
+    // Ploiești 50.1% → commission 127.92 → customer 255.32 + 127.92 + 235.60 = 618.84
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(618.84);
+  });
+
+  // Edge: exactly 1200 kg is still the 800-1200kg bucket, NOT the
+  // >1200kg path. No extra round, no weight increment.
+  it("exactly 1200 kg stays in the >1200kg bucket boundary check", () => {
+    // weightBucket() puts 1200 in ">1200kg"; verify the engine treats
+    // the 1200 boundary as "no extra increments yet" via ceil((1200-1200)/1000)=0.
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 1200,
+      distanceKm: 40,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+    });
+    expect(r.weightBucket).toBe(">1200kg");
+    expect(r.weightIncrements).toBe(0);
+    expect(r.rounds).toBe(1);
+    // base = 800-1200kg / 30-50 km = 130.66, no extras
+    expect(r.baseTariff).toBe(130.66);
+    expect(r.incrementCost).toBe(0);
+    expect(r.carrierTotal).toBe(130.66);
+  });
+
+  // 2500 kg → ceil((2500-1200)/1000) = 2 increments → 3 rounds.
+  // base 130.66 + 2 × 124.66 = 380.0 (no >50km here, so no extraKm).
+  it("2500 kg = 2 increments, 3 rounds, no extra km", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 2500,
+      distanceKm: 40,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+    });
+    expect(r.weightIncrements).toBe(2);
+    expect(r.rounds).toBe(3);
+    expect(r.baseTariff).toBe(130.66);
+    expect(r.incrementCost).toBe(249.32);
+    expect(r.carrierTotal).toBe(379.98);
+  });
+
+  // Multi-stop AND >1200kg both add increment hits, both scale km cost.
+  // weight 1500 (1 weight-increment) + 2 deliveries (1 stop-increment)
+  //   → totalIncrements = 2, rounds = 2
+  //   base 130.66 + 2 × 124.66 = 379.98
+  //   extraKmCost = 31 × 1.90 × 2 × 2 (rounds) × 2 (deliv) = 471.20
+  //   carrier = 851.18
+  it("1500 kg + 2 deliveries stacks weight + stop increments", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 1500,
+      distanceKm: 81,
+      numDeliveries: 2,
+      deliveryDate: "2026-06-01",
+    });
+    expect(r.weightIncrements).toBe(1);
+    expect(r.rounds).toBe(2);
+    expect(r.incrementCost).toBe(249.32); // 2 × 124.66
+    expect(r.extraKmCost).toBe(471.20);
+    expect(r.carrierTotal).toBe(851.18);
+  });
+});
+
+// Bulky-but-light goods (polystyrene / mineral wool). Ops rule 2026-06-03:
+// one extra transport per 24 bulky units. The first 24 ride in the base
+// transport ONLY when the whole shipment is bulky; if other products
+// share the truck, every 24 bulky units needs its own transport. Each
+// extra transport is a real trip → +1 increment tariff AND +1 round of
+// the per-km surcharge.
+describe("calculatePrice — bulky goods (polystyrene / vata) extra transports", () => {
+  // All-bulky, exactly 24 units → the 24 ride in the base, no extra
+  // transport. base 24.20 (0-200kg / 0-15 km), nothing else.
+  it("all-bulky 24 units → 0 extra transports", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01", // Monday
+      bulkyUnits: 24,
+      hasOtherProducts: false,
+    });
+    expect(r.bulkyUnits).toBe(24);
+    expect(r.bulkyTransports).toBe(0);
+    expect(r.incrementCost).toBe(0);
+    expect(r.carrierTotal).toBe(24.20);
+  });
+
+  // All-bulky, 25 units → ceil(25/24) - 1 = 1 extra transport.
+  // increment "Express / >1200kg / 0-15 km" = 54.50.
+  //   base 24.20 + 54.50 = 78.70.
+  it("all-bulky 25 units → 1 extra transport at the increment tariff", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 25,
+      hasOtherProducts: false,
+    });
+    expect(r.bulkyTransports).toBe(1);
+    expect(r.incrementTariff).toBe(54.50);
+    expect(r.incrementCost).toBe(54.50);
+    expect(r.carrierTotal).toBe(78.70);
+  });
+
+  // Mixed (bulky + other products), 24 bulky units → the base transport
+  // is taken by the other products, so the 24 bulky need their own
+  // transport: ceil(24/24) = 1.  base 24.20 + 54.50 = 78.70.
+  it("mixed shipment, 24 bulky units → 1 extra transport", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 24,
+      hasOtherProducts: true,
+    });
+    expect(r.bulkyTransports).toBe(1);
+    expect(r.incrementCost).toBe(54.50);
+    expect(r.carrierTotal).toBe(78.70);
+  });
+
+  // Mixed, 49 bulky units → ceil(49/24) = 3 extra transports.
+  //   base 24.20 + 3 × 54.50 = 187.70.
+  it("mixed shipment, 49 bulky units → 3 extra transports", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 49,
+      hasOtherProducts: true,
+    });
+    expect(r.bulkyTransports).toBe(3);
+    expect(r.incrementCost).toBe(163.50); // 3 × 54.50
+    expect(r.carrierTotal).toBe(187.70);
+  });
+
+  // Bulky transport ALSO multiplies the per-km surcharge on the >50 km
+  // tier. All-bulky 25 units (1 extra transport), 81 km, weekday.
+  //   base    = BASE_TARIFFS[Express / 0-200kg / >50 km]   = 48.40
+  //   incr    = INCREMENT_TARIFFS[Express / >1200kg / >50 km] = 124.66
+  //   extraKm = 31 × 1.90 × 2 × (1 round×1 deliv + 1 bulky) = 31×1.90×2×2 = 235.60
+  //   commissionBase = 48.40 + 124.66 = 173.06   (km NOT included)
+  //   carrier        = 173.06 + 235.60 = 408.66
+  it("bulky transport adds a round of per-km surcharge on >50 km", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 81,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 25,
+      hasOtherProducts: false,
+    });
+    expect(r.bulkyTransports).toBe(1);
+    expect(r.baseTariff).toBe(48.40);
+    expect(r.extraKm).toBe(31);
+    expect(r.incrementCost).toBe(124.66);
+    expect(r.extraKmCost).toBe(235.60);
+    expect(r.commissionBase).toBe(173.06);
+    expect(r.carrierTotal).toBe(408.66);
+  });
+
+  // No bulky goods → engine behaves exactly as before (regression guard).
+  it("no bulky goods leaves the price untouched", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 600,
+      distanceKm: 101,
+      numDeliveries: 1,
+      deliveryDate: "2026-05-20",
+    });
+    expect(r.bulkyUnits).toBe(0);
+    expect(r.bulkyTransports).toBe(0);
+    expect(r.carrierTotal).toBe(326.90);
   });
 });

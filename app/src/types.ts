@@ -21,6 +21,46 @@ export interface InvoiceItem {
   value_net: number;
   vat_rate?: number | null;
   vat_amount?: number | null;
+  /** Physical size of one unit as printed on the invoice line, e.g.
+   *  "10 x 100 x 50 cm". Cross-checked against leroymerlin.ro. */
+  dimensions?: string | null;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Product verification (Leroy Merlin cross-check). Mirrors the server's
+ * VerificationSchema. The warning icon fires only on a size or weight
+ * mismatch; everything else is shown in the dialog but never alarms.
+ * ────────────────────────────────────────────────────────────────────── */
+
+export type CheckStatus = "match" | "mismatch" | "unknown";
+
+export interface ItemCheck {
+  invoiceIndex: number;
+  itemIndex: number;
+  name: string;
+  query: string | null;
+  invoiceDimsMm: number[];
+  quantity: number;
+  unit?: string | null;
+  found: boolean;
+  url?: string | null;
+  siteName?: string | null;
+  brand?: string | null;
+  priceBuc?: number | null;
+  weightKg?: number | null;
+  siteDimsMm: number[];
+  sizeStatus: CheckStatus;
+}
+
+export interface Verification {
+  checkedAt: number;
+  items: ItemCheck[];
+  awbWeightKg: number;
+  estimatedWeightKg: number | null;
+  weightCoverage: "full" | "partial" | "none";
+  weightStatus: CheckStatus;
+  hasWarning: boolean;
+  note?: string | null;
 }
 
 /**
@@ -351,6 +391,10 @@ export type PairStatus =
       serviceFallback: boolean;
       edits: Extracted;
       breakdown: PricingBreakdown;
+      /** Leroy Merlin product cross-check. Arrives shortly AFTER the
+       *  price (a follow-up call), so a freshly-ready pair may not have
+       *  it yet. `verification.hasWarning` drives the warning icon. */
+      verification?: Verification;
     }
   | { kind: "error"; message: string };
 

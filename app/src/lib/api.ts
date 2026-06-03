@@ -1,4 +1,4 @@
-import type { ExtractResponse, PricingBreakdown, PricingRequest } from "../types";
+import type { Extracted, ExtractResponse, PricingBreakdown, PricingRequest, Verification } from "../types";
 
 /**
  * In dev, Vite proxies /api/* to the Fastify server on localhost:3000.
@@ -59,4 +59,25 @@ export async function reprice(req: PricingRequest): Promise<PricingBreakdown> {
   }
   const data = (await res.json()) as { breakdown: PricingBreakdown };
   return data.breakdown;
+}
+
+/**
+ * Cross-check a pair's invoice products against leroymerlin.ro. Called
+ * after a pair goes "ready"; the returned verification is merged into
+ * the pair's status and persisted so the warning icon survives reloads.
+ * Slower than pricing (search + scrape), but cached server-side so
+ * repeat product codes are instant.
+ */
+export async function verifyProducts(extracted: Extracted): Promise<Verification> {
+  const res = await fetch(`${BASE}/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ extracted }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`verify failed (${res.status}): ${body}`);
+  }
+  const data = (await res.json()) as { verification: Verification };
+  return data.verification;
 }

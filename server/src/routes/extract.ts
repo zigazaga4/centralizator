@@ -55,6 +55,26 @@ export interface ExtractResponse {
   breakdown: PricingBreakdown;
 }
 
+/**
+ * Roll the per-line `is_bulky` flags up across every invoice on the AWB
+ * into the two scalars the pricing engine needs: the total count of
+ * bulky-but-light units (polystyrene / mineral wool) and whether any
+ * non-bulky product also rides on the shipment. Aggregated per AWB
+ * (one physical delivery), not per invoice, since the truck-volume
+ * constraint is physical.
+ */
+function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasOtherProducts: boolean } {
+  let bulkyUnits = 0;
+  let hasOtherProducts = false;
+  for (const invoice of extracted.invoices) {
+    for (const item of invoice.items) {
+      if (item.is_bulky) bulkyUnits += item.quantity;
+      else hasOtherProducts = true;
+    }
+  }
+  return { bulkyUnits: Math.round(bulkyUnits), hasOtherProducts };
+}
+
 export default async function extractRoutes(app: FastifyInstance) {
   app.post("/extract-and-price", async (req, reply) => {
     const parts = req.parts();
@@ -98,6 +118,8 @@ export default async function extractRoutes(app: FastifyInstance) {
 
     const { service, serviceFallback } = resolveService(extracted.awb.service_text);
 
+    const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
+
     let breakdown: PricingBreakdown;
     try {
       breakdown = calculatePrice({
@@ -106,6 +128,8 @@ export default async function extractRoutes(app: FastifyInstance) {
         distanceKm: extracted.awb.distance_extra_km,
         numDeliveries: extracted.awb.num_deliveries ?? 1,
         deliveryDate: extracted.awb.delivery_date,
+        bulkyUnits,
+        hasOtherProducts,
       });
     } catch (err) {
       req.log.error({ err, extracted }, "Pricing failed");
@@ -122,7 +146,10 @@ export default async function extractRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.toString() });
     }
-    const { service, weight_kg, distance_km, num_deliveries, delivery_date } = parsed.data;
+    const {
+      service, weight_kg, distance_km, num_deliveries, delivery_date,
+      bulky_units, has_other_products,
+    } = parsed.data;
     try {
       const breakdown = calculatePrice({
         service,
@@ -130,6 +157,8 @@ export default async function extractRoutes(app: FastifyInstance) {
         distanceKm: distance_km,
         numDeliveries: num_deliveries,
         deliveryDate: delivery_date,
+        bulkyUnits: bulky_units,
+        hasOtherProducts: has_other_products,
       });
       return reply.send({ breakdown });
     } catch (err) {
