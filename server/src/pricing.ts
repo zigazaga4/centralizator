@@ -1,30 +1,25 @@
 /**
  * Pricing engine — deterministic, pure, no I/O.
  *
- * This is a line-for-line port of the formulas in the Excel sheet
- * `Centralizator OFFLINE+ONLINE`, columns E through P:
+ * Sourced from the operator pricing documents (DRAFT LISTA PRETURI
+ * LEROY.docx + PRETURI COLABORATORI.ods); every rate in tariffs.ts is
+ * already VAT-included at the current rate, so the engine sums them
+ * straight into a carrier total — no legacy 19% → 21% conversion.
  *
- *   E = VLOOKUP(C, Lookups!B:C, 2, 0)              base tariff (gross @19% VAT)
- *   G = VLOOKUP(C, Lookups!B:G, 6, 0)              per-km rate (1.70 for >50 km bucket, 0 else)
- *   H = F * G * 2 * D                              extra-km cost, round-trip × num_deliveries
- *   J = VLOOKUP(I, Lookups!K:L, 2, 0)              >1200kg increment tariff
- *   K = (D - 1) * J                                cost of additional stops / extra 1000 kg
- *   L = weekend ? 11.90 : 0                        weekend surcharge
- *   M = E + H + K + L                              total gross @19% VAT (legacy)
- *   N = M / 1.19                                   net
- *   O = N * 0.21                                   VAT 21%
- *   P = N + O                                      carrier gross @21% VAT
+ *   baseTariff       = BASE_TARIFFS[service × weightBucket × distanceBucket]
+ *   extraKmCost      = (km - 50) × 1.90 × 2 × deliveries   [only for >50 km]
+ *   incrementCost    = (deliveries - 1) × INCREMENT_TARIFFS[...]
+ *   weekendSurcharge = 11.90 if Sat/Sun else 0
+ *   carrierTotal     = baseTariff + extraKmCost + incrementCost + weekendSurcharge
  *
- * Then the per-city company commission AND the per-collaborator bonus,
- * neither of which are in the workbook — added per ops directive
- * 2026-06-02. Both are applied to the carrier gross P with the same
- * formula, just different pct lookups:
+ * Then the per-city company commission and the per-collaborator bonus,
+ * both applied to the same carrierTotal with the same shape:
  *
- *   cityCommissions[city].commission    = round2(P × companyPct[city])
- *   cityCommissions[city].customerTotal = round2(P + commission)
+ *   cityCommissions[city].commission    = round2(carrierTotal × companyPct[city])
+ *   cityCommissions[city].customerTotal = round2(carrierTotal + commission)
  *
- *   collaboratorPrices[c].bonus         = round2(P × bonusPct[c])
- *   collaboratorPrices[c].total         = round2(P + bonus)
+ *   collaboratorPrices[c].bonus         = round2(carrierTotal × bonusPct[c])
+ *   collaboratorPrices[c].total         = round2(carrierTotal + bonus)
  *
  * The breakdown carries ALL 4 cities and ALL 5 collaborators every
  * time, so the UI can flip city/collaborator dropdowns client-side
@@ -37,11 +32,9 @@
 import {
   BASE_TARIFFS,
   INCREMENT_TARIFFS,
-  WEEKEND_SURCHARGE_VAT19,
-  PER_KM_SURCHARGE_VAT19,
+  WEEKEND_SURCHARGE,
+  PER_KM_SURCHARGE,
   EXTRA_KM_THRESHOLD,
-  VAT_LEGACY,
-  VAT_CURRENT,
   CITIES,
   COLLABORATORS,
   COMPANY_COMMISSION_BY_CITY,
@@ -78,30 +71,25 @@ export interface PricingBreakdown {
   extraKm: number;
   /** Whether the weekend surcharge was applied. */
   weekend: boolean;
-  /** Excel column E. */
+  /** Base tariff from BASE_TARIFFS, VAT included. */
   baseTariff: number;
-  /** Excel column H. */
+  /** Per-km surcharge total = extraKm × 1.90 × 2 × deliveries. */
   extraKmCost: number;
-  /** Excel column J. */
+  /** Increment tariff from INCREMENT_TARIFFS (used for the row's
+   *  incrementCost; surfaced separately so the UI can label it). */
   incrementTariff: number;
-  /** Excel column K. */
+  /** Extra-stop / extra-1000kg cost = (deliveries - 1) × incrementTariff. */
   incrementCost: number;
-  /** Excel column L. */
+  /** Weekend surcharge (0 or 11.90). */
   weekendSurcharge: number;
-  /** Excel column M — legacy gross @19% VAT. */
-  totalVat19: number;
-  /** Excel column N — net before VAT. */
-  net: number;
-  /** Excel column O — VAT amount @21%. */
-  vat21: number;
-  /** Excel column P — carrier-side billable gross @21% VAT.
-   *  This is the "base rate" both the city commission and the
+  /** Carrier-side total in RON, VAT included.
+   *  This is the "base" both the city commission and the
    *  collaborator bonus are applied to. */
-  totalVat21: number;
-  /** Per-city company commission (markup on top of totalVat21). The
+  carrierTotal: number;
+  /** Per-city company commission (markup on top of carrierTotal). The
    *  matching `customerTotal` is what the END customer in that city pays. */
   cityCommissions: Record<City, CityCommission>;
-  /** Per-collaborator bonus (markup on top of totalVat21). The matching
+  /** Per-collaborator bonus (markup on top of carrierTotal). The matching
    *  `total` is the collaborator-facing price. */
   collaboratorPrices: Record<Collaborator, CollaboratorPrice>;
 }
@@ -109,18 +97,18 @@ export interface PricingBreakdown {
 export interface CityCommission {
   /** Commission rate, e.g. 0.501 for Ploiești. */
   pct: number;
-  /** Commission amount in RON, = round2(totalVat21 × pct). */
+  /** Commission amount in RON, = round2(carrierTotal × pct). */
   commission: number;
-  /** Final customer total, = round2(totalVat21 + commission). */
+  /** Final customer total, = round2(carrierTotal + commission). */
   customerTotal: number;
 }
 
 export interface CollaboratorPrice {
   /** Bonus rate, e.g. 0.25 for Stalexone. */
   pct: number;
-  /** Bonus amount in RON, = round2(totalVat21 × pct). */
+  /** Bonus amount in RON, = round2(carrierTotal × pct). */
   bonus: number;
-  /** Final collaborator-facing price, = round2(totalVat21 + bonus). */
+  /** Final collaborator-facing price, = round2(carrierTotal + bonus). */
   total: number;
 }
 
@@ -135,10 +123,9 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const dBucket = distanceBucket(distanceKm);
 
   // For pricing, weight bucket >1200kg uses the increment table for the
-  // BASE row too (treated as 0 base + N×increment). Match Excel: the
-  // base lookup of a >1200kg row is missing from the BASE_TARIFFS map,
-  // so for >1200kg we fall back to the increment as the per-stop tariff.
-  // (The Excel author models the >1200kg case via the J column only.)
+  // BASE row too (treated as 0 base + N×increment). The doc's base
+  // table only carries the first four weight tiers; >1200kg shipments
+  // collapse onto the increment row.
   const baseKey = `${service} / ${wBucket} / ${dBucket}`;
   const incrementKey = `${service} / >1200kg / ${dBucket}`;
 
@@ -148,37 +135,34 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
 
   const incrementTariff = INCREMENT_TARIFFS[incrementKey] ?? unknownKey(incrementKey);
 
-  // Extra km surcharge only for the >50 km tier; Excel takes F as the
-  // distance and applies F × 1.70 × 2 × D. F is "km beyond the 50-km
-  // base zone, one-way" — i.e. (total − 50).
+  // Extra-km surcharge only for the >50 km tier; the (km - 50) overage
+  // is charged at PER_KM_SURCHARGE × 2 (round trip) × numDeliveries.
   const extraKm = dBucket === ">50 km" ? Math.max(0, distanceKm - EXTRA_KM_THRESHOLD) : 0;
-  const perKm = dBucket === ">50 km" ? PER_KM_SURCHARGE_VAT19 : 0;
+  const perKm = dBucket === ">50 km" ? PER_KM_SURCHARGE : 0;
   const extraKmCost = round2(extraKm * perKm * 2 * numDeliveries);
 
-  // Each extra stop / extra 1000 kg = one increment fee. Excel: (D-1) * J.
-  // For >1200kg orders, the increment fee also represents each additional
-  // 1000 kg beyond the first 1200; treat numDeliveries as the stop count
-  // and let the caller multiply by extra-1000kg count if needed.
+  // Each extra stop / extra 1000 kg = one increment fee: (D-1) × J.
+  // For >1200kg orders, the increment fee also represents each
+  // additional 1000 kg beyond the first 1200; treat numDeliveries as
+  // the stop count and let the caller multiply by extra-1000kg count
+  // if needed.
   const incrementCost = round2((numDeliveries - 1) * incrementTariff);
 
   const weekend = isWeekend(deliveryDate);
-  const weekendSurcharge = weekend ? WEEKEND_SURCHARGE_VAT19 : 0;
+  const weekendSurcharge = weekend ? WEEKEND_SURCHARGE : 0;
 
-  const totalVat19 = round2(baseTariff + extraKmCost + incrementCost + weekendSurcharge);
-  const net = round2(totalVat19 / (1 + VAT_LEGACY));
-  const vat21 = round2(net * VAT_CURRENT);
-  const totalVat21 = round2(net + vat21);
+  const carrierTotal = round2(baseTariff + extraKmCost + incrementCost + weekendSurcharge);
 
   // City-side company commission (what the END customer in that city pays)
   // and collaborator-side bonus (collaborator-facing price). Both are
-  // applied on top of the carrier gross totalVat21 with the same formula;
-  // we materialise all four cities and all five collaborators so the UI
+  // applied on top of the carrier total with the same formula; we
+  // materialise all four cities and all five collaborators so the UI
   // can switch dropdowns client-side without another round-trip.
   const cityCommissions = Object.fromEntries(
     CITIES.map((city) => {
       const pct = COMPANY_COMMISSION_BY_CITY[city];
-      const commission = round2(totalVat21 * pct);
-      const customerTotal = round2(totalVat21 + commission);
+      const commission = round2(carrierTotal * pct);
+      const customerTotal = round2(carrierTotal + commission);
       return [city, { pct, commission, customerTotal }];
     }),
   ) as Record<City, CityCommission>;
@@ -186,8 +170,8 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const collaboratorPrices = Object.fromEntries(
     COLLABORATORS.map((c) => {
       const pct = COLLABORATOR_BONUS_BY_NAME[c];
-      const bonus = round2(totalVat21 * pct);
-      const total = round2(totalVat21 + bonus);
+      const bonus = round2(carrierTotal * pct);
+      const total = round2(carrierTotal + bonus);
       return [c, { pct, bonus, total }];
     }),
   ) as Record<Collaborator, CollaboratorPrice>;
@@ -204,10 +188,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     incrementTariff: round2(incrementTariff),
     incrementCost,
     weekendSurcharge,
-    totalVat19,
-    net,
-    vat21,
-    totalVat21,
+    carrierTotal,
     cityCommissions,
     collaboratorPrices,
   };
@@ -219,9 +200,8 @@ function unknownKey(key: string): never {
 
 /**
  * Round half-up to 2 decimal places (RON has 2 decimals). Floating-point
- * artifacts on multiplication can drift, e.g. 47.6/1.19 = 39.9999999996;
- * rounding once at the end of each Excel-column computation gives us
- * outputs that match the workbook penny-for-penny.
+ * artifacts on multiplication can drift; rounding once at the end of
+ * each step keeps outputs matching the doc penny-for-penny.
  */
 function round2(x: number): number {
   return Math.round((x + Number.EPSILON) * 100) / 100;

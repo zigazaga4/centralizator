@@ -56,7 +56,7 @@ interface Row {
   kmExtra: number;      // 0 means "didn't apply" — kept numeric so Excel can still SUM
   increment: number;
   weekend: number;
-  carrier: number;      // carrier subtotal (was `totalVat21`); muted in exports
+  carrier: number;      // carrier subtotal (carrierTotal); muted in exports
   /** Customer total for the selected city's single dispatch site.
    *  Every CityKey maps 1-to-1 to a CityCommissionKey now (Iași Tudor
    *  and Iași ERA are top-level options, not stacked), so this is a
@@ -161,7 +161,7 @@ export function pairsToRows(
       kmExtra: breakdown.extraKmCost,
       increment: breakdown.incrementCost,
       weekend: breakdown.weekendSurcharge,
-      carrier: breakdown.totalVat21,
+      carrier: breakdown.carrierTotal,
       cityTotal,
       collabTotal,
     });

@@ -463,7 +463,7 @@ function CityTotalCell({
       </div>
     );
   }
-  const carrierTip = `Tarif transportator ${ron(breakdown.totalVat21)}`;
+  const carrierTip = `Tarif transportator ${ron(breakdown.carrierTotal)}`;
   const row = breakdown.cityCommissions[site];
   return (
     <div

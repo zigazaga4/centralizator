@@ -416,27 +416,27 @@ function Spreadsheet({
         </>
       )}
 
-      <Section title="Calcul tarif — coloane Excel" />
+      <Section title="Calcul tarif" />
       <DataRow n={r()} label="Cheie tarif" value={breakdown.baseKey} />
       <DataRow n={r()} label="Bucket greutate" value={breakdown.weightBucket} />
       <DataRow n={r()} label="Bucket distanță" value={breakdown.distanceBucket} />
       <DataRow
         n={r()}
-        label="Tarif bază (col. E · TVA 19%)"
+        label="Tarif bază"
         value={ron(breakdown.baseTariff)}
         numeric
       />
       {breakdown.extraKmCost > 0 ? (
         <DataRow
           n={r()}
-          label={`Cost km extra (col. H · ${breakdown.extraKm} km × 1.70 × 2)`}
+          label={`Cost km extra (${breakdown.extraKm} km × 1.90 × 2)`}
           value={ron(breakdown.extraKmCost)}
           numeric
         />
       ) : (
         <DataRow
           n={r()}
-          label="Cost km extra (col. H)"
+          label="Cost km extra"
           value="— · distanță ≤ 50 km"
           numeric
           muted
@@ -445,14 +445,14 @@ function Spreadsheet({
       {breakdown.incrementCost > 0 ? (
         <DataRow
           n={r()}
-          label={`Cost increment (col. K · ${breakdown.incrementKey})`}
+          label={`Cost increment (${breakdown.incrementKey})`}
           value={ron(breakdown.incrementCost)}
           numeric
         />
       ) : (
         <DataRow
           n={r()}
-          label="Cost increment (col. K)"
+          label="Cost increment"
           value="— · o singură livrare"
           numeric
           muted
@@ -461,37 +461,27 @@ function Spreadsheet({
       {breakdown.weekendSurcharge > 0 ? (
         <DataRow
           n={r()}
-          label="Supliment weekend (col. L)"
+          label="Supliment weekend"
           value={ron(breakdown.weekendSurcharge)}
           numeric
         />
       ) : (
         <DataRow
           n={r()}
-          label="Supliment weekend (col. L)"
+          label="Supliment weekend"
           value="— · zi lucrătoare"
           numeric
           muted
         />
       )}
+      {/* Carrier subtotal — what Stalexone (transportator) gets. The
+          shared base every city and collaborator total grosses up
+          from; surfaced muted so the eye walks to the per-city +
+          per-collab tables below. */}
       <DataRow
         n={r()}
-        label="Total cu TVA 19% (col. M)"
-        value={ron(breakdown.totalVat19)}
-        numeric
-        muted
-      />
-      <DataRow n={r()} label="Net (col. N)" value={ron(breakdown.net)} numeric muted />
-      <DataRow n={r()} label="TVA 21% (col. O)" value={ron(breakdown.vat21)} numeric muted />
-      {/* Carrier subtotal — what Stalexone (transportator) gets.
-          Used to be the billable line; now it's the shared base every
-          city and collaborator total grosses up from, so we surface
-          it muted to let the eye walk to the per-city + per-collab
-          tables below. */}
-      <DataRow
-        n={r()}
-        label="Tarif transportator (col. P)"
-        value={ron(breakdown.totalVat21)}
+        label="Tarif transportator"
+        value={ron(breakdown.carrierTotal)}
         numeric
         muted
       />

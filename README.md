@@ -188,23 +188,29 @@ ships installers for everyone.
 
 ## How the pricing works
 
-The Excel `Centralizator` formulas reduce to a pure function — no AI in the math
-step. For every AWB row:
+Rates come straight from the operator docs (DRAFT LISTA PRETURI LEROY.docx +
+PRETURI COLABORATORI.ods) — all values are RON with VAT included at the current
+rate. For every AWB row:
 
 ```
-key            = "{service} / {weightBucket} / {distanceBucket}"
-baseTariff     = BASE_TARIFFS[key]                              (col E)
-extraKmCost    = (dist > 50 ? dist-50 : 0) * 1.70 * 2 * D      (col H)
-incrementCost  = (D - 1) * INCREMENT_TARIFFS[">1200kg key"]    (col K)
-weekend        = isSat||isSun ? 11.90 : 0                       (col L)
-totalVat19     = base + extraKm + increment + weekend           (col M)
-net            = totalVat19 / 1.19                              (col N)
-vat21          = net * 0.21                                     (col O)
-totalVat21     = net + vat21       ← BILLABLE TOTAL             (col P)
+key             = "{service} / {weightBucket} / {distanceBucket}"
+baseTariff      = BASE_TARIFFS[key]
+extraKmCost     = (dist > 50 ? dist-50 : 0) * 1.90 * 2 * D
+incrementCost   = (D - 1) * INCREMENT_TARIFFS[">1200kg key"]
+weekend         = isSat||isSun ? 11.90 : 0
+carrierTotal    = baseTariff + extraKmCost + incrementCost + weekend
 ```
 
-The 19% rate is what the historical tariff table is denominated in; column P
-re-bases to the current 21% VAT.
+Then the per-city customer total and per-collaborator payout, both off the same
+carrier base:
+
+```
+cityCommissions[city].customerTotal       = carrierTotal × (1 + companyPct[city])
+collaboratorPrices[collab].total          = carrierTotal × (1 + bonusPct[collab])
+```
+
+The per-km surcharge (1.90 RON) is the active ops rate; the doc baseline is
+1.70 RON and the override is preserved here as the contract.
 
 ## How extraction works
 

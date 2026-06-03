@@ -243,8 +243,8 @@ export function primaryDispatchSite(city: CityKey): CityCommissionKey {
 }
 
 /** Per-dispatch-site commission row. `pct` is the multiplier the
- *  carrier subtotal is grossed up by; `commission = totalVat21 × pct`;
- *  `customerTotal = totalVat21 × (1 + pct)`. */
+ *  carrier subtotal is grossed up by; `commission = carrierTotal × pct`;
+ *  `customerTotal = carrierTotal × (1 + pct)`. */
 export interface CityCommissionRow {
   pct: number;
   commission: number;
@@ -271,27 +271,24 @@ export interface PricingBreakdown {
   incrementTariff: number;
   incrementCost: number;
   weekendSurcharge: number;
-  totalVat19: number;
-  net: number;
-  vat21: number;
   /**
-   * Carrier subtotal — what Stalexone (the carrier) gets, gross of
-   * VAT @ 21%. The shared base every per-city customer total and
-   * per-collaborator payout grosses up from. Surfaced in the UI as
-   * "Tarif transportator".
+   * Carrier subtotal — what Stalexone (the carrier) gets, RON with VAT
+   * included at the current rate. The shared base every per-city
+   * customer total and per-collaborator payout grosses up from.
+   * Surfaced in the UI as "Tarif transportator".
    */
-  totalVat21: number;
+  carrierTotal: number;
   /**
    * Per-dispatch-site customer totals. Four entries even though the
    * dropdown only has three — Iași splits into Tudor + ERA, which the
    * UI stacks when the user picks "Iași". Math is server-side:
-   * `customerTotal = totalVat21 × (1 + pct)`.
+   * `customerTotal = carrierTotal × (1 + pct)`.
    */
   cityCommissions: Record<CityCommissionKey, CityCommissionRow>;
   /**
    * Per-collaborator payouts. The user picks one in the header
    * dropdown and the table + detail page show that one's total.
-   * Math is server-side: `total = totalVat21 × (1 + pct)`.
+   * Math is server-side: `total = carrierTotal × (1 + pct)`.
    */
   collaboratorPrices: Record<CollaboratorKey, CollaboratorPriceRow>;
 }
