@@ -13,6 +13,7 @@ import {
   loadAllPairs,
   persistPairStatus,
 } from "./lib/db";
+import { subscribePairLive } from "./lib/live";
 import { date as fmtDate, todayIso } from "./lib/format";
 import {
   CITY_KEYS,
@@ -199,6 +200,25 @@ export default function App() {
   // queue its own re-price without blocking siblings.
   const repriceTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
+  // Live feed (SSE) connection state — drives the header "Live" pill.
+  const [liveConnected, setLiveConnected] = useState(false);
+
+  // Ids this desktop is the WRITER for — pairs it added, edited, or deleted
+  // locally. The live feed echoes every mutation (including our own); we
+  // ignore echoes for these ids so an in-flight local edit is never clobbered
+  // by the server's slightly-older snapshot. Pairs we did NOT write (phone
+  // scans) are never in this set, so all of THEIR events apply — which is the
+  // whole point: they stream in live.
+  const localIds = useRef<Set<string>>(new Set());
+  const markLocal = useCallback((id: string) => {
+    localIds.current.add(id);
+  }, []);
+
+  // The first SSE connect coincides with mount hydration, which already
+  // pulls the full queue — so we skip the catch-up reconcile on it and only
+  // reconcile on RE-connects (where events may have been missed while down).
+  const sawFirstConnect = useRef(false);
+
   /* ── Mutator helper ───────────────────────────────────────────────── */
 
   /** Apply a new pairs array to BOTH the ref (synchronously, for the
@@ -252,6 +272,86 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commit]);
 
+  /* ── Live feed (SSE) — phone scans & other clients stream in ──────── */
+
+  /**
+   * Re-pull the authoritative list and MERGE it onto the current queue
+   * (never replace — that would wipe in-flight local edits). Used to catch
+   * up after a reconnect or a remote "clear all": for each server pair we
+   * don't own locally, add it if new or adopt its status/day if it changed,
+   * keeping our already-decoded image Files. Pairs we wrote (`localIds`) are
+   * left exactly as they are.
+   */
+  const reconcile = useCallback(async () => {
+    try {
+      const server = await loadAllPairs();
+      const cur = pairsRef.current;
+      const byId = new Map(cur.map((p) => [p.id, p] as const));
+      let changed = false;
+      for (const sp of server) {
+        if (localIds.current.has(sp.id)) continue; // we own it — keep local
+        const ex = byId.get(sp.id);
+        if (!ex) {
+          byId.set(sp.id, sp);
+          changed = true;
+        } else if (ex.status.kind !== sp.status.kind || ex.day !== sp.day) {
+          byId.set(sp.id, { ...ex, day: sp.day, status: sp.status });
+          changed = true;
+        }
+      }
+      if (changed) commit([...byId.values()]);
+    } catch (err) {
+      console.warn("[live] reconcile failed:", err);
+    }
+  }, [commit]);
+
+  useEffect(() => {
+    const stop = subscribePairLive({
+      onStatus: (connected) => {
+        setLiveConnected(connected);
+        if (connected) {
+          // Skip the redundant fetch on the very first connect (mount
+          // hydration covers it); reconcile only on genuine re-connects.
+          if (sawFirstConnect.current) void reconcile();
+          else sawFirstConnect.current = true;
+        }
+      },
+      onCreated: (pair) => {
+        if (localIds.current.has(pair.id)) return; // our own insert echo
+        // A freshly server-created pair is, by definition, being processed —
+        // show the spinner immediately instead of a "pending/needs-calc"
+        // flash. The follow-up extracting/ready events refine it.
+        const display: Pair =
+          pair.status.kind === "pending" ? { ...pair, status: { kind: "extracting" } } : pair;
+        const cur = pairsRef.current;
+        if (cur.some((p) => p.id === pair.id)) {
+          commit(cur.map((p) => (p.id === pair.id ? display : p)));
+        } else {
+          commit([...cur, display]);
+        }
+      },
+      onUpdated: (id, day, status) => {
+        if (localIds.current.has(id)) return; // our own write echo
+        const cur = pairsRef.current;
+        if (!cur.some((p) => p.id === id)) {
+          // Update for a pair we never saw created (missed event) — catch up.
+          void reconcile();
+          return;
+        }
+        commit(cur.map((p) => (p.id === id ? { ...p, day, status } : p)));
+      },
+      onDeleted: (id) => {
+        if (localIds.current.has(id)) return;
+        commit(pairsRef.current.filter((p) => p.id !== id));
+        setSelectedId((curId) => (curId === id ? null : curId));
+      },
+      onCleared: () => {
+        void reconcile();
+      },
+    });
+    return stop;
+  }, [commit, reconcile]);
+
   /* ── Queue mutations ──────────────────────────────────────────────── */
 
   const addPair = useCallback(
@@ -267,6 +367,8 @@ export default function App() {
         images: files,
         status: { kind: "pending" },
       };
+      // This desktop owns this pair — ignore the live echo of our own insert.
+      markLocal(newPair.id);
       // Optimistic add — the row appears in the UI immediately so the
       // user sees their drop without waiting for the network. We then
       // persist with the in-house retry from lib/db.ts; if even the
@@ -298,11 +400,12 @@ export default function App() {
         }
       })();
     },
-    [commit, selectedDay],
+    [commit, selectedDay, markLocal],
   );
 
   const removePair = useCallback(
     (id: string) => {
+      markLocal(id);
       const t = repriceTimers.current.get(id);
       if (t) clearTimeout(t);
       repriceTimers.current.delete(id);
@@ -313,7 +416,7 @@ export default function App() {
         console.error("Failed to delete pair from DB:", err),
       );
     },
-    [commit],
+    [commit, markLocal],
   );
 
   /** Clear every pair on the currently-viewed day only. Other days are
@@ -335,11 +438,12 @@ export default function App() {
       cur && toDelete.some((p) => p.id === cur) ? null : cur,
     );
     for (const p of toDelete) {
+      markLocal(p.id);
       void deletePair(p.id).catch((err) =>
         console.error("Failed to delete pair from DB:", err),
       );
     }
-  }, [commit, selectedDay]);
+  }, [commit, selectedDay, markLocal]);
 
   /* ── Status transitions (shared by run + reprice) ─────────────────── */
 
@@ -380,6 +484,9 @@ export default function App() {
         setStatusLocal(id, status);
         return true;
       }
+      // We're about to write this pair — own it so the live echo of this
+      // very write doesn't bounce back and overwrite a fresher local edit.
+      markLocal(id);
       try {
         await persistPairStatus(id, status);
         setStatusLocal(id, status);
@@ -403,7 +510,7 @@ export default function App() {
         return false;
       }
     },
-    [setStatusLocal],
+    [setStatusLocal, markLocal],
   );
 
   /* ── Per-pair edit + debounced re-price ───────────────────────────── */
@@ -678,6 +785,9 @@ export default function App() {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          {/* Live-feed indicator — green when the SSE stream is connected,
+              so the user knows phone scans will appear in real time. */}
+          <LivePill connected={liveConnected} />
           {/* UpdateBanner self-hides when there's no update. Mounted
               in the header so every screen surfaces the prompt. */}
           <UpdateBanner />
@@ -859,6 +969,40 @@ function HydratingSplash() {
  * looking up `labelFor(value)` — the option keys stay machine-friendly
  * (no diacritics) while the visible text is the Romanian display name.
  * ────────────────────────────────────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────────────────
+ * LivePill — tiny header badge for the live SSE feed.
+ *
+ * Green dot + "Live" when the stream is connected (phone scans land in real
+ * time); a muted amber "Reconectare…" while the client is backing off and
+ * retrying. Purely informational — the queue still works offline, it just
+ * won't stream until the dot goes green again.
+ * ────────────────────────────────────────────────────────────────────── */
+function LivePill({ connected }: { connected: boolean }) {
+  return (
+    <span
+      className={
+        "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em] " +
+        (connected
+          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+          : "border-amber-300 bg-amber-50 text-amber-700")
+      }
+      title={
+        connected
+          ? "Conectat la flux — scanările din telefon apar în timp real"
+          : "Reconectare la fluxul live…"
+      }
+    >
+      <span
+        className={
+          "inline-block h-2 w-2 rounded-full " +
+          (connected ? "bg-emerald-500 animate-pulse" : "bg-amber-500")
+        }
+      />
+      {connected ? "Live" : "Reconectare…"}
+    </span>
+  );
+}
+
 function HeaderSelect<T extends string>({
   label,
   value,

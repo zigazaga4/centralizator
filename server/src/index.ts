@@ -21,6 +21,7 @@ import extractRoutes from "./routes/extract.js";
 import pairRoutes from "./routes/pairs.js";
 import verifyRoutes from "./routes/verify.js";
 import scanBatchRoutes from "./routes/scan-batch.js";
+import eventRoutes from "./routes/events.js";
 import { closeDb } from "./db.js";
 
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -137,6 +138,7 @@ await app.register(extractRoutes);
 await app.register(pairRoutes);
 await app.register(verifyRoutes);
 await app.register(scanBatchRoutes);
+await app.register(eventRoutes);
 
 /**
  * Race-free port probe — open a throw-away TCP server on the candidate

@@ -48,7 +48,10 @@ const API_KEY = import.meta.env.VITE_CENTRALIZATOR_API_KEY as string | undefined
  * Wire shapes (mirror server/src/db.ts PairWire / PairImageWire)
  * ────────────────────────────────────────────────────────────────────── */
 
-type WireStatus =
+/** Status as it arrives on the wire. Structurally identical to the client
+ *  `PairStatus` (same discriminated union), exported so the live SSE client
+ *  can type the status it receives on a `pair-updated` event. */
+export type WireStatus =
   | { kind: "pending" }
   | { kind: "extracting" }
   | {
@@ -69,7 +72,7 @@ interface WireImage {
   dataB64: string;
 }
 
-interface WirePair {
+export interface WirePair {
   id: string;
   day: string;
   createdAt: number;
@@ -122,6 +125,27 @@ async function fileToWireImage(file: File): Promise<WireImage> {
 function wireImageToFile(w: WireImage): File {
   const bytes = base64ToBytes(w.dataB64);
   return new File([bytes], w.name, { type: w.mimeType || "image/*" });
+}
+
+/**
+ * Convert one server `WirePair` into the client `Pair` shape: decode each
+ * base64 image back into a `File` (skipping any that fail to decode rather
+ * than dropping the whole pair) and carry the status across as-is (the wire
+ * status union is structurally the client `PairStatus`).
+ *
+ * Exported so the live SSE client (`lib/live.ts`) reuses the exact same
+ * decode path as the initial hydrate — one source of truth for wire→model.
+ */
+export function wirePairToClient(wp: WirePair): Pair {
+  const images: File[] = [];
+  for (const wi of wp.images) {
+    try {
+      images.push(wireImageToFile(wi));
+    } catch (err) {
+      console.warn(`Failed to decode image for pair ${wp.id}:`, err);
+    }
+  }
+  return { id: wp.id, day: wp.day, images, status: wp.status as PairStatus };
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -227,21 +251,10 @@ export async function loadAllPairs(): Promise<Pair[]> {
   try {
     const res = await http("/pairs");
     const body = (await res.json()) as { pairs: WirePair[] };
-    const pairs: Pair[] = [];
-    for (const wp of body.pairs) {
-      const images: File[] = [];
-      // The server returns images in slot order (ORDER BY slot ASC),
-      // so we trust that and just stream through. Decode failures
-      // drop the offending image rather than killing the whole pair.
-      for (const wi of wp.images) {
-        try {
-          images.push(wireImageToFile(wi));
-        } catch (err) {
-          console.warn(`Failed to decode image for pair ${wp.id}:`, err);
-        }
-      }
-      pairs.push({ id: wp.id, day: wp.day, images, status: wp.status });
-    }
+    // The server returns images in slot order (ORDER BY slot ASC); the
+    // shared converter trusts that and drops only individual undecodable
+    // images, never a whole pair.
+    const pairs = body.pairs.map(wirePairToClient);
     console.info(`[db] loadAllPairs: hydrated ${pairs.length} pair(s) from server.`);
     return pairs;
   } catch (err) {

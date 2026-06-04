@@ -40,6 +40,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { publishPairEvent } from "./events.js";
 import type { Extracted, Verification } from "./schema.js";
 import type { LmProduct } from "./leroymerlin.js";
 import type { PricingBreakdown } from "./pricing.js";
@@ -481,7 +482,11 @@ export function insertPair(input: InsertPairInput): PairWire {
   // Read back so the caller gets the canonical PairWire (including
   // status reconstruction + image base64 round-trip), keeping the
   // round-trip contract identical to listAllPairs.
-  return getPair(input.id)!;
+  const pair = getPair(input.id)!;
+  // Live: a new pair exists — push it (with images) to every connected
+  // desktop so a phone scan appears the instant it lands.
+  publishPairEvent({ type: "pair-created", pair });
+  return pair;
 }
 
 /** Single pair by id, or `null` if no such row. Same shape as a list
@@ -510,8 +515,8 @@ export function getPair(id: string): PairWire | null {
  * such id (so the route can return 404 instead of a silent 200).
  */
 export function persistPairStatus(id: string, status: PairStatus): boolean {
-  const exists = !!stmt.selectPair.get(id);
-  if (!exists) return false;
+  const row = stmt.selectPair.get(id);
+  if (!row) return false;
   if (status.kind === "extracting") return true; // intentionally noop
 
   const now = Date.now();
@@ -530,7 +535,33 @@ export function persistPairStatus(id: string, status: PairStatus): boolean {
   } else {
     stmt.updatePending.run({ id, updated_at: now });
   }
+  // Live: a status changed — push the transition (no images; they don't
+  // change on a status flip, and re-sending base64 every time is waste).
+  publishPairEvent({ type: "pair-updated", id, day: row.day, updatedAt: now, status });
   return true;
+}
+
+/**
+ * Emit-only "extracting" pulse — NO database write.
+ *
+ * The pipeline goes pending → (vision call in flight) → ready/error. We
+ * deliberately never PERSIST "extracting" (a crash mid-call would otherwise
+ * leave a stuck spinner forever; rowToStatus coerces it back to pending).
+ * But for the LIVE view we still want the desktop to show that spinner while
+ * the server works, so the scan-batch pipeline calls this right before it
+ * starts extracting. The signal is ephemeral by design — only connected
+ * clients see it, and a reload reflects the real persisted state.
+ */
+export function signalExtracting(id: string): void {
+  const row = stmt.selectPair.get(id);
+  if (!row) return;
+  publishPairEvent({
+    type: "pair-updated",
+    id,
+    day: row.day,
+    updatedAt: Date.now(),
+    status: { kind: "extracting" },
+  });
 }
 
 /** Drop a single pair (its image rows cascade via the FK, but we
@@ -545,6 +576,7 @@ export function deletePair(id: string): boolean {
     stmt.deletePair.run(id);
   });
   tx();
+  publishPairEvent({ type: "pair-deleted", id });
   return true;
 }
 
@@ -557,6 +589,7 @@ export function deleteAllPairs(): number {
     stmt.deleteAllPairs.run();
   });
   tx();
+  publishPairEvent({ type: "pairs-cleared" });
   return before;
 }
 

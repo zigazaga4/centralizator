@@ -25,7 +25,7 @@ import { groupImages, type DocumentGroup } from "../grouping.js";
 import { extractAndPrice } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
-import { insertPair, persistPairStatus } from "../db.js";
+import { insertPair, persistPairStatus, signalExtracting } from "../db.js";
 
 const ACCEPTED_MIME = new Set([
   "image/jpeg",
@@ -114,6 +114,10 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
   }
 
   const aiImages: ImageInput[] = ordered.map((img) => ({ data: img.bytes, mimeType: img.mimeType }));
+
+  // Live: flip the desktop row to its "se procesează" spinner while the
+  // vision call is in flight. Emit-only (never persisted) — see db.ts.
+  signalExtracting(id);
 
   try {
     const { extracted, resolvedService, serviceFallback, breakdown } = await extractAndPrice(aiImages);

@@ -44,6 +44,11 @@ centralizator-server/
 Centralizator_*_x64-setup.exe
 Centralizator_*_x64-setup.exe.sig
 
+# Android scanner APK checked out at the repo root after a local build.
+# A build artifact, not source — rebuilt from mobile/ with Capacitor +
+# Gradle. Keep it out of git (6 MB binary); ship via adb or Releases.
+Centralizator-Scanner-*.apk
+
 # Operator-uploaded pricing source documents — the source-of-truth
 # tariffs live in server/src/tariffs.ts, not in these files.
 *.docx
