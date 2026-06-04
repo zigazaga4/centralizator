@@ -1,3 +1,12 @@
-allowBuilds:
-  better-sqlite3: true
-  esbuild: true
+# pnpm settings.
+#
+# `onlyBuiltDependencies` is the ONLY key pnpm reads here, and it MUST be a
+# YAML list. Listing these packages pre-approves their build scripts, so pnpm
+# stops prompting and stops auto-writing an `allowBuilds:` stub (the approval
+# placeholder pnpm drops when a build is unapproved — not a real pnpm key).
+# `better-sqlite3` is the one that matters: it has a native build step, and
+# without approval pnpm would skip compiling its binary on any platform that
+# lacks a prebuild.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild

@@ -1,10 +1,16 @@
-allowBuilds:
-  core-js: set this to true or false
-  esbuild: set this to true or false
-# pnpm settings. `onlyBuiltDependencies` MUST be a YAML list — when it was
-# a quoted JSON string, pnpm 10/11 crashed with
-# "settings.onlyBuiltDependencies.push is not a function" during
-# `pnpm install --frozen-lockfile` in CI (the release build).
+# pnpm settings.
+#
+# `onlyBuiltDependencies` is the ONLY key pnpm reads here, and it MUST be a
+# YAML list. Two failure modes this file has hit before, both now prevented:
+#
+#   1. As a quoted JSON string ('["core-js","esbuild"]') pnpm 10/11 crashed
+#      with "settings.onlyBuiltDependencies.push is not a function" during
+#      `pnpm install` (including --frozen-lockfile in the CI release build).
+#   2. Listing these packages here pre-approves their build scripts, so pnpm
+#      stops prompting and stops auto-writing an `allowBuilds:` stub into this
+#      file. That stub is not a real pnpm key — it's the approval placeholder
+#      pnpm drops when a build is unapproved. Keeping the list complete is
+#      what keeps that cruft from coming back on the next install.
 onlyBuiltDependencies:
   - core-js
   - esbuild
