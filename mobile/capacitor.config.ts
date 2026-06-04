@@ -3,9 +3,10 @@ import type { CapacitorConfig } from "@capacitor/cli";
 /**
  * Capacitor config for the Centralizator document scanner.
  *
- * `cleartext` + `allowMixedContent` are enabled so the app can reach a
- * plain-http server (e.g. http://76.13.248.144:3600) during early rollout.
- * Once the API sits behind nginx + TLS (https), both can be turned off.
+ * The API is served over HTTPS (Let's Encrypt on srv1409671.hstgr.cloud),
+ * so no cleartext exception is needed. If you ever point the app at a
+ * plain-http host for local testing, add `server.cleartext: true` and
+ * `android.allowMixedContent: true` temporarily.
  */
 const config: CapacitorConfig = {
   appId: "ro.centralizator.scanner",
@@ -13,10 +14,6 @@ const config: CapacitorConfig = {
   webDir: "dist",
   server: {
     androidScheme: "https",
-    cleartext: true,
-  },
-  android: {
-    allowMixedContent: true,
   },
 };
 
