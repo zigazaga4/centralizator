@@ -20,6 +20,7 @@ import multipart from "@fastify/multipart";
 import extractRoutes from "./routes/extract.js";
 import pairRoutes from "./routes/pairs.js";
 import verifyRoutes from "./routes/verify.js";
+import scanBatchRoutes from "./routes/scan-batch.js";
 import { closeDb } from "./db.js";
 
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -60,7 +61,9 @@ await app.register(cors, {
 });
 
 await app.register(multipart, {
-  limits: { fileSize: 20 * 1024 * 1024, files: 4 },
+  // `files` must cover the phone scan-batch (a whole day's stack), not
+  // just a single 1-AWB-plus-a-few-invoices pair. fileSize stays per-file.
+  limits: { fileSize: 20 * 1024 * 1024, files: 60 },
 });
 
 /**
@@ -133,6 +136,7 @@ app.get("/health", async () => ({
 await app.register(extractRoutes);
 await app.register(pairRoutes);
 await app.register(verifyRoutes);
+await app.register(scanBatchRoutes);
 
 /**
  * Race-free port probe — open a throw-away TCP server on the candidate

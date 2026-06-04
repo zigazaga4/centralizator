@@ -9,9 +9,10 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import { extractFromImages, type ImageInput } from "../gemini.js";
+import { type ImageInput } from "../gemini.js";
 import { calculatePrice, type PricingBreakdown } from "../pricing.js";
-import { SERVICE_TEXT_MAP, type Service } from "../tariffs.js";
+import { type Service } from "../tariffs.js";
+import { extractAndPrice, PipelineError } from "../pipeline.js";
 import {
   PricingRequestSchema,
   type Extracted,
@@ -32,47 +33,11 @@ const ACCEPTED_MIME = new Set([
  *  call's token budget. */
 const MAX_IMAGES = 12;
 
-/**
- * Best-effort map from the AWB's free-text `Serviciu` field to one of the
- * three pricing services. Falls back to Express with `serviceFallback=true`
- * on the response so the UI can show a warning + a dropdown override.
- */
-function resolveService(serviceText: string): { service: Service; serviceFallback: boolean } {
-  const key = serviceText.trim().toLowerCase();
-  const mapped = SERVICE_TEXT_MAP[key];
-  if (mapped) return { service: mapped, serviceFallback: false };
-  // Try a softer match (substring) — useful for things like "Standard cu confirmare".
-  for (const [needle, svc] of Object.entries(SERVICE_TEXT_MAP)) {
-    if (key.includes(needle)) return { service: svc, serviceFallback: false };
-  }
-  return { service: "Express", serviceFallback: true };
-}
-
 export interface ExtractResponse {
   extracted: Extracted;
   resolvedService: Service;
   serviceFallback: boolean;
   breakdown: PricingBreakdown;
-}
-
-/**
- * Roll the per-line `is_bulky` flags up across every invoice on the AWB
- * into the two scalars the pricing engine needs: the total count of
- * bulky-but-light units (polystyrene / mineral wool) and whether any
- * non-bulky product also rides on the shipment. Aggregated per AWB
- * (one physical delivery), not per invoice, since the truck-volume
- * constraint is physical.
- */
-function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasOtherProducts: boolean } {
-  let bulkyUnits = 0;
-  let hasOtherProducts = false;
-  for (const invoice of extracted.invoices) {
-    for (const item of invoice.items) {
-      if (item.is_bulky) bulkyUnits += item.quantity;
-      else hasOtherProducts = true;
-    }
-  }
-  return { bulkyUnits: Math.round(bulkyUnits), hasOtherProducts };
 }
 
 export default async function extractRoutes(app: FastifyInstance) {
@@ -108,36 +73,19 @@ export default async function extractRoutes(app: FastifyInstance) {
       });
     }
 
-    let extracted: Extracted;
     try {
-      extracted = await extractFromImages(images);
+      const { extracted, resolvedService, serviceFallback, breakdown } =
+        await extractAndPrice(images);
+      const body: ExtractResponse = { extracted, resolvedService, serviceFallback, breakdown };
+      return reply.send(body);
     } catch (err) {
+      if (err instanceof PipelineError && err.stage === "pricing") {
+        req.log.error({ err, extracted: err.extracted }, "Pricing failed");
+        return reply.code(422).send({ error: err.message, extracted: err.extracted });
+      }
       req.log.error({ err }, "Vision extraction failed");
       return reply.code(502).send({ error: (err as Error).message });
     }
-
-    const { service, serviceFallback } = resolveService(extracted.awb.service_text);
-
-    const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
-
-    let breakdown: PricingBreakdown;
-    try {
-      breakdown = calculatePrice({
-        service,
-        weightKg: extracted.awb.weight_kg,
-        distanceKm: extracted.awb.distance_extra_km,
-        numDeliveries: extracted.awb.num_deliveries ?? 1,
-        deliveryDate: extracted.awb.delivery_date,
-        bulkyUnits,
-        hasOtherProducts,
-      });
-    } catch (err) {
-      req.log.error({ err, extracted }, "Pricing failed");
-      return reply.code(422).send({ error: (err as Error).message, extracted });
-    }
-
-    const body: ExtractResponse = { extracted, resolvedService: service, serviceFallback, breakdown };
-    return reply.send(body);
   });
 
   // Live re-pricing for UI edits. No AI, no I/O — pure math.
