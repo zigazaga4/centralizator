@@ -17,7 +17,7 @@ import {
   type Verification,
 } from "../types";
 import { date, ron } from "../lib/format";
-import { ProductBadge, ProductCheckSummary } from "./ProductCheck";
+import { ProductBadge, ProductCheckSummary, hasAnyWarning } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
@@ -68,6 +68,7 @@ export function PairDetail({
 }: Props) {
   const status = pair.status;
   const verification = status.kind === "ready" ? status.verification : undefined;
+  const routing = status.kind === "ready" ? status.routing : undefined;
   const title =
     status.kind === "ready"
       ? `Pereche #${index + 1} · AWB ${status.edits.awb.awb_number}`
@@ -79,6 +80,7 @@ export function PairDetail({
         title={title}
         status={status}
         verification={verification}
+        routing={routing}
         verifying={verifying}
         onBack={onBack}
         onRemove={onRemove}
@@ -102,13 +104,13 @@ export function PairDetail({
                 collaborator={collaborator}
                 onPatch={onPatch}
               />
-              {verification && (
+              {(verification || routing) && (
                 <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
                   <div className="flex items-center justify-between border-b border-ink-200 bg-canvas-200/60 px-4 py-2">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-coral-700">
-                      Verificare produse · leroymerlin.ro
+                      Verificare produse + km
                     </span>
-                    {verification.hasWarning ? (
+                    {hasAnyWarning(verification, routing) ? (
                       <span className="rounded bg-coral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-coral-700">
                         Discrepanță
                       </span>
@@ -118,7 +120,7 @@ export function PairDetail({
                       </span>
                     )}
                   </div>
-                  <ProductCheckSummary verification={verification} />
+                  <ProductCheckSummary verification={verification} routing={routing} />
                 </div>
               )}
             </>
@@ -137,6 +139,7 @@ function DetailHeader({
   title,
   status,
   verification,
+  routing,
   verifying,
   onBack,
   onRemove,
@@ -144,6 +147,7 @@ function DetailHeader({
   title: string;
   status: PairStatus;
   verification?: Verification;
+  routing?: Routing;
   verifying?: boolean;
   onBack: () => void;
   onRemove: () => void;
@@ -173,7 +177,7 @@ function DetailHeader({
         </button>
         <h2 className="text-lg font-semibold tracking-tight text-ink-900">{title}</h2>
         <StatusBadge status={status} />
-        <ProductBadge verification={verification} verifying={verifying} />
+        <ProductBadge verification={verification} routing={routing} verifying={verifying} />
       </div>
       <div className="flex items-center gap-2">
         <button

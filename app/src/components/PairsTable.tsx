@@ -269,6 +269,7 @@ function PairRow({
         <span className="flex-1 truncate">{edits?.awb.awb_number || <Dash />}</span>
         <ProductBadge
           verification={status.kind === "ready" ? status.verification : undefined}
+          routing={status.kind === "ready" ? status.routing : undefined}
           verifying={verifying}
         />
       </div>

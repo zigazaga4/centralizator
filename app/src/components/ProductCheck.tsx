@@ -1,6 +1,17 @@
 import { useState, type ReactNode, type MouseEvent } from "react";
-import type { CheckStatus, ItemCheck, Verification } from "../types";
+import { CITY_COMMISSION_LABEL, type CheckStatus, type ItemCheck, type Routing, type Verification } from "../types";
 import { ron } from "../lib/format";
+
+/**
+ * Does this pair deserve the warning icon? Two independent sources feed
+ * the single alarm the operator watches:
+ *   • a product discrepancy (size/weight vs leroymerlin.ro), and
+ *   • a km discrepancy (our Mapbox shortest-road km vs the AWB's printed
+ *     km) — the operator's rule is that ANY difference is flagged.
+ */
+export function hasAnyWarning(verification?: Verification, routing?: Routing): boolean {
+  return !!verification?.hasWarning || !!routing?.kmWarning;
+}
 
 /* ──────────────────────────────────────────────────────────────────────
  * Leroy Merlin product cross-check UI.
@@ -52,9 +63,11 @@ function StatusChip({ status, labelMap }: { status: CheckStatus; labelMap?: Part
 
 export function ProductBadge({
   verification,
+  routing,
   verifying,
 }: {
   verification?: Verification;
+  routing?: Routing;
   verifying?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -70,9 +83,20 @@ export function ProductBadge({
     );
   }
 
-  if (!verification) return null;
+  const kmWarn = !!routing?.kmWarning;
+  // Show the icon when there's anything to show — a product report to open
+  // or a km discrepancy to flag.
+  if (!verification && !kmWarn) return null;
 
-  const warn = verification.hasWarning;
+  const warn = hasAnyWarning(verification, routing);
+  const title = warn
+    ? [
+        verification?.hasWarning ? "discrepanță produse (dimensiuni/greutate)" : null,
+        kmWarn ? "diferență de km (AWB vs Mapbox)" : null,
+      ]
+        .filter(Boolean)
+        .join(" + ") + " — click pentru detalii"
+    : (verification ? "Produse + km verificate" : "Km verificat") + " — click pentru detalii";
 
   return (
     <>
@@ -83,17 +107,13 @@ export function ProductBadge({
           setOpen(true);
         }}
         onMouseDown={stop}
-        title={
-          warn
-            ? "Discrepanță produse (dimensiuni/greutate) — click pentru detalii"
-            : "Produse verificate pe leroymerlin.ro — click pentru detalii"
-        }
+        title={title}
         className={`inline-flex h-5 w-5 items-center justify-center rounded transition ${
           warn
             ? "text-coral-600 hover:bg-coral-100"
             : "text-emerald-600 hover:bg-emerald-50"
         }`}
-        aria-label={warn ? "Discrepanță produse" : "Produse verificate"}
+        aria-label={warn ? "Discrepanță" : "Verificat"}
       >
         {warn ? (
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -108,7 +128,7 @@ export function ProductBadge({
           </svg>
         )}
       </button>
-      {open && <ProductCheckDialog verification={verification} onClose={() => setOpen(false)} />}
+      {open && <ProductCheckDialog verification={verification} routing={routing} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -117,9 +137,11 @@ export function ProductBadge({
 
 function ProductCheckDialog({
   verification,
+  routing,
   onClose,
 }: {
-  verification: Verification;
+  verification?: Verification;
+  routing?: Routing;
   onClose: () => void;
 }) {
   return (
@@ -160,7 +182,7 @@ function ProductCheckDialog({
           </button>
         </div>
 
-        <ProductCheckSummary verification={verification} />
+        <ProductCheckSummary verification={verification} routing={routing} />
       </div>
     </div>
   );
@@ -168,14 +190,41 @@ function ProductCheckDialog({
 
 /* ─── Reusable body (dialog + detail page section) ──────────────────── */
 
-export function ProductCheckSummary({ verification }: { verification: Verification }) {
+export function ProductCheckSummary({
+  verification,
+  routing,
+}: {
+  verification?: Verification;
+  routing?: Routing;
+}) {
   const v = verification;
-  const allGood = !v.hasWarning && v.items.some((it) => it.found);
+  const prodWarn = !!v?.hasWarning;
+  const kmWarn = !!routing?.kmWarning;
+  const anyWarn = prodWarn || kmWarn;
+  const prodAllGood = !!v && !v.hasWarning && v.items.some((it) => it.found);
+
+  // What the coral banner should call out — products, km, or both.
+  const warnBits = [
+    prodWarn ? "dimensiuni/greutate față de site" : null,
+    kmWarn ? "km (AWB vs Mapbox)" : null,
+  ].filter(Boolean);
+
   return (
     <div className="p-5">
-      {/* Verdict banner — a clear green confirmation when everything
-          matches the website, or a coral alert when it does not. */}
-      {allGood ? (
+      {/* Verdict banner — coral when anything is off, green when products
+          check out and there's no km gap. */}
+      {anyWarn ? (
+        <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-coral-300 bg-coral-50 px-4 py-3 text-coral-800">
+          <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span className="text-sm font-medium">
+            Discrepanțe ({warnBits.join(" și ")}) — vezi detaliile de mai jos.
+          </span>
+        </div>
+      ) : prodAllGood ? (
         <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-800">
           <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <circle cx="12" cy="12" r="10" />
@@ -185,56 +234,89 @@ export function ProductCheckSummary({ verification }: { verification: Verificati
             Tot corespunde site-ului leroymerlin.ro — dimensiunile și greutatea sunt verificate.
           </span>
         </div>
-      ) : v.hasWarning ? (
-        <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-coral-300 bg-coral-50 px-4 py-3 text-coral-800">
-          <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span className="text-sm font-medium">
-            Discrepanțe față de site (dimensiuni/greutate) — vezi detaliile de mai jos.
-          </span>
-        </div>
       ) : null}
 
-      {/* Weight reconciliation */}
-      <div className="mb-4 rounded-lg border border-ink-200 bg-canvas-100/60 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-600">
-            Greutate AWB vs. catalog
-          </span>
-          <StatusChip
-            status={v.weightStatus}
-            labelMap={{ unknown: v.weightCoverage === "full" ? "n/a" : "parțial" }}
-          />
-        </div>
-        <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-800 tabular-nums">
-          <span>AWB: <strong>{v.awbWeightKg} kg</strong></span>
-          <span>
-            Estimat catalog:{" "}
-            <strong>{v.estimatedWeightKg != null ? `${v.estimatedWeightKg} kg` : "—"}</strong>
-          </span>
-          {v.weightCoverage !== "full" && (
-            <span className="text-ink-500">
-              ({v.weightCoverage === "none" ? "fără date de greutate" : "acoperire parțială — fără alarmă"})
-            </span>
+      {/* Km reconciliation — our Mapbox shortest-road km vs the AWB's printed
+          km. Any gap is a warning per the operator's rule. */}
+      <KmCheck routing={routing} />
+
+      {v && (
+        <>
+          {/* Weight reconciliation */}
+          <div className="mb-4 rounded-lg border border-ink-200 bg-canvas-100/60 px-4 py-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-600">
+                Greutate AWB vs. catalog
+              </span>
+              <StatusChip
+                status={v.weightStatus}
+                labelMap={{ unknown: v.weightCoverage === "full" ? "n/a" : "parțial" }}
+              />
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-800 tabular-nums">
+              <span>AWB: <strong>{v.awbWeightKg} kg</strong></span>
+              <span>
+                Estimat catalog:{" "}
+                <strong>{v.estimatedWeightKg != null ? `${v.estimatedWeightKg} kg` : "—"}</strong>
+              </span>
+              {v.weightCoverage !== "full" && (
+                <span className="text-ink-500">
+                  ({v.weightCoverage === "none" ? "fără date de greutate" : "acoperire parțială — fără alarmă"})
+                </span>
+              )}
+            </div>
+          </div>
+
+          {v.note && <p className="mb-3 text-xs text-ink-500">{v.note}</p>}
+
+          {/* Per-item table */}
+          {v.items.length === 0 ? (
+            <p className="text-sm text-ink-500">Niciun produs de verificat pe această pereche.</p>
+          ) : (
+            <div className="space-y-2">
+              {v.items.map((it, i) => (
+                <ItemCard key={`${it.invoiceIndex}-${it.itemIndex}-${i}`} item={it} />
+              ))}
+            </div>
           )}
-        </div>
-      </div>
-
-      {v.note && <p className="mb-3 text-xs text-ink-500">{v.note}</p>}
-
-      {/* Per-item table */}
-      {v.items.length === 0 ? (
-        <p className="text-sm text-ink-500">Niciun produs de verificat pe această pereche.</p>
-      ) : (
-        <div className="space-y-2">
-          {v.items.map((it, i) => (
-            <ItemCard key={`${it.invoiceIndex}-${it.itemIndex}-${i}`} item={it} />
-          ))}
-        </div>
+        </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Km reconciliation box — mirrors the weight box. Shows the AWB's printed
+ * km next to our Mapbox shortest-road km (store → delivery), the signed
+ * gap, and a Diferă/OK chip. Rendered only when we actually computed a
+ * Mapbox route; on an AWB fallback there is nothing to reconcile.
+ */
+function KmCheck({ routing }: { routing?: Routing }) {
+  if (!routing || routing.mapboxKm == null) return null;
+  const diff = routing.kmDiff ?? routing.mapboxKm - routing.awbKm;
+  const warn = !!routing.kmWarning;
+  const storeLabel = routing.store ? CITY_COMMISSION_LABEL[routing.store] : "—";
+  const sign = diff > 0 ? "+" : "";
+  return (
+    <div
+      className={`mb-4 rounded-lg border px-4 py-3 ${
+        warn ? "border-coral-300 bg-coral-50/60" : "border-ink-200 bg-canvas-100/60"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-600">
+          Distanță AWB vs. Mapbox
+        </span>
+        <StatusChip status={warn ? "mismatch" : "match"} />
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-800 tabular-nums">
+        <span>AWB: <strong>{routing.awbKm} km</strong></span>
+        <span>Mapbox: <strong>{routing.mapboxKm} km</strong></span>
+        <span className={warn ? "font-semibold text-coral-700" : "text-ink-500"}>
+          Diferență: {sign}{Math.round(diff * 10) / 10} km
+        </span>
+        <span className="text-ink-500">({storeLabel} → livrare, drum rutier cel mai scurt)</span>
+      </div>
     </div>
   );
 }

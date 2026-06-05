@@ -14,6 +14,12 @@ describe("matchStore", () => {
     expect(matchStore({ senderAddress: "Leroy Merlin, Calea Chișinăului 23, Iași" })).toBe("IasiERA");
   });
 
+  it("resolves the ERA store from the Hello Shopping Park mall name", () => {
+    // Bitlo collaborator store; the Expeditor may print only the mall name.
+    expect(matchStore({ senderAddress: "Calea Chisinaului, Nr. 23, Hello Shopping Park" })).toBe("IasiERA");
+    expect(matchStore({ senderName: "Leroy Merlin Hello Shopping Park" })).toBe("IasiERA");
+  });
+
   it("resolves the Tudor store from Păcurari / Mall Moldova", () => {
     expect(matchStore({ senderAddress: "Șoseaua Păcurari nr.121, Mall Moldova, Iași" })).toBe("IasiTudor");
     expect(matchStore({ senderAddress: "Leroy Merlin Mall Moldova, Iasi" })).toBe("IasiTudor");

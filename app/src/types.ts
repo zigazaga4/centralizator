@@ -377,6 +377,12 @@ export interface Routing {
   awbKm: number;
   /** Mapbox-routed km when computed; null on any fallback. */
   mapboxKm: number | null;
+  /** Signed difference (mapboxKm − awbKm) when both are known; null on
+   *  any fallback. Positive ⇒ our route is longer than the AWB printed. */
+  kmDiff?: number | null;
+  /** True when the Mapbox-routed km differs from the AWB's printed km —
+   *  surfaces in the warning component like a product discrepancy. */
+  kmWarning?: boolean;
   /** Delivery address text that was geocoded. */
   deliveryAddress: string | null;
   /** True only when geocode + route both succeeded. */

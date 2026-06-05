@@ -42,7 +42,7 @@ export interface Store {
 
 /**
  * The four stores. Iași has two:
- *   • IasiERA   — Calea Chișinăului 23 (the ERA Shopping Park store, east Iași)
+ *   • IasiERA   — Calea Chișinăului 23, Hello Shopping Park (Bitlo collaborator, east Iași)
  *   • IasiTudor — Șoseaua Păcurari 121 / Mall Moldova (west Iași)
  */
 export const STORES: Readonly<Record<StoreKey, Store>> = Object.freeze({
@@ -63,7 +63,7 @@ export const STORES: Readonly<Record<StoreKey, Store>> = Object.freeze({
   IasiERA: {
     key: "IasiERA",
     label: "Iași (ERA)",
-    address: "Calea Chișinăului 23, 700265 Iași",
+    address: "Calea Chișinăului 23, Hello Shopping Park, 700265 Iași",
     lng: 27.599649,
     lat: 47.148548,
   },
@@ -110,8 +110,12 @@ export function matchStore(parts: {
   );
   if (!hay.trim()) return null;
 
-  // Specific store tokens first.
+  // Specific store tokens first. The Calea Chișinăului store is the
+  // "Hello Shopping Park" location (Bitlo collaborator); match either the
+  // street or the mall name so the Expeditor resolves even when only one
+  // is printed/legible.
   if (/\bchisinaului\b/.test(hay)) return "IasiERA";
+  if (/\bhello\b/.test(hay)) return "IasiERA";
   if (/\bera\b/.test(hay) && /\biasi\b/.test(hay)) return "IasiERA";
   if (/\bpacurari\b/.test(hay)) return "IasiTudor";
   if (/\bmoldova\b/.test(hay) && /\biasi\b/.test(hay)) return "IasiTudor";

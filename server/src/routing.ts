@@ -38,6 +38,14 @@ function round1(x: number): number {
   return Math.round(x * 10) / 10;
 }
 
+/**
+ * How far the Mapbox-routed km may stray from the AWB's printed km before
+ * it raises a warning. The operator's rule is "any difference", so this is
+ * 0 by default; the tiny epsilon in the comparison only absorbs float noise
+ * between two values that are each already rounded to 0.1 km.
+ */
+const KM_WARN_TOLERANCE = Number(process.env.KM_WARN_TOLERANCE ?? 0);
+
 function storeLngLat(key: StoreKey): LngLat {
   const s = STORES[key];
   return { lng: s.lng, lat: s.lat };
@@ -135,6 +143,10 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
     }
 
     const distanceKm = round1(km);
+    // Reconcile our routed km against the km the AWB printed. The operator
+    // wants ANY difference flagged, so it rides on the warning component.
+    const kmDiff = round1(distanceKm - awbKm);
+    const kmWarning = Math.abs(kmDiff) > KM_WARN_TOLERANCE + 1e-9;
     return {
       store,
       storeSource,
@@ -142,6 +154,8 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
       source: "mapbox",
       awbKm,
       mapboxKm: distanceKm,
+      kmDiff,
+      kmWarning,
       deliveryAddress,
       resolved: true,
       note: null,

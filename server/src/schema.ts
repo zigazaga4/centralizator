@@ -208,6 +208,12 @@ export const RoutingSchema = z
     awbKm: z.number(),
     /** Mapbox-routed km when computed; null on any fallback. */
     mapboxKm: z.number().nullable(),
+    /** Signed difference (mapboxKm − awbKm) when both are known; null on
+     *  any fallback. Positive ⇒ our route is longer than the AWB printed. */
+    kmDiff: z.number().nullable().optional(),
+    /** True when the Mapbox-routed km differs from the AWB's printed km.
+     *  Surfaces in the warning component just like a product discrepancy. */
+    kmWarning: z.boolean().optional(),
     /** Delivery address text that was geocoded. */
     deliveryAddress: z.string().nullable(),
     /** True only when geocode + route both succeeded. */
