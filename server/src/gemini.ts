@@ -13,6 +13,7 @@
 
 import OpenAI from "openai";
 import { ExtractedSchema, type Extracted } from "./schema.js";
+import { cropRegion } from "./imagezoom.js";
 
 const MODEL = process.env.OPENROUTER_MODEL ?? "google/gemini-3.5-flash";
 const API_KEY = process.env.OPENROUTER_API_KEY;
@@ -23,12 +24,20 @@ const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v
  * default request timeout is 10 minutes — far too long for a UI that
  * blocks on this call, and the cause of the "AI hangs for minutes"
  * symptom when the upstream stalls on a hard image (e.g. a small AWB
- * label laid on top of an invoice). We enforce a 3-minute TOTAL ceiling
- * (across any retry) via an AbortSignal so a stalled call fails fast and
- * the queue item flips to an error the operator can retry, instead of
- * spinning forever. Override with EXTRACT_TIMEOUT_MS.
+ * label laid on top of an invoice). We enforce a 5-minute TOTAL ceiling
+ * — across every retry AND every zoom round of the agentic loop below —
+ * via an AbortSignal so a stalled call fails fast and the queue item flips
+ * to an error the operator can retry, instead of spinning forever.
+ * Override with EXTRACT_TIMEOUT_MS.
  */
-const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS ?? 180_000);
+const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS ?? 300_000);
+
+/** How many zoom crops the model may request in one extraction before we
+ *  force it to answer. Bounds cost + wall-clock; a handful is plenty to
+ *  read a tiny AWB label. Override with EXTRACT_MAX_ZOOMS. */
+const MAX_ZOOMS = Number(process.env.EXTRACT_MAX_ZOOMS ?? 5);
+/** Total model round-trips (including the final extract). */
+const MAX_ROUNDS = MAX_ZOOMS + 2;
 
 if (!API_KEY) {
   console.warn("[llm] OPENROUTER_API_KEY is not set — vision calls will fail.");
@@ -168,6 +177,38 @@ const extractTool = {
   },
 };
 
+/**
+ * Zoom tool — lets the model magnify a region of any image to read small or
+ * blurry text (a tiny AWB label, a faint km/weight field) BEFORE it commits
+ * to the final extraction. Coordinates are normalised 0..1 (fractions of the
+ * frame) because the model does not know each image's pixel size. The server
+ * crops + upscales and feeds the magnified region back as a new image.
+ */
+const zoomTool = {
+  type: "function" as const,
+  function: {
+    name: "zoom_region",
+    description:
+      "Magnify a rectangular region of ONE image to read text that is too small, faint, or " +
+      "blurry to read at full-frame scale (e.g. a small AWB label, the Greutate/Distanță/AWB " +
+      "number). The cropped, upscaled region is returned to you as a new image. Use this BEFORE " +
+      "calling extract_shipment_data whenever a needed field is hard to read. Do not overuse it.",
+    parameters: {
+      type: "object",
+      properties: {
+        image_index: { type: "integer", description: "1-based image number to zoom into (as labelled 'Image N')." },
+        x0: { type: "number", description: "Left edge of the region, 0..1 (fraction of width)." },
+        y0: { type: "number", description: "Top edge of the region, 0..1 (fraction of height)." },
+        x1: { type: "number", description: "Right edge of the region, 0..1 (must be > x0)." },
+        y1: { type: "number", description: "Bottom edge of the region, 0..1 (must be > y0)." },
+        reason: { type: "string", description: "Briefly, which field you are trying to read." },
+      },
+      required: ["image_index", "x0", "y0", "x1", "y1"],
+      additionalProperties: false,
+    },
+  },
+};
+
 const SYSTEM_INSTRUCTION =
   "You are an OCR and structured-extraction assistant. " +
   "You will receive N images (N >= 2). ONE of them carries the Romanian courier waybill (AWB) — " +
@@ -207,7 +248,11 @@ const SYSTEM_INSTRUCTION =
   "• dimensions: on EACH invoice line, copy the product's physical SIZE token verbatim with its unit " +
   "(e.g. '10 x 100 x 50 cm', '2000 x 1000 mm', 'Ø 50 mm') from the product name/description or a size " +
   "column. This is cross-checked against the leroymerlin.ro product page, so accuracy matters. Do NOT " +
-  "put area (m²) or volume (l) here, and omit the field entirely when the line states no physical size.";
+  "put area (m²) or volume (l) here, and omit the field entirely when the line states no physical size.\n" +
+  "ZOOM: if any AWB field (the AWB number, Greutate, Distanță extra, Serviciu) or an invoice code/size " +
+  "is too small or blurry to read confidently, call zoom_region on that area FIRST (normalised 0..1 " +
+  "coordinates) and read the magnified crop that comes back, then continue. Prefer one or two precise " +
+  "zooms over guessing. When everything needed is legible, call extract_shipment_data — exactly once.";
 
 export interface ImageInput {
   data: Buffer;
@@ -232,90 +277,162 @@ export async function extractFromImages(
     throw new Error(`extractFromImages needs at least 2 images (1 AWB + 1 invoice), got ${images.length}.`);
   }
 
-  // Build one "Image N:" text part + image_url part per image. The
-  // ordering passes through to the model so it can emit invoice
-  // entries in the same order the caller dropped them.
-  const userContent: Array<
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string } }
-  > = [];
+  type Part = OpenAI.Chat.Completions.ChatCompletionContentPart;
+  type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+  // Build one "Image N:" text part + image_url part per image. `detail:
+  // "high"` asks the model to inspect at full resolution (tiles the image)
+  // rather than a downscaled thumbnail — the cheapest single win for small
+  // AWB labels. Ordering passes through so invoice entries come back in the
+  // order the caller dropped them.
+  const initialContent: Part[] = [];
   for (let i = 0; i < images.length; i++) {
     const img = images[i]!;
     const url = `data:${img.mimeType};base64,${img.data.toString("base64")}`;
-    userContent.push({ type: "text", text: `Image ${i + 1}:` });
-    userContent.push({ type: "image_url", image_url: { url } });
+    initialContent.push({ type: "text", text: `Image ${i + 1}:` });
+    initialContent.push({ type: "image_url", image_url: { url, detail: "high" } });
   }
-  userContent.push({
+  initialContent.push({
     type: "text",
     text:
       `You received ${images.length} images. ` +
       "Decide which ONE is the AWB (waybill); every other image is an invoice (factură). " +
-      "Then call extract_shipment_data ONCE with: the AWB's fields under `awb`, and one entry per " +
-      "invoice image under `invoices` (preserving the order in which the invoice images appeared above).",
+      "If any field you need is too small or blurry, call zoom_region first to magnify it, then read " +
+      "the crop that comes back. When everything needed is legible, call extract_shipment_data ONCE " +
+      "with: the AWB's fields under `awb`, and one entry per invoice image under `invoices` " +
+      "(preserving the order in which the invoice images appeared above).",
   });
 
-  // AbortSignal.timeout caps the TOTAL wall-clock of this extraction
-  // (including the one allowed retry) at EXTRACT_TIMEOUT_MS. When it
-  // fires, the SDK throws an abort error which we translate into a clear,
-  // actionable message below — instead of letting the request hang.
-  let completion;
-  try {
-    completion = await client.chat.completions.create(
-      {
-        model: MODEL,
-        temperature: 0.05,
-        messages: [
-          { role: "system", content: SYSTEM_INSTRUCTION },
-          { role: "user", content: userContent },
-        ],
-        tools: [extractTool],
-        tool_choice: {
-          type: "function",
-          function: { name: "extract_shipment_data" },
+  const messages: Msg[] = [
+    { role: "system", content: SYSTEM_INSTRUCTION },
+    { role: "user", content: initialContent },
+  ];
+
+  // ONE hard deadline for the whole agentic loop (every model round + every
+  // zoom). Each call gets the remaining budget as its AbortSignal, so a stall
+  // anywhere still fails fast instead of multiplying the wait.
+  const deadline = Date.now() + EXTRACT_TIMEOUT_MS;
+  const timeoutError = () =>
+    new Error(
+      `Vision extraction timed out after ${Math.round(EXTRACT_TIMEOUT_MS / 1000)}s. ` +
+        "The image is likely hard to read — e.g. a small AWB label laid on top of an invoice, " +
+        "or a blurry/angled photo. Re-shoot the AWB clearly (ideally on its own) and retry.",
+    );
+
+  let zoomsUsed = 0;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const left = deadline - Date.now();
+    if (left <= 0) throw timeoutError();
+
+    // Once the zoom budget is spent (or this is the last allowed round) force
+    // the final answer; otherwise let the model choose to zoom or extract.
+    const forceExtract = zoomsUsed >= MAX_ZOOMS || round === MAX_ROUNDS - 1;
+
+    let completion;
+    try {
+      completion = await client.chat.completions.create(
+        {
+          model: MODEL,
+          temperature: 0.05,
+          messages,
+          tools: forceExtract ? [extractTool] : [extractTool, zoomTool],
+          tool_choice: forceExtract
+            ? { type: "function", function: { name: "extract_shipment_data" } }
+            : "auto",
         },
-      },
-      { signal: AbortSignal.timeout(EXTRACT_TIMEOUT_MS) },
-    );
-  } catch (err) {
-    const e = err as { name?: string; message?: string };
-    const aborted =
-      e?.name === "APIUserAbortError" ||
-      e?.name === "APIConnectionTimeoutError" ||
-      e?.name === "AbortError" ||
-      e?.name === "TimeoutError" ||
-      /abort|timed?\s*out|timeout/i.test(e?.message ?? "");
-    if (aborted) {
-      throw new Error(
-        `Vision extraction timed out after ${Math.round(EXTRACT_TIMEOUT_MS / 1000)}s. ` +
-          "The image is likely hard to read — e.g. a small AWB label laid on top of an invoice, " +
-          "or a blurry/angled photo. Re-shoot the AWB clearly (ideally on its own) and retry.",
+        { signal: AbortSignal.timeout(left) },
       );
+    } catch (err) {
+      const e = err as { name?: string; message?: string };
+      const aborted =
+        e?.name === "APIUserAbortError" ||
+        e?.name === "APIConnectionTimeoutError" ||
+        e?.name === "AbortError" ||
+        e?.name === "TimeoutError" ||
+        /abort|timed?\s*out|timeout/i.test(e?.message ?? "");
+      if (aborted) throw timeoutError();
+      throw err;
     }
-    throw err;
+
+    const message = completion.choices[0]?.message;
+    const toolCalls = message?.tool_calls ?? [];
+
+    // The final extraction wins, even if the model also asked to zoom this turn.
+    const extractCall = toolCalls.find((t) => t.function.name === "extract_shipment_data");
+    if (extractCall) {
+      let rawArgs: unknown;
+      try {
+        rawArgs = JSON.parse(extractCall.function.arguments);
+      } catch (err) {
+        throw new Error(
+          `Tool call arguments were not valid JSON:\n${extractCall.function.arguments}\n\n${(err as Error).message}`,
+        );
+      }
+      const parsed = ExtractedSchema.safeParse(rawArgs);
+      if (!parsed.success) {
+        throw new Error(
+          `Model output failed schema validation:\n${parsed.error.toString()}\n\nRaw args:\n${JSON.stringify(rawArgs, null, 2)}`,
+        );
+      }
+      return parsed.data;
+    }
+
+    const zoomCalls = toolCalls.filter((t) => t.function.name === "zoom_region");
+    if (zoomCalls.length === 0) {
+      // No tool call (prose, or empty). Record it and nudge toward the tools.
+      if (message) messages.push(message as Msg);
+      messages.push({
+        role: "user",
+        content: "Call extract_shipment_data now (or zoom_region first if a field is unreadable).",
+      });
+      continue;
+    }
+
+    // Record the assistant turn that issued the zoom calls. EVERY tool_call
+    // must be answered with a tool message before the next assistant turn,
+    // then the magnified crops ride in as a fresh user image turn.
+    messages.push(message as Msg);
+    const cropParts: Part[] = [];
+    for (const zc of zoomCalls) {
+      let note: string;
+      if (zoomsUsed >= MAX_ZOOMS) {
+        note = "Zoom budget exhausted — call extract_shipment_data now with your best reading.";
+      } else {
+        try {
+          const a = JSON.parse(zc.function.arguments) as {
+            image_index?: number; x0?: number; y0?: number; x1?: number; y1?: number; reason?: string;
+          };
+          const idx = Math.round(Number(a.image_index ?? 0)) - 1;
+          const src = images[idx];
+          if (!src) {
+            note = `No image ${a.image_index} exists (there are ${images.length}). Use 1..${images.length}.`;
+          } else {
+            const crop = await cropRegion(src.data, {
+              x0: Number(a.x0), y0: Number(a.y0), x1: Number(a.x1), y1: Number(a.y1),
+            });
+            zoomsUsed += 1;
+            console.info(`[llm] zoom #${zoomsUsed}: image ${idx + 1} → ${crop.width}x${crop.height}${a.reason ? ` (${a.reason})` : ""}`);
+            cropParts.push({
+              type: "text",
+              text: `Zoom of Image ${idx + 1}${a.reason ? ` — ${a.reason}` : ""} (${crop.width}x${crop.height}):`,
+            });
+            cropParts.push({ type: "image_url", image_url: { url: crop.dataUrl, detail: "high" } });
+            note = `Zoom of image ${idx + 1} ready — see the magnified image that follows.`;
+          }
+        } catch (err) {
+          note = `Zoom failed: ${(err as Error).message}. Read at full frame or pick another region.`;
+        }
+      }
+      messages.push({ role: "tool", tool_call_id: zc.id, content: note });
+    }
+    if (cropParts.length > 0) {
+      messages.push({ role: "user", content: cropParts });
+    }
   }
 
-  const choice = completion.choices[0];
-  const toolCall = choice?.message?.tool_calls?.[0];
-  if (!toolCall || toolCall.function.name !== "extract_shipment_data") {
-    throw new Error(
-      `Model did not call extract_shipment_data. Got: ${JSON.stringify(choice?.message)}`,
-    );
-  }
-
-  let rawArgs: unknown;
-  try {
-    rawArgs = JSON.parse(toolCall.function.arguments);
-  } catch (err) {
-    throw new Error(
-      `Tool call arguments were not valid JSON:\n${toolCall.function.arguments}\n\n${(err as Error).message}`,
-    );
-  }
-
-  const parsed = ExtractedSchema.safeParse(rawArgs);
-  if (!parsed.success) {
-    throw new Error(
-      `Model output failed schema validation:\n${parsed.error.toString()}\n\nRaw args:\n${JSON.stringify(rawArgs, null, 2)}`,
-    );
-  }
-  return parsed.data;
+  throw new Error(
+    "Vision extraction did not produce a result after the allotted zoom rounds. " +
+      "Re-shoot the AWB clearly (ideally on its own) and retry.",
+  );
 }
