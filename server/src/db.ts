@@ -41,7 +41,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { publishPairEvent } from "./events.js";
-import type { Extracted, Verification } from "./schema.js";
+import type { Extracted, Verification, Routing, StoreKey } from "./schema.js";
 import type { LmProduct } from "./leroymerlin.js";
 import type { PricingBreakdown } from "./pricing.js";
 import type { Service } from "./tariffs.js";
@@ -143,6 +143,21 @@ const MIGRATIONS: { version: number; up: string }[] = [
       );
     `,
   },
+  {
+    // v3 — origin store + Mapbox-routed distance.
+    //   • `pairs.store` is the dispatch store (centralizator bucket) the
+    //     pair is filed under, derived from the AWB Expeditor. The desktop
+    //     app's top dropdown filters the queue by this column.
+    //   • `pairs.routing_json` stores the full Routing report (store source,
+    //     Mapbox km vs AWB km, the geocoded delivery address, fallbacks) so
+    //     the detail page can show how the distance was determined.
+    version: 3,
+    up: `
+      ALTER TABLE pairs ADD COLUMN store        TEXT;
+      ALTER TABLE pairs ADD COLUMN routing_json TEXT;
+      CREATE INDEX IF NOT EXISTS pairs_store_idx ON pairs(store);
+    `,
+  },
 ];
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -188,6 +203,12 @@ export type PairStatus =
       serviceFallback: boolean;
       edits: Extracted;
       breakdown: PricingBreakdown;
+      /** Origin store = the centralizator bucket this pair is filed under
+       *  (derived from the AWB Expeditor). Null when undetermined. */
+      store?: StoreKey | null;
+      /** How the distance + store were resolved (Mapbox route store →
+       *  delivery, or AWB-printed km fallback). */
+      routing?: Routing;
       /** Leroy Merlin cross-check. Optional + arrives after the price
        *  (a second persist), so a freshly-calculated pair may be "ready"
        *  with no verification yet. */
@@ -226,6 +247,8 @@ interface PairRow {
   edits_json: string | null;
   breakdown_json: string | null;
   verification_json: string | null;
+  store: StoreKey | null;
+  routing_json: string | null;
 }
 
 interface ImageRow {
@@ -249,7 +272,7 @@ const stmt = {
   selectAllPairs: db.prepare<[], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
             service, service_fallback, edits_json, breakdown_json,
-            verification_json
+            verification_json, store, routing_json
        FROM pairs
        ORDER BY created_at ASC`,
   ),
@@ -267,7 +290,7 @@ const stmt = {
   selectPair: db.prepare<[string], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
             service, service_fallback, edits_json, breakdown_json,
-            verification_json
+            verification_json, store, routing_json
        FROM pairs
        WHERE id = ?`,
   ),
@@ -291,6 +314,8 @@ const stmt = {
             edits_json       = @edits_json,
             breakdown_json   = @breakdown_json,
             verification_json = @verification_json,
+            store            = @store,
+            routing_json     = @routing_json,
             updated_at       = @updated_at
       WHERE id = @id`,
   ),
@@ -372,12 +397,22 @@ function rowToStatus(r: PairRow): PairStatus {
           verification = undefined; // corrupt blob — drop it, keep the pair
         }
       }
+      let routing: Routing | undefined;
+      if (r.routing_json) {
+        try {
+          routing = JSON.parse(r.routing_json) as Routing;
+        } catch {
+          routing = undefined; // corrupt blob — drop it, keep the pair
+        }
+      }
       return {
         kind: "ready",
         service: r.service,
         serviceFallback: r.service_fallback === 1,
         edits,
         breakdown,
+        store: r.store ?? routing?.store ?? null,
+        routing,
         verification,
       };
     } catch {
@@ -528,6 +563,8 @@ export function persistPairStatus(id: string, status: PairStatus): boolean {
       edits_json: JSON.stringify(status.edits),
       breakdown_json: JSON.stringify(status.breakdown),
       verification_json: status.verification ? JSON.stringify(status.verification) : null,
+      store: status.store ?? status.routing?.store ?? null,
+      routing_json: status.routing ? JSON.stringify(status.routing) : null,
       updated_at: now,
     });
   } else if (status.kind === "error") {

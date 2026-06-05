@@ -36,7 +36,7 @@ import {
   persistPairStatus,
   type PairStatus,
 } from "../db.js";
-import { ExtractedSchema, VerificationSchema } from "../schema.js";
+import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
 
 /* ──────────────────────────────────────────────────────────────────────
  * Request schemas
@@ -138,6 +138,10 @@ const StatusSchema = z.discriminatedUnion("kind", [
     serviceFallback: z.boolean(),
     edits: ExtractedSchema,
     breakdown: PricingBreakdownSchema,
+    // Origin store (centralizator bucket) + how the distance was routed.
+    // Optional so an older client that doesn't send them still persists.
+    store: StoreKeySchema.nullable().optional(),
+    routing: RoutingSchema.optional(),
     // Optional: arrives on a second persist after the Leroy Merlin
     // cross-check completes (the price persist has no verification yet).
     verification: VerificationSchema.optional(),

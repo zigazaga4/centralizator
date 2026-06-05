@@ -16,6 +16,7 @@ import { extractAndPrice, PipelineError } from "../pipeline.js";
 import {
   PricingRequestSchema,
   type Extracted,
+  type Routing,
 } from "../schema.js";
 
 const ACCEPTED_MIME = new Set([
@@ -38,6 +39,8 @@ export interface ExtractResponse {
   resolvedService: Service;
   serviceFallback: boolean;
   breakdown: PricingBreakdown;
+  /** Origin store + the routed distance the price was built from. */
+  routing: Routing;
 }
 
 export default async function extractRoutes(app: FastifyInstance) {
@@ -74,9 +77,9 @@ export default async function extractRoutes(app: FastifyInstance) {
     }
 
     try {
-      const { extracted, resolvedService, serviceFallback, breakdown } =
+      const { extracted, resolvedService, serviceFallback, breakdown, routing } =
         await extractAndPrice(images);
-      const body: ExtractResponse = { extracted, resolvedService, serviceFallback, breakdown };
+      const body: ExtractResponse = { extracted, resolvedService, serviceFallback, breakdown, routing };
       return reply.send(body);
     } catch (err) {
       if (err instanceof PipelineError && err.stage === "pricing") {

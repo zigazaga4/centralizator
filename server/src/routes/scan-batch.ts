@@ -120,13 +120,15 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
   signalExtracting(id);
 
   try {
-    const { extracted, resolvedService, serviceFallback, breakdown } = await extractAndPrice(aiImages);
+    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await extractAndPrice(aiImages);
     persistPairStatus(id, {
       kind: "ready",
       service: resolvedService,
       serviceFallback,
       edits: extracted,
       breakdown,
+      store: routing.store,
+      routing,
     });
 
     // Product cross-check — best effort, never fails the pair.
@@ -139,6 +141,8 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
           serviceFallback,
           edits: extracted,
           breakdown,
+          store: routing.store,
+          routing,
           verification,
         });
       } catch (err) {

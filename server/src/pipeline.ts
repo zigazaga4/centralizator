@@ -18,6 +18,7 @@
 import { extractFromImages, type ImageInput } from "./gemini.js";
 import { calculatePrice, type PricingBreakdown } from "./pricing.js";
 import { SERVICE_TEXT_MAP, type Service } from "./tariffs.js";
+import { resolveRouting, type Routing } from "./routing.js";
 import type { Extracted } from "./schema.js";
 
 export type { ImageInput } from "./gemini.js";
@@ -27,6 +28,9 @@ export interface ExtractAndPriceResult {
   resolvedService: Service;
   serviceFallback: boolean;
   breakdown: PricingBreakdown;
+  /** Origin store + the distance the price was built from (Mapbox-routed,
+   *  store → delivery, or the AWB's printed km on any fallback). */
+  routing: Routing;
 }
 
 /**
@@ -99,12 +103,20 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
   const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
 
+  // Resolve the origin store + the routed delivery distance. This OVERWRITES
+  // the AWB's printed km with the Mapbox shortest-road distance (store →
+  // delivery) when available, so the price — and everything the UI shows and
+  // edits — is built on the same authoritative number. On any Mapbox failure
+  // it leaves the AWB's printed km in place (resolveRouting never throws).
+  const routing = await resolveRouting(extracted);
+  extracted.awb.distance_extra_km = routing.distanceKm;
+
   let breakdown: PricingBreakdown;
   try {
     breakdown = calculatePrice({
       service,
       weightKg: extracted.awb.weight_kg,
-      distanceKm: extracted.awb.distance_extra_km,
+      distanceKm: routing.distanceKm,
       numDeliveries: extracted.awb.num_deliveries ?? 1,
       deliveryDate: extracted.awb.delivery_date,
       bulkyUnits,
@@ -114,5 +126,5 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
     throw new PipelineError("pricing", (err as Error).message, extracted);
   }
 
-  return { extracted, resolvedService: service, serviceFallback, breakdown };
+  return { extracted, resolvedService: service, serviceFallback, breakdown, routing };
 }

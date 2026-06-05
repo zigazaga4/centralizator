@@ -180,6 +180,44 @@ export const VerificationSchema = z
   .passthrough();
 export type Verification = z.infer<typeof VerificationSchema>;
 
+/* ──────────────────────────────────────────────────────────────────────
+ * Origin store + routed distance
+ *
+ * Every shipment leaves from ONE Leroy Merlin store. That store is the
+ * centralizator the pair is filed under AND the route origin for the
+ * Mapbox km. `Routing` is the contract carried on a ready pair: the store,
+ * the distance the price was built from, and where that distance came
+ * from (a live Mapbox route or the AWB's printed km on any fallback).
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** The four dispatch-store keys — identical to the pricing City keys. */
+export const StoreKeySchema = z.enum(["Ploiesti", "IasiTudor", "IasiERA", "Constanta"]);
+export type StoreKey = z.infer<typeof StoreKeySchema>;
+
+export const RoutingSchema = z
+  .object({
+    /** Origin store / centralizator bucket. Null when undetermined. */
+    store: StoreKeySchema.nullable(),
+    /** How the store was decided. */
+    storeSource: z.enum(["expeditor", "nearest", "none"]),
+    /** Km the price was built from. */
+    distanceKm: z.number(),
+    /** Whether `distanceKm` is a live Mapbox route or the AWB's printed km. */
+    source: z.enum(["mapbox", "awb"]),
+    /** Km printed on the AWB ('Distanță extra'), kept for reference. */
+    awbKm: z.number(),
+    /** Mapbox-routed km when computed; null on any fallback. */
+    mapboxKm: z.number().nullable(),
+    /** Delivery address text that was geocoded. */
+    deliveryAddress: z.string().nullable(),
+    /** True only when geocode + route both succeeded. */
+    resolved: z.boolean(),
+    /** Short Romanian note explaining a fallback, for the UI. */
+    note: z.string().nullable(),
+  })
+  .passthrough();
+export type Routing = z.infer<typeof RoutingSchema>;
+
 /**
  * The shape the UI POSTs to /price for live recalculation when the
  * user edits one of the four pricing-relevant fields. Lean on purpose:
