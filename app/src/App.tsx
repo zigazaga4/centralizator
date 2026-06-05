@@ -877,31 +877,11 @@ export default function App() {
             onBack={() => setSelectedId(null)}
             onRemove={() => removePair(selectedPair.id)}
           />
-        ) : pairs.length === 0 ? (
-          /* True first-run: no pairs anywhere. Show the hero with
-           * today's date so the user knows where the first pair will
-           * file. Day machinery only appears after the first add. */
-          <div className="mx-auto w-full max-w-3xl pt-12">
-            <h2 className="mb-3 text-center text-3xl font-semibold tracking-tight text-ink-900 sm:text-4xl">
-              Adaugă perechi pentru {fmtDate(selectedDay)}
-            </h2>
-            <p className="mx-auto mb-10 max-w-lg text-center text-sm text-ink-600">
-              Adaugă câte o pereche (sau N×2 imagini deodată pentru N perechi),
-              apoi apasă{" "}
-              <kbd className="rounded border border-ink-200 bg-canvas-50 px-1 font-mono text-[11px] text-ink-700">
-                ↵ Enter
-              </kbd>{" "}
-              ori butonul{" "}
-              <span className="font-medium text-coral-700">Calculează</span>{" "}
-              pentru a le procesa în paralel. Fiecare zi îşi are propria
-              filă — paperwork-ul de mâine stă separat de cel de azi.
-            </p>
-            <PairAddCard hero onAddPair={addPair} />
-          </div>
         ) : (
-          /* Standard queue view. Day tabs always on top once at least
-           * one pair exists, then the add-card, then either the
-           * day's table or an empty-day notice. */
+          /* Standard queue view — the spreadsheet is shown straight away,
+           * empty or not, so freshly scanned phone pairs stream into it
+           * live. Day tabs on top, then the compact add-card, then the
+           * table (its column headers stand in for the "empty" state). */
           <>
             <DayTabs
               days={dayCounts}
@@ -909,19 +889,15 @@ export default function App() {
               onSelect={setSelectedDay}
             />
             <PairAddCard onAddPair={addPair} />
-            {dayPairs.length === 0 ? (
-              <EmptyDayNotice day={selectedDay} />
-            ) : (
-              <PairsTable
-                pairs={dayPairs}
-                city={selectedCity}
-                collaborator={selectedCollaborator}
-                verifyingIds={verifyingIds}
-                onPatchPair={patchPair}
-                onRemovePair={removePair}
-                onSelectPair={setSelectedId}
-              />
-            )}
+            <PairsTable
+              pairs={dayPairs}
+              city={selectedCity}
+              collaborator={selectedCollaborator}
+              verifyingIds={verifyingIds}
+              onPatchPair={patchPair}
+              onRemovePair={removePair}
+              onSelectPair={setSelectedId}
+            />
             <p className="text-center text-[11px] uppercase tracking-widest text-ink-400">
               Click pe orice rând pentru detalii complete · <kbd className="rounded border border-ink-200 bg-canvas-50 px-1 font-mono text-[10px] text-ink-700">Esc</kbd> pentru a reveni · perechile sunt salvate automat
             </p>
@@ -1093,16 +1069,3 @@ function CollaboratorSelect({
   );
 }
 
-function EmptyDayNotice({ day }: { day: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-ink-200 bg-canvas-50 px-6 py-10 text-center">
-      <p className="text-sm font-medium text-ink-700">
-        Nicio pereche pentru {fmtDate(day)}.
-      </p>
-      <p className="mt-1 text-xs text-ink-500">
-        Adaugă deasupra o pereche AWB + Factură (sau drop N×2 imagini pentru N
-        perechi) pentru a începe ziua.
-      </p>
-    </div>
-  );
-}

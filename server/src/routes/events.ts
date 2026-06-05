@@ -38,12 +38,26 @@ export default async function eventRoutes(app: FastifyInstance) {
     reply.hijack();
     const res = reply.raw;
 
+    // CORS must be set BY HAND here. `reply.hijack()` makes us own the raw
+    // socket, which skips @fastify/cors's onSend hook — so without this the
+    // stream comes back with no Access-Control-Allow-Origin and a cross-origin
+    // caller (the Tauri WebView, whose origin is NOT the server's) has the
+    // response blocked by the browser and loops forever on "reconnecting".
+    // curl never sees this because curl does not enforce CORS. We reflect the
+    // request Origin (no wildcard) so it works regardless of the exact
+    // tauri://localhost / https://tauri.localhost scheme the WebView uses.
+    const origin = req.headers.origin;
+    const corsHeaders: Record<string, string> = origin
+      ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" }
+      : { "Access-Control-Allow-Origin": "*" };
+
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       // Defeat proxy/WebView response buffering so events flush immediately.
       "X-Accel-Buffering": "no",
+      ...corsHeaders,
     });
     // An initial comment flushes headers and opens the stream right away.
     res.write(": connected\n\n");
