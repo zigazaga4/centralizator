@@ -330,6 +330,17 @@ export interface PricingBreakdown {
   incrementTariff: number;
   incrementCost: number;
   weekendSurcharge: number;
+  /** Standard unloading fees detected on the shipment (base count, before
+   *  the >1200 kg multiplier). 0 when no unloading applies. */
+  unloadingUnits: number;
+  /** Total unloading fees billed (incl. the >1200 kg multiplier). */
+  unloadingCount: number;
+  /** Unloading tax in RON WITH VAT = unloadingCount × 210. COMPLETELY
+   *  separate: not commissioned and NOT folded into any total — reported on
+   *  its own and handled separately by the operator. */
+  unloadingTax: number;
+  /** Unloading tax WITHOUT VAT = unloadingCount × 177.69 (reference). */
+  unloadingTaxNet: number;
   /**
    * Carrier subtotal — what Stalexone (the carrier) gets, RON with VAT
    * included at the current rate. The shared base every per-city
@@ -406,6 +417,10 @@ export interface PricingRequest {
   distance_km: number;
   num_deliveries: number;
   delivery_date: string;
+  /** Standard unloading fees on the shipment, preserved across live edits
+   *  so the unloading tax survives a re-price. The >1200 kg multiplier is
+   *  re-applied server-side. Optional; defaults to 0. */
+  unloading_units?: number;
 }
 
 /* ──────────────────────────────────────────────────────────────────────

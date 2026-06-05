@@ -46,14 +46,82 @@ function coord(p: LngLat): string {
   return `${p.lng},${p.lat}`;
 }
 
+/** Romanian street-type abbreviations → the full word the geocoder indexes. */
+// Each pattern consumes the optional trailing dot and is anchored by a
+// lookahead for the next separator, so "Str." → "Strada" (dot gone) but the
+// full word "Strada" is never re-matched (keeps formatAddress idempotent).
+const SEP = "(?=\\s|,|$)";
+const STREET_ABBREV: readonly [RegExp, string][] = [
+  [new RegExp(`\\bb-?dul\\.?${SEP}`, "gi"), "Bulevardul"],
+  [new RegExp(`\\bblv?d\\.?${SEP}`, "gi"), "Bulevardul"],
+  [new RegExp(`\\bbd\\.?${SEP}`, "gi"), "Bulevardul"],
+  [new RegExp(`\\bstr\\.?${SEP}`, "gi"), "Strada"],
+  [new RegExp(`\\bs[oô]s\\.?${SEP}`, "gi"), "Șoseaua"],
+  [new RegExp(`\\bşos\\.?${SEP}`, "gi"), "Șoseaua"],
+  [new RegExp(`\\bcal\\.?${SEP}`, "gi"), "Calea"],
+  [new RegExp(`\\bp-?ta\\.?${SEP}`, "gi"), "Piața"],
+  [new RegExp(`\\bpta\\.?${SEP}`, "gi"), "Piața"],
+];
+
+/**
+ * Sub-building / contact noise that hurts geocoding. Romanian AWBs cram the
+ * block, staircase, floor, apartment, intercom, even a phone number into the
+ * address. The geocoder resolves to a STREET; these only confuse it, so we
+ * drop any comma-segment that is purely one of them.
+ */
+const NOISE_SEGMENT =
+  /^(?:bl|bloc|sc|scara|ap|apt|apartament|et|etaj|parter|tronson|int|intrare|interfon|cam|camera|tel|telefon|mobil|pers(?:oana)?\s*contact|cod\s*postal)\b/i;
+const PHONE_SEGMENT = /^\+?\d[\d\s.\-/]{6,}$/;
+
+/**
+ * Format a raw AWB delivery address so Mapbox resolves the best location.
+ *
+ * The model copies the address verbatim off the AWB; that text often
+ * geocodes poorly. We:
+ *   • expand street abbreviations (Str. → Strada, Bd. → Bulevardul, …),
+ *   • drop sub-building + contact noise (Bloc, Sc., Ap., Et., phone, …),
+ *   • collapse separators, and
+ *   • pin the country (", România") so the search stays in Romania.
+ *
+ * Pure + idempotent. Returns "" for empty input.
+ */
+export function formatAddress(raw: string): string {
+  let s = (raw ?? "").replace(/\s*[\r\n]+\s*/g, ", ").trim();
+  if (!s) return "";
+
+  for (const [re, full] of STREET_ABBREV) s = s.replace(re, full);
+
+  const parts = s
+    .split(",")
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter((p) => p && !NOISE_SEGMENT.test(p) && !PHONE_SEGMENT.test(p));
+
+  // De-duplicate consecutive identical segments (OCR sometimes repeats the
+  // locality), preserving order.
+  const seen = new Set<string>();
+  const kept = parts.filter((p) => {
+    const k = p.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  let out = kept.join(", ").replace(/\s+/g, " ").trim();
+  if (!/rom[âa]nia/i.test(out)) out = out ? `${out}, România` : "România";
+  return out;
+}
+
 /**
  * Forward-geocode a free-text Romanian address to coordinates. Returns
  * null when the address is empty or Mapbox finds no match (the caller
  * then falls back to the AWB's printed km).
  */
-export async function geocode(address: string): Promise<LngLat | null> {
+export async function geocode(
+  address: string,
+  opts: { proximity?: LngLat } = {},
+): Promise<LngLat | null> {
   const token = ensureToken();
-  const q = address.trim();
+  const q = formatAddress(address);
   if (!q) return null;
 
   const params = new URLSearchParams({
@@ -63,6 +131,12 @@ export async function geocode(address: string): Promise<LngLat | null> {
     limit: "1",
     access_token: token,
   });
+  // Bias the result toward the dispatch store — deliveries cluster near the
+  // store they leave from, so this disambiguates same-named streets in
+  // different localities and picks the closest plausible match.
+  if (opts.proximity) {
+    params.set("proximity", `${opts.proximity.lng},${opts.proximity.lat}`);
+  }
   const res = await fetch(`${GEOCODE_URL}?${params.toString()}`, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });

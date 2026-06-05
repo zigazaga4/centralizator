@@ -111,6 +111,15 @@ const invoiceSchema = {
     buyer_name: { type: "string" },
     buyer_cui: { type: "string" },
     order_number: { type: "string", description: "'Comandă' / order number on the invoice." },
+    unloading_count: {
+      type: "integer",
+      description:
+        "How many STANDARD unloading fees ('descărcare') this invoice bills. Count a line ONLY when " +
+        "its description is 'descărcare'/'descarcare' AND its amount is the standard unloading fee: " +
+        "177.69 RON without VAT (value_net ≈ 177.69) or 210 RON with VAT. Use the line quantity if it " +
+        "is greater than 1. A 'descărcare' line billed at any OTHER amount is a different service — do " +
+        "NOT count it. 0 when there is no qualifying line.",
+    },
     items: {
       type: "array",
       description: "Invoice line items.",
@@ -245,6 +254,12 @@ const SYSTEM_INSTRUCTION =
   "• is_bulky: on EACH invoice line item, set is_bulky=true ONLY when the product is polystyrene " +
   "(polistiren — EPS/XPS, expandat/extrudat) or mineral/glass/basalt wool (vată minerală/bazaltică/de sticlă). " +
   "These are light but bulky and are billed per extra transport. Every other product is is_bulky=false.\n" +
+  "• unloading_count (per invoice): set it to how many STANDARD unloading fees ('descărcare') the " +
+  "invoice bills. A line counts ONLY if its description is descărcare/descarcare AND its amount is the " +
+  "standard fee — 177.69 RON without VAT (value_net ≈ 177.69) or 210 RON with VAT (use the line's " +
+  "quantity if > 1). A 'descărcare' line at any OTHER amount is a different service and must NOT be " +
+  "counted. Set 0 when there is no qualifying line. This is also implied when the AWB 'Serviciu' field " +
+  "reads 'Standard descărcare'.\n" +
   "• dimensions: on EACH invoice line, copy the product's physical SIZE token verbatim with its unit " +
   "(e.g. '10 x 100 x 50 cm', '2000 x 1000 mm', 'Ø 50 mm') from the product name/description or a size " +
   "column. This is cross-checked against the leroymerlin.ro product page, so accuracy matters. Do NOT " +

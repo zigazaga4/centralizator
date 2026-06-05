@@ -84,7 +84,12 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
   if (!deliveryAddress) return fallback("Lipsește adresa de livrare — s-a folosit km de pe AWB.");
 
   try {
-    const dest = await geocode(deliveryAddress);
+    // Bias geocoding toward the origin store when we know it (or the Iași
+    // region for the ambiguous Iași case) so same-named streets resolve to
+    // the right locality and the nearest plausible match wins.
+    const proximity =
+      specific ? storeLngLat(specific) : matched === "Iasi" ? storeLngLat("IasiTudor") : undefined;
+    const dest = await geocode(deliveryAddress, { proximity });
     if (!dest) return fallback("Adresa de livrare nu a putut fi localizată — s-a folosit km de pe AWB.");
 
     // Decide the origin store.

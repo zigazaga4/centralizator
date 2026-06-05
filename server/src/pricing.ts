@@ -25,15 +25,25 @@
  *   extraKmCost      = (km - 50) × 1.90 × 2 × (rounds × deliveries + bulkyTransports)  [>50 km]
  *   incrementCost    = (weightIncrements + (deliveries - 1) + bulkyTransports) × INCREMENT_TARIFFS[...]
  *   weekendSurcharge = 11.90 if Sat/Sun else 0
+ *   unloadingCount   = unloadingUnits + (weight > 1200kg ? weightIncrements : 0)
+ *                      (the standard "descărcare" fee, +1 per extra transport
+ *                       when the unloaded shipment is over 1200kg)
+ *   unloadingTax     = unloadingCount × 210  (RON with VAT; 177.69 without)
  *   commissionBase   = baseTariff + incrementCost + weekendSurcharge
  *   carrierTotal     = commissionBase + extraKmCost
  *
  * The per-km surcharge (extraKmCost) is a pass-through cost that is NOT
  * marked up by the commission/bonus percentage. The company commission
- * and collaborator bonus apply ONLY to commissionBase; the km cost is
- * then added flat on top at the very end. Per ops directive 2026-06-03:
- * "take the 1.90 addon out of the initial calculation, add it with a
- * simple plus at the end of the commission calculation".
+ * and collaborator bonus apply ONLY to commissionBase; the km cost is then
+ * added flat on top at the very end. Per ops directive 2026-06-03.
+ *
+ * The unloading tax (unloadingTax) is COMPLETELY separate: it is neither
+ * commissioned NOR folded into any total. The commission/carrier/customer/
+ * collaborator math is identical to the pre-descărcare engine. Unloading is
+ * reported only on its own fields (unloadingCount / unloadingTax /
+ * unloadingTaxNet) and handled separately by the operator. Per ops directive
+ * 2026-06-05: "descărcare is its own tax, it doesn't go into the commission
+ * at all".
  *
  *   cityCommissions[city].commission    = round2(commissionBase × companyPct[city])
  *   cityCommissions[city].customerTotal = round2(commissionBase + commission + extraKmCost)
@@ -56,6 +66,8 @@ import {
   PER_KM_SURCHARGE,
   EXTRA_KM_THRESHOLD,
   BULKY_UNITS_PER_TRANSPORT,
+  UNLOADING_TAX_GROSS,
+  UNLOADING_TAX_NET,
   CITIES,
   COLLABORATORS,
   COMPANY_COMMISSION_BY_CITY,
@@ -88,6 +100,11 @@ export interface PricingInput {
    *  ride in the base transport; when other products share the truck,
    *  every 24 bulky units needs its own transport. Default false. */
   hasOtherProducts?: boolean;
+  /** Count of standard unloading fees ("descărcare", 177.69 net / 210 gross)
+   *  billed on the shipment — detected from the invoice(s) (or the AWB's
+   *  "Standard descărcare" service). 0 when no unloading. The >1200 kg
+   *  multiplier (one extra unloading per extra transport) is applied here. */
+  unloadingUnits?: number;
 }
 
 export interface PricingBreakdown {
@@ -129,6 +146,18 @@ export interface PricingBreakdown {
   incrementCost: number;
   /** Weekend surcharge (0 or 11.90). */
   weekendSurcharge: number;
+  /** Standard unloading fees detected on the shipment (the base count,
+   *  before the >1200 kg multiplier). 0 when no unloading applies. */
+  unloadingUnits: number;
+  /** Total unloading fees billed = unloadingUnits + (weight > 1200 kg ?
+   *  weightIncrements : 0). One extra unloading per extra transport. */
+  unloadingCount: number;
+  /** Unloading tax in RON WITH VAT = unloadingCount × 210. COMPLETELY
+   *  separate: not commissioned and NOT folded into any total (carrier,
+   *  customer, or collaborator). Reported on its own for the operator. */
+  unloadingTax: number;
+  /** Unloading tax WITHOUT VAT = unloadingCount × 177.69 (for reference). */
+  unloadingTaxNet: number;
   /** Commission base in RON, VAT included = baseTariff + incrementCost +
    *  weekendSurcharge. This is what the city commission and the
    *  collaborator bonus percentages are applied to. It deliberately
@@ -169,6 +198,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const { service, weightKg, distanceKm, numDeliveries, deliveryDate } = input;
   const bulkyUnits = Math.max(0, Math.floor(input.bulkyUnits ?? 0));
   const hasOtherProducts = input.hasOtherProducts ?? false;
+  const unloadingUnits = Math.max(0, Math.floor(input.unloadingUnits ?? 0));
 
   if (!Number.isInteger(numDeliveries) || numDeliveries < 1) {
     throw new RangeError(`numDeliveries must be a positive integer, got ${numDeliveries}`);
@@ -231,6 +261,16 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const weekend = isWeekend(deliveryDate);
   const weekendSurcharge = weekend ? WEEKEND_SURCHARGE : 0;
 
+  // Unloading fee ("descărcare") — a SEPARATE flat tax, not commissioned.
+  // Base count is what the invoice/AWB billed; when the unloaded shipment is
+  // over 1200 kg it rides on more than one transport, and the operator adds
+  // one more unloading per extra transport (= weightIncrements). Zero when no
+  // unloading applies.
+  const unloadingExtra = unloadingUnits > 0 && weightKg > 1200 ? weightIncrements : 0;
+  const unloadingCount = unloadingUnits > 0 ? unloadingUnits + unloadingExtra : 0;
+  const unloadingTax = round2(unloadingCount * UNLOADING_TAX_GROSS);
+  const unloadingTaxNet = round2(unloadingCount * UNLOADING_TAX_NET);
+
   // The commission/bonus percentage applies ONLY to the base work
   // (base tariff + increments + weekend), NOT to the per-km surcharge.
   // The km cost is a pass-through that gets added flat at the very end.
@@ -238,6 +278,8 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   // calculation, add it with a simple plus at the end of the commission".
   const commissionBase = round2(baseTariff + incrementCost + weekendSurcharge);
   // The carrier still receives the km money — it's just not commissionable.
+  // The unloading tax is kept ENTIRELY separate (its own breakdown fields)
+  // and is deliberately NOT added into carrierTotal or any other total.
   const carrierTotal = round2(commissionBase + extraKmCost);
 
   // City-side company commission (what the END customer in that city pays)
@@ -279,6 +321,10 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     incrementTariff: round2(incrementTariff),
     incrementCost,
     weekendSurcharge,
+    unloadingUnits,
+    unloadingCount,
+    unloadingTax,
+    unloadingTaxNet,
     commissionBase,
     carrierTotal,
     cityCommissions,

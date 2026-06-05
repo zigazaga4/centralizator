@@ -555,7 +555,7 @@ export default function App() {
     async (id: string) => {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
-      const { service, edits } = pair.status;
+      const { service, edits, breakdown } = pair.status;
       try {
         const b = await reprice({
           service,
@@ -563,6 +563,10 @@ export default function App() {
           distance_km: edits.awb.distance_extra_km,
           num_deliveries: edits.awb.num_deliveries,
           delivery_date: edits.awb.delivery_date,
+          // Carry the unloading count forward — it's derived from the invoice
+          // (not user-editable here), so a live re-price must preserve it or
+          // the separate unloading tax would silently vanish.
+          unloading_units: breakdown.unloadingUnits,
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever

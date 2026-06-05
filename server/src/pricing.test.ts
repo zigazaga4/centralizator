@@ -431,3 +431,77 @@ describe("calculatePrice — bulky goods (polystyrene / vata) extra transports",
     expect(r.carrierTotal).toBe(326.90);
   });
 });
+
+describe("calculatePrice — unloading tax (descărcare)", () => {
+  // One unloading, light shipment: reported as its own 210 gross / 177.69 net
+  // fee. It is COMPLETELY separate — neither commissioned nor folded into any
+  // total. Every total stays byte-for-byte identical to the no-unloading run.
+  it("reports a single 210 RON unloading fee separately, not in any total", () => {
+    const base = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingUnits: 1,
+    });
+    expect(r.unloadingUnits).toBe(1);
+    expect(r.unloadingCount).toBe(1);
+    expect(r.unloadingTax).toBe(210);
+    expect(r.unloadingTaxNet).toBe(177.69);
+    // commissionBase (the commissioned part) is unchanged by the tax.
+    expect(r.commissionBase).toBe(base.commissionBase);
+    // The unloading fee does NOT touch any total — carrier, every city, and
+    // every collaborator price are identical to the run with no descărcare.
+    expect(r.carrierTotal).toBe(base.carrierTotal);
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(
+      base.cityCommissions.Ploiesti.customerTotal,
+    );
+    expect(r.collaboratorPrices.Bitlo.total).toBe(
+      base.collaboratorPrices.Bitlo.total,
+    );
+  });
+
+  // >1200 kg: one extra unloading per extra transport (weightIncrements).
+  // 2500 kg → ceil((2500-1200)/1000) = 2 increments → 1 base + 2 = 3 fees.
+  it("adds one extra unloading per extra transport when over 1200 kg", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 2500, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingUnits: 1,
+    });
+    expect(r.weightIncrements).toBe(2);
+    expect(r.unloadingUnits).toBe(1);
+    expect(r.unloadingCount).toBe(3);
+    expect(r.unloadingTax).toBe(630);
+    expect(r.unloadingTaxNet).toBe(round2(3 * 177.69));
+  });
+
+  // No unloading detected → zero tax, totals identical to the plain run.
+  it("no unloading leaves the price untouched", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    expect(r.unloadingUnits).toBe(0);
+    expect(r.unloadingCount).toBe(0);
+    expect(r.unloadingTax).toBe(0);
+    expect(r.carrierTotal).toBe(48.40);
+  });
+
+  // The >1200 kg multiplier must NOT fire when no unloading applies.
+  it("does not add unloading for a heavy shipment with no descărcare", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 2500, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    expect(r.unloadingCount).toBe(0);
+    expect(r.unloadingTax).toBe(0);
+  });
+});
+
+/** Local 2-dp round mirroring the engine, for assertions. */
+function round2(x: number): number {
+  return Math.round((x + Number.EPSILON) * 100) / 100;
+}

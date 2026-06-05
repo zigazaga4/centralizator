@@ -71,6 +71,14 @@ export const InvoiceSchema = z.object({
   buyer_name: z.string().optional().nullable(),
   buyer_cui: z.string().optional().nullable(),
   order_number: z.string().optional().nullable(),
+  /**
+   * How many STANDARD unloading fees ("descărcare") this invoice bills —
+   * counted ONLY for lines whose amount is the standard unloading fee
+   * (177.69 RON without VAT / 210 RON with VAT). A "descărcare" line with
+   * any other amount is a different service and must NOT be counted. The
+   * vision model sets this per invoice; 0 when there is no such line.
+   */
+  unloading_count: z.number().int().nonnegative().optional().default(0),
   items: z.array(InvoiceItemSchema).default([]),
   invoice_total_net: z.number().optional().nullable(),
   invoice_total_vat: z.number().optional().nullable(),
@@ -243,5 +251,12 @@ export const PricingRequestSchema = z.object({
    */
   bulky_units: z.number().int().nonnegative().default(0),
   has_other_products: z.boolean().default(false),
+  /**
+   * Count of standard unloading fees ("descărcare", 177.69 net / 210 gross)
+   * on the shipment. Optional so the current client still reprices; defaults
+   * to 0 (no unloading tax) on that path. The >1200 kg multiplier is applied
+   * by the engine, not here.
+   */
+  unloading_units: z.number().int().nonnegative().default(0),
 });
 export type PricingRequest = z.infer<typeof PricingRequestSchema>;

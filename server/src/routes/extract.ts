@@ -99,7 +99,7 @@ export default async function extractRoutes(app: FastifyInstance) {
     }
     const {
       service, weight_kg, distance_km, num_deliveries, delivery_date,
-      bulky_units, has_other_products,
+      bulky_units, has_other_products, unloading_units,
     } = parsed.data;
     try {
       const breakdown = calculatePrice({
@@ -110,6 +110,7 @@ export default async function extractRoutes(app: FastifyInstance) {
         deliveryDate: delivery_date,
         bulkyUnits: bulky_units,
         hasOtherProducts: has_other_products,
+        unloadingUnits: unloading_units,
       });
       return reply.send({ breakdown });
     } catch (err) {

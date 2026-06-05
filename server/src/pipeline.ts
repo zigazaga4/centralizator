@@ -73,6 +73,28 @@ export function resolveService(serviceText: string): { service: Service; service
  * non-bulky product also rides on the shipment. Aggregated per AWB
  * (one physical delivery), since the truck-volume constraint is physical.
  */
+/**
+ * Resolve the count of standard unloading fees ("descărcare") on the
+ * shipment. The vision model marks qualifying invoice lines (billed at the
+ * standard 177.69 net / 210 gross fee) via each invoice's `unloading_count`;
+ * we sum them across invoices. If none are on the invoices but the AWB's
+ * `Serviciu` field reads "standard descărcare", that itself signals one
+ * unloading. The >1200 kg multiplier is applied later by the pricing engine.
+ */
+export function summariseUnloading(extracted: Extracted): number {
+  const fromInvoices = extracted.invoices.reduce(
+    (sum, inv) => sum + Math.max(0, Math.floor(inv.unloading_count ?? 0)),
+    0,
+  );
+  if (fromInvoices > 0) return fromInvoices;
+  // Fallback: the AWB service text names unloading even with no invoice line.
+  const service = (extracted.awb.service_text ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+  return /descarcare/.test(service) ? 1 : 0;
+}
+
 export function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasOtherProducts: boolean } {
   let bulkyUnits = 0;
   let hasOtherProducts = false;
@@ -102,6 +124,7 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
 
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
   const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
+  const unloadingUnits = summariseUnloading(extracted);
 
   // Resolve the origin store + the routed delivery distance. This OVERWRITES
   // the AWB's printed km with the Mapbox shortest-road distance (store →
@@ -121,6 +144,7 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
       deliveryDate: extracted.awb.delivery_date,
       bulkyUnits,
       hasOtherProducts,
+      unloadingUnits,
     });
   } catch (err) {
     throw new PipelineError("pricing", (err as Error).message, extracted);

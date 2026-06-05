@@ -211,6 +211,21 @@ export const EXTRA_KM_THRESHOLD = 50;
 export const BULKY_UNITS_PER_TRANSPORT = 24;
 
 /**
+ * Unloading fee ("descărcare") — a SEPARATE flat tax, not part of the
+ * transport tariff and NOT marked up by the city commission / collaborator
+ * bonus. Billed per qualifying unloading on the shipment.
+ *
+ * The operator fixed both figures verbatim: 177.69 RON without VAT, which
+ * is 210 RON with VAT. Only invoice "descărcare" lines billed at exactly
+ * this amount are the standard unloading fee; any other "descărcare" line
+ * (a different amount) is something else and is NOT counted here.
+ *
+ * Source: ops directive 2026-06-05 (Ambient Intermed).
+ */
+export const UNLOADING_TAX_NET = 177.69;
+export const UNLOADING_TAX_GROSS = 210;
+
+/**
  * Per-city dispatcher commission, applied on top of the carrier total.
  * The base tariffs above are what the CARRIER charges; the company
  * marks them up by this percentage on a per-hub basis, and that

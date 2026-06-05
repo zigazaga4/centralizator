@@ -584,6 +584,27 @@ function Spreadsheet({
           muted
         />
       )}
+      {/* Unloading tax ("descărcare") — a SEPARATE flat fee (210 RON cu TVA
+          each, 177.69 fără TVA), not commissioned. Shown whenever a
+          qualifying unloading was detected; muted "—" otherwise. */}
+      {breakdown.unloadingTax > 0 ? (
+        <DataRow
+          n={r()}
+          label={`Taxă descărcare (${breakdown.unloadingCount} × 210 lei cu TVA)`}
+          value={ron(breakdown.unloadingTax)}
+          numeric
+          hint={breakdown.unloadingCount > breakdown.unloadingUnits ? "+1 / transport >1200 kg" : "taxă separată"}
+        />
+      ) : (
+        <DataRow
+          n={r()}
+          label="Taxă descărcare"
+          value="— · fără descărcare"
+          numeric
+          muted
+        />
+      )}
+
       {/* Carrier subtotal — what Stalexone (transportator) gets. The
           shared base every city and collaborator total grosses up
           from; surfaced muted so the eye walks to the per-city +

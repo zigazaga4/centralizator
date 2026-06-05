@@ -18,6 +18,7 @@
 import Database from "better-sqlite3";
 import { resolve } from "node:path";
 import { calculatePrice } from "../pricing.js";
+import { summariseBulky, summariseUnloading } from "../pipeline.js";
 import type { Extracted } from "../schema.js";
 import type { Service } from "../tariffs.js";
 
@@ -65,12 +66,16 @@ db.transaction(() => {
   for (const row of rows) {
     try {
       const edits = JSON.parse(row.edits_json!) as Extracted;
+      const { bulkyUnits, hasOtherProducts } = summariseBulky(edits);
       const breakdown = calculatePrice({
         service: row.service!,
         weightKg: edits.awb.weight_kg,
         distanceKm: edits.awb.distance_extra_km,
         numDeliveries: edits.awb.num_deliveries,
         deliveryDate: edits.awb.delivery_date,
+        bulkyUnits,
+        hasOtherProducts,
+        unloadingUnits: summariseUnloading(edits),
       });
       const next = JSON.stringify(breakdown);
       if (next === row.breakdown_json) {
