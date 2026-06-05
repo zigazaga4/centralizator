@@ -352,11 +352,46 @@ export interface PricingBreakdown {
   collaboratorPrices: Record<CollaboratorKey, CollaboratorPriceRow>;
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ * Origin store + routed distance
+ *
+ * Every shipment leaves from ONE Leroy Merlin store, read from the AWB
+ * Expeditor. That store is the centralizator the pair is filed under (the
+ * top dropdown switches between them) AND the route origin for the Mapbox
+ * km. `Routing` mirrors the server's schema.ts Routing.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** The dispatch-store keys = the data-side commission keys. */
+export type StoreKey = CityCommissionKey;
+
+export interface Routing {
+  /** Origin store / centralizator bucket. Null when undetermined. */
+  store: StoreKey | null;
+  /** How the store was decided. */
+  storeSource: "expeditor" | "nearest" | "none";
+  /** Km the price was built from. */
+  distanceKm: number;
+  /** Whether `distanceKm` is a live Mapbox route or the AWB's printed km. */
+  source: "mapbox" | "awb";
+  /** Km printed on the AWB ('Distanță extra'), kept for reference. */
+  awbKm: number;
+  /** Mapbox-routed km when computed; null on any fallback. */
+  mapboxKm: number | null;
+  /** Delivery address text that was geocoded. */
+  deliveryAddress: string | null;
+  /** True only when geocode + route both succeeded. */
+  resolved: boolean;
+  /** Short Romanian note explaining a fallback, for the UI. */
+  note: string | null;
+}
+
 export interface ExtractResponse {
   extracted: Extracted;
   resolvedService: Service;
   serviceFallback: boolean;
   breakdown: PricingBreakdown;
+  /** Origin store + the routed distance the price was built from. */
+  routing: Routing;
 }
 
 export interface PricingRequest {
@@ -391,6 +426,11 @@ export type PairStatus =
       serviceFallback: boolean;
       edits: Extracted;
       breakdown: PricingBreakdown;
+      /** Origin store = the centralizator this pair is filed under
+       *  (derived from the AWB Expeditor). Null when undetermined. */
+      store?: StoreKey | null;
+      /** How the distance + store were resolved (Mapbox vs AWB fallback). */
+      routing?: Routing;
       /** Leroy Merlin product cross-check. Arrives shortly AFTER the
        *  price (a follow-up call), so a freshly-ready pair may not have
        *  it yet. `verification.hasWarning` drives the warning icon. */

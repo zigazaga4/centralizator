@@ -203,12 +203,25 @@ function ymd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/** Slug for a dispatch site, e.g. "Iași (Tudor)" → "iasi-tudor". Used to
+ *  give each store's centralizator its own suggested filename so exporting
+ *  Ploiești then Iași doesn't propose the same name twice. */
+function siteSlug(site: CityCommissionKey): string {
+  return CITY_COMMISSION_LABEL[site]
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 /** Build a suggested filename. When the caller knows which day is
  *  being exported, that day wins over the "right now" timestamp —
- *  the file is *about* that day even if it's generated later. */
-function defaultName(ext: Ext, generatedAt: Date, day?: string): string {
+ *  the file is *about* that day even if it's generated later. The store
+ *  slug keeps each centralizator's file distinct. */
+function defaultName(ext: Ext, generatedAt: Date, day?: string, slug?: string): string {
   const stamp = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : ymd(generatedAt);
-  return `centralizator-${stamp}.${ext}`;
+  return `centralizator-${slug ? `${slug}-` : ""}${stamp}.${ext}`;
 }
 
 /**
@@ -225,11 +238,12 @@ async function saveBinary(
   generatedAt: Date,
   filterName: string,
   day?: string,
+  slug?: string,
 ): Promise<string | null> {
   const { save } = await import("@tauri-apps/plugin-dialog");
   const { writeFile } = await import("@tauri-apps/plugin-fs");
   const chosen = await save({
-    defaultPath: defaultName(ext, generatedAt, day),
+    defaultPath: defaultName(ext, generatedAt, day, slug),
     filters: [{ name: filterName, extensions: [ext] }],
   });
   if (!chosen) return null;
@@ -404,7 +418,7 @@ export async function exportToPdf(
   });
 
   const buf = new Uint8Array(doc.output("arraybuffer") as ArrayBuffer);
-  return saveBinary(buf, "pdf", proj.generatedAt, "PDF", opts.day);
+  return saveBinary(buf, "pdf", proj.generatedAt, "PDF", opts.day, siteSlug(proj.site));
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -599,6 +613,7 @@ export async function exportToXlsx(
     proj.generatedAt,
     "Excel",
     opts.day,
+    siteSlug(proj.site),
   );
 }
 
@@ -798,5 +813,5 @@ export async function exportToDocx(
 
   const blob = await Packer.toBlob(doc);
   const buf = new Uint8Array(await blob.arrayBuffer());
-  return saveBinary(buf, "docx", proj.generatedAt, "Word", opts.day);
+  return saveBinary(buf, "docx", proj.generatedAt, "Word", opts.day, siteSlug(proj.site));
 }

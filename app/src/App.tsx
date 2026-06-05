@@ -23,13 +23,27 @@ import {
   COLLABORATORS_BY_CITY,
   defaultCollaboratorFor,
   isCollaboratorValidForCity,
+  primaryDispatchSite,
   type CityKey,
   type CollaboratorKey,
   type Extracted,
   type Pair,
   type PairPatch,
   type PairStatus,
+  type StoreKey,
 } from "./types";
+
+/**
+ * The origin store a pair is filed under (its centralizator bucket), or
+ * null when it isn't decided yet (pending / extracting / error, or a
+ * ready pair whose Expeditor couldn't be matched). Unassigned pairs are
+ * shown in EVERY store view so a freshly added/scanned pair is never
+ * hidden before the AI files it.
+ */
+function storeOf(pair: Pair): StoreKey | null {
+  if (pair.status.kind !== "ready") return null;
+  return pair.status.store ?? pair.status.routing?.store ?? null;
+}
 
 /** localStorage key for the last-viewed day. Survives reloads so the
  *  user lands on the day they were working on, not a random default. */
@@ -185,6 +199,25 @@ export default function App() {
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCity]);
+
+  /* ── Active centralizator (store) ─────────────────────────────────── */
+
+  // The top "Oraș" dropdown now switches between the four stores' separate
+  // excels (Ploiești, Iași Tudor, Iași ERA, Constanța), not just the
+  // displayed commission column. `activeStore` is the store the selected
+  // city maps to 1:1.
+  const activeStore = useMemo<StoreKey>(() => primaryDispatchSite(selectedCity), [selectedCity]);
+
+  /** Does this pair belong in the active centralizator? A pair filed to
+   *  the active store shows here; an unassigned pair (no store yet) shows
+   *  in every store so it's never lost before the AI files it. */
+  const inActiveStore = useCallback(
+    (p: Pair) => {
+      const s = storeOf(p);
+      return s === null || s === activeStore;
+    },
+    [activeStore],
+  );
 
   // Live ref so callbacks (runAll, repricePair, keydown handler) always
   // see the freshest pairs without re-creating themselves on every
@@ -425,25 +458,28 @@ export default function App() {
    *  whole-day DB helper because pair counts are small (~20) and per-
    *  pair DELETE is already optimised by the FK cleanup. */
   const resetDay = useCallback(() => {
-    const toDelete = pairsRef.current.filter((p) => p.day === selectedDay);
+    // Scoped to the active centralizator: "Goleşte ziua" clears only the
+    // current store's pairs for the day, leaving the other stores intact.
+    const toDelete = pairsRef.current.filter(
+      (p) => p.day === selectedDay && inActiveStore(p),
+    );
     if (toDelete.length === 0) return;
     for (const p of toDelete) {
       const t = repriceTimers.current.get(p.id);
       if (t) clearTimeout(t);
       repriceTimers.current.delete(p.id);
     }
-    commit(pairsRef.current.filter((p) => p.day !== selectedDay));
+    const doomed = new Set(toDelete.map((p) => p.id));
+    commit(pairsRef.current.filter((p) => !doomed.has(p.id)));
     // Detail view of a deleted pair would dangle; pop back to queue.
-    setSelectedId((cur) =>
-      cur && toDelete.some((p) => p.id === cur) ? null : cur,
-    );
+    setSelectedId((cur) => (cur && doomed.has(cur) ? null : cur));
     for (const p of toDelete) {
       markLocal(p.id);
       void deletePair(p.id).catch((err) =>
         console.error("Failed to delete pair from DB:", err),
       );
     }
-  }, [commit, selectedDay, markLocal]);
+  }, [commit, selectedDay, markLocal, inActiveStore]);
 
   /* ── Status transitions (shared by run + reprice) ─────────────────── */
 
@@ -549,10 +585,11 @@ export default function App() {
       if (!cur || cur.status.kind !== "ready") return;
 
       const curAwb = cur.status.edits.awb;
+      // Spread the prior ready status so store / routing / verification
+      // survive a hand-edit; only service + the edited AWB fields change.
       const nextStatus: PairStatus = {
-        kind: "ready",
+        ...cur.status,
         service: patch.service ?? cur.status.service,
-        serviceFallback: cur.status.serviceFallback,
         edits: {
           ...cur.status.edits,
           awb: {
@@ -564,7 +601,6 @@ export default function App() {
             delivery_date: patch.delivery_date ?? curAwb.delivery_date,
           },
         },
-        breakdown: cur.status.breakdown,
       };
       // Optimistically reflect the edit in the UI so typing stays
       // responsive, then persist in the background. `persistAndSet`
@@ -639,6 +675,9 @@ export default function App() {
           serviceFallback: res.serviceFallback,
           edits: res.extracted,
           breakdown: res.breakdown,
+          // Origin store (centralizator bucket) + how the km was routed.
+          store: res.routing.store,
+          routing: res.routing,
         });
         // Auto-trigger the Leroy Merlin product check once the price is
         // saved. Fire-and-forget: it updates the pair again when it lands.
@@ -728,25 +767,29 @@ export default function App() {
 
   /* ── Day-aware derived views ─────────────────────────────────────── */
 
-  // Pairs on the visible day. Drives the queue table, the totals, and
-  // the buttons; the export menu only sees these.
+  // Pairs on the visible day AND in the active centralizator. Drives the
+  // queue table, the totals, and the buttons; the export menu only sees
+  // these — so each store exports its own centralizator.
   const dayPairs = useMemo(
-    () => pairs.filter((p) => p.day === selectedDay),
-    [pairs, selectedDay],
+    () => pairs.filter((p) => p.day === selectedDay && inActiveStore(p)),
+    [pairs, selectedDay, inActiveStore],
   );
 
-  // One DayCount per day that holds at least one pair, ordered by ISO
-  // string. The tabs strip is purely a function of this.
+  // One DayCount per day that holds at least one pair IN THE ACTIVE
+  // centralizator, ordered by ISO string. Scoping the tabs to the active
+  // store makes each store feel like its own workbook; unassigned pairs
+  // count in every store (they show everywhere until filed).
   const dayCounts = useMemo<DayCount[]>(() => {
     const m = new Map<string, { count: number; readyCount: number }>();
     for (const p of pairs) {
+      if (!inActiveStore(p)) continue;
       const c = m.get(p.day) ?? { count: 0, readyCount: 0 };
       c.count += 1;
       if (p.status.kind === "ready") c.readyCount += 1;
       m.set(p.day, c);
     }
     return Array.from(m.entries()).map(([day, v]) => ({ day, ...v }));
-  }, [pairs]);
+  }, [pairs, inActiveStore]);
 
   // Header counters — scoped to current day so "Calculează (N)" tells
   // the truth about what pressing the button will run.
@@ -808,7 +851,7 @@ export default function App() {
             options={CITY_KEYS}
             labelFor={(k) => CITY_LABEL[k]}
             onChange={setSelectedCity}
-            title="Oraș client — alege ce variantă de tarif client să afişeze tabelul"
+            title="Magazin / centralizator — schimbă între cele 4 magazine (fiecare cu tabelul și exportul lui); perechile se filtrează după magazinul din care au plecat"
           />
           <CollaboratorSelect
             city={selectedCity}

@@ -12,6 +12,7 @@ import {
   type PairPatch,
   type PairStatus,
   type PricingBreakdown,
+  type Routing,
   type Service,
   type Verification,
 } from "../types";
@@ -96,6 +97,7 @@ export function PairDetail({
                 service={status.service}
                 serviceFallback={status.serviceFallback}
                 breakdown={status.breakdown}
+                routing={status.routing}
                 city={city}
                 collaborator={collaborator}
                 onPatch={onPatch}
@@ -336,6 +338,7 @@ function Spreadsheet({
   service,
   serviceFallback,
   breakdown,
+  routing,
   city,
   collaborator,
   onPatch,
@@ -344,6 +347,7 @@ function Spreadsheet({
   service: Service;
   serviceFallback: boolean;
   breakdown: PricingBreakdown;
+  routing?: Routing;
   city: CityKey;
   collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
@@ -363,12 +367,35 @@ function Spreadsheet({
   const { awb, invoices } = data;
   const multipleInvoices = invoices.length > 1;
 
+  // Origin store (centralizator) + how the billed km was determined.
+  const storeLabel = routing?.store ? CITY_COMMISSION_LABEL[routing.store] : "—";
+  const kmHint =
+    routing?.source === "mapbox"
+      ? `Mapbox · ${storeLabel} → livrare (AWB indica ${routing.awbKm} km)`
+      : routing
+        ? `km de pe AWB${routing.note ? ` · ${routing.note}` : ""}`
+        : undefined;
+
   return (
     <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
       <ColumnHeader />
 
       <Section title="AWB" />
       <DataRow n={r()} label="Număr AWB" value={awb.awb_number} />
+      <DataRow
+        n={r()}
+        label="Magazin (centralizator)"
+        value={storeLabel}
+        hint={
+          routing
+            ? routing.storeSource === "expeditor"
+              ? "din Expeditor"
+              : routing.storeSource === "nearest"
+                ? "cel mai apropiat"
+                : "nedeterminat"
+            : undefined
+        }
+      />
       <DataRow n={r()} label="Data livrare" editable>
         <DateCell value={awb.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
       </DataRow>
@@ -393,7 +420,7 @@ function Spreadsheet({
           onChange={(v) => onPatch({ weight_kg: v })}
         />
       </DataRow>
-      <DataRow n={r()} label="Distanță extra (km)" editable>
+      <DataRow n={r()} label="Distanță extra (km)" editable hint={kmHint}>
         <NumberCell
           value={awb.distance_extra_km}
           step={1}

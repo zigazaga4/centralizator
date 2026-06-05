@@ -26,7 +26,7 @@
  * pair queue in App.tsx for what's recoverable on the next request.
  */
 
-import type { Extracted, Pair, PairStatus, PricingBreakdown, Service, Verification } from "../types";
+import type { Extracted, Pair, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
 
 /**
  * Vite proxies /api/* to the Fastify server during dev. In a packaged
@@ -60,6 +60,8 @@ export type WireStatus =
       serviceFallback: boolean;
       edits: Extracted;
       breakdown: PricingBreakdown;
+      store?: StoreKey | null;
+      routing?: Routing;
       verification?: Verification;
     }
   | { kind: "error"; message: string };
