@@ -108,7 +108,7 @@ export function PairsTable({
     // Macara runs carry no commission/collaborator — their bottom line IS the
     // macara total, summed into the same client column.
     if (b.macara?.isMacara) {
-      sumCity += b.macara.total;
+      sumCity += (b.macaraByCity?.[site] ?? b.macara).total;
       continue;
     }
     sumCity += b.cityCommissions[site]?.customerTotal ?? 0;
@@ -546,13 +546,16 @@ function CityTotalCell({
     );
   }
   // Macara run: the client pays the macara total directly (no commission).
+  // Use the selected city's macara table (Ploiești + Iași ERA differ from
+  // Iași Tudor + Constanța), falling back to the pair's resolved store.
   if (breakdown.macara?.isMacara) {
+    const m = breakdown.macaraByCity?.[site] ?? breakdown.macara;
     return (
       <div
         className="flex items-center justify-end border-r border-ink-200 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
-        title={`Tarif macara (cu TVA, fără comision) — ${breakdown.macara.distanceBucket ?? "—"}, ${breakdown.macara.pallets} palet(i)`}
+        title={`Tarif macara (cu TVA, fără comision) — ${m.distanceBucket ?? "—"}, ${m.pallets} palet(i)`}
       >
-        {ron(breakdown.macara.total)}
+        {ron(m.total)}
       </div>
     );
   }

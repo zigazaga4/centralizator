@@ -726,42 +726,47 @@ function Spreadsheet({
           total is the bottom line. */}
       {isMacara && macara && (
         <>
-          <Section title="Calcul macara (cu TVA)" />
+          <Section title="Macara · sursă (cu TVA)" />
           <DataRow
             n={r()}
             label="Sursă macara"
             value={macara.onAwb ? "specificat pe AWB" : "doar pe factură"}
             hint={macara.warning ? "verifică AWB" : undefined}
           />
-          <DataRow
+          <DataRow n={r()} label="Paleți (macara)" value={String(macara.pallets)} />
+
+          {/* Macara tariff for EVERY city — the rate table differs by dispatch
+              site (Ploiești + Iași ERA on one table, Iași Tudor + Constanța on
+              the other). The selected city is highlighted; the bottom line
+              uses it. No commission applies to any of these. */}
+          <Section title="Tarif macara per oraș (cu TVA)" />
+          {CITY_COMMISSION_KEYS.map((k) => {
+            const m = breakdown.macaraByCity?.[k];
+            const isSelected = k === site;
+            return (
+              <DataRow
+                key={k}
+                n={r()}
+                label={CITY_COMMISSION_LABEL[k]}
+                value={
+                  m
+                    ? `${m.distanceBucket ?? "—"} · bază ${ron(m.basePrice)}${
+                        m.kmCost > 0 ? ` + km ${ron(m.kmCost)}` : ""
+                      } + descărcare ${ron(m.unloadCost)} → ${ron(m.total)}`
+                    : "—"
+                }
+                numeric
+                muted={!isSelected}
+                hint={isSelected ? "selectat" : undefined}
+              />
+            );
+          })}
+
+          <TotalRow
             n={r()}
-            label={`Tarif macara (${macara.distanceBucket ?? "—"})`}
-            value={ron(macara.basePrice)}
-            numeric
+            label={`TOTAL MACARA · ${CITY_COMMISSION_LABEL[site]}`}
+            value={ron((breakdown.macaraByCity?.[site] ?? macara).total)}
           />
-          {macara.kmCost > 0 ? (
-            <DataRow
-              n={r()}
-              label={`Km extra macara (${macara.extraKm} km × ${macara.perKm} lei tur-retur)`}
-              value={ron(macara.kmCost)}
-              numeric
-            />
-          ) : (
-            <DataRow
-              n={r()}
-              label="Km extra macara"
-              value="— · distanță ≤ 50 km"
-              numeric
-              muted
-            />
-          )}
-          <DataRow
-            n={r()}
-            label={`Descărcare macara (${macara.pallets} × ${macara.unloadPerPallet} lei)`}
-            value={ron(macara.unloadCost)}
-            numeric
-          />
-          <TotalRow n={r()} label="TOTAL MACARA · cu TVA" value={ron(macara.total)} />
         </>
       )}
     </div>

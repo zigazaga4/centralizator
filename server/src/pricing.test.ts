@@ -607,6 +607,23 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
     expect(r.macara.total).toBe(665.0);
   });
 
+  // macaraByCity prices the same run on each city's table at once: Ploiești +
+  // Iași ERA on Table B (494), Iași Tudor + Constanța on Table A (638.3).
+  it("macaraByCity prices every city on its own table", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 1, macaraStore: "Ploiesti",
+    });
+    expect(r.macaraByCity.Ploiesti.basePrice).toBe(494);
+    expect(r.macaraByCity.IasiERA.basePrice).toBe(494);
+    expect(r.macaraByCity.IasiTudor.basePrice).toBe(638.3);
+    expect(r.macaraByCity.Constanta.basePrice).toBe(638.3);
+    // Ploiești: 494 + 24 = 518 · Constanța: 638.3 + 26.7 = 665.0
+    expect(r.macaraByCity.Ploiesti.total).toBe(518);
+    expect(r.macaraByCity.Constanta.total).toBe(665.0);
+  });
+
   // No macara anywhere → all macara fields zeroed, price untouched.
   it("no macara leaves the price untouched", () => {
     const r = calculatePrice({

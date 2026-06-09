@@ -226,8 +226,12 @@ export interface PricingBreakdown {
   unloadingTaxNet: number;
   /** Macara (crane delivery) breakdown — a SEPARATE track (cu TVA), not
    *  commissioned and not folded into any total. `macara.isMacara` is false
-   *  for an ordinary delivery. */
+   *  for an ordinary delivery. Priced for the pair's resolved store. */
   macara: MacaraBreakdown;
+  /** The macara breakdown computed for EVERY city, so the UI can show the
+   *  macara tariff per city (the rate table differs by dispatch site). Same
+   *  detection + paleți across all four; only the price differs. */
+  macaraByCity: Record<City, MacaraBreakdown>;
   /** Commission base in RON, VAT included = baseTariff + incrementCost +
    *  weekendSurcharge. This is what the city commission and the
    *  collaborator bonus percentages are applied to. It deliberately
@@ -344,13 +348,34 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   // Macara (crane delivery) — another SEPARATE track on its own tariff,
   // neither commissioned nor folded into any total. Detected upstream from
   // the AWB "Serviciu" and/or an invoice macara line.
+  const macaraOnAwb = input.macaraOnAwb ?? false;
+  const macaraOnInvoice = input.macaraOnInvoice ?? false;
+  const macaraPallets = Math.max(0, Math.floor(input.macaraPallets ?? 0));
+  // Primary macara breakdown — uses the pair's resolved dispatch store (or the
+  // default table when unknown). This is the one the table/footer fall back to.
   const macara = computeMacara({
-    onAwb: input.macaraOnAwb ?? false,
-    onInvoice: input.macaraOnInvoice ?? false,
-    pallets: Math.max(0, Math.floor(input.macaraPallets ?? 0)),
+    onAwb: macaraOnAwb,
+    onInvoice: macaraOnInvoice,
+    pallets: macaraPallets,
     distanceKm,
     store: input.macaraStore ?? null,
   });
+  // Macara priced for EVERY city, so the UI can show the macara tariff per
+  // city (Ploiești + Iași ERA on Table B, Iași Tudor + Constanța on Table A),
+  // exactly like the standard per-city customer totals. Same detection /
+  // paleți across cities; only the rate table (price) differs.
+  const macaraByCity = Object.fromEntries(
+    CITIES.map((city) => [
+      city,
+      computeMacara({
+        onAwb: macaraOnAwb,
+        onInvoice: macaraOnInvoice,
+        pallets: macaraPallets,
+        distanceKm,
+        store: city,
+      }),
+    ]),
+  ) as Record<City, MacaraBreakdown>;
 
   // The commission/bonus percentage applies ONLY to the base work
   // (base tariff + increments + weekend), NOT to the per-km surcharge.
@@ -407,6 +432,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     unloadingTax,
     unloadingTaxNet,
     macara,
+    macaraByCity,
     commissionBase,
     carrierTotal,
     cityCommissions,

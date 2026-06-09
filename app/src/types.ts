@@ -376,6 +376,10 @@ export interface PricingBreakdown {
    * delivery.
    */
   macara?: MacaraBreakdown;
+  /** Macara priced for every city, so the detail page + table can show the
+   *  macara tariff per city. Optional for breakdowns persisted before this
+   *  existed — read through `?.`. */
+  macaraByCity?: Record<CityCommissionKey, MacaraBreakdown>;
   /**
    * Carrier subtotal — what Stalexone (the carrier) gets, RON with VAT
    * included at the current rate. The shared base every per-city
