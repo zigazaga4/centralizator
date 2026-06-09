@@ -11,7 +11,7 @@ export type WeightBucket =
 export type DistanceBucket =
   | "0-15 km" | "15-20 km" | "20-30 km" | "30-50 km" | ">50 km";
 export type MacaraDistanceBucket =
-  | "0-10 km" | "10-15 km" | "15-20 km" | "20-30 km" | "30-50 km" | ">50 km";
+  | "0-10 km" | "10-15 km" | "0-15 km" | "15-20 km" | "20-30 km" | "30-50 km" | ">50 km";
 
 export interface InvoiceItem {
   name: string;
@@ -336,6 +336,9 @@ export interface MacaraBreakdown {
   distanceBucket: MacaraDistanceBucket | null;
   extraKm: number;
   basePrice: number;
+  /** Per-km tur-retur rate used (5 for Iași Tudor/Constanța, 4,5 for
+   *  Ploiești/Iași ERA). */
+  perKm: number;
   kmCost: number;
   unloadPerPallet: number;
   unloadCost: number;
@@ -459,6 +462,9 @@ export interface PricingRequest {
   macara_on_awb?: boolean;
   macara_on_invoice?: boolean;
   macara_pallets?: number;
+  /** Dispatch store the macara run leaves from — selects the macara rate
+   *  table. Carried so a re-price keeps the right per-city macara price. */
+  macara_store?: StoreKey | null;
 }
 
 /* ──────────────────────────────────────────────────────────────────────

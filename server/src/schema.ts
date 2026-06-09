@@ -277,5 +277,9 @@ export const PricingRequestSchema = z.object({
   macara_on_awb: z.boolean().default(false),
   macara_on_invoice: z.boolean().default(false),
   macara_pallets: z.number().int().nonnegative().default(0),
+  /** Dispatch store the macara run leaves from — selects the macara rate
+   *  table (Iași Tudor + Constanța vs. Ploiești + Iași ERA). Null = default
+   *  table. */
+  macara_store: StoreKeySchema.nullable().default(null),
 });
 export type PricingRequest = z.infer<typeof PricingRequestSchema>;

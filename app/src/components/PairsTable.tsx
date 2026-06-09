@@ -105,6 +105,12 @@ export function PairsTable({
     if (p.status.kind !== "ready") continue;
     readyCount += 1;
     const b = p.status.breakdown;
+    // Macara runs carry no commission/collaborator — their bottom line IS the
+    // macara total, summed into the same client column.
+    if (b.macara?.isMacara) {
+      sumCity += b.macara.total;
+      continue;
+    }
     sumCity += b.cityCommissions[site]?.customerTotal ?? 0;
     if (collaborator) {
       sumCollab += b.collaboratorPrices[collaborator]?.total ?? 0;
@@ -225,6 +231,8 @@ function PairRow({
   const edits = isReady ? status.edits : null;
   const breakdown = isReady ? status.breakdown : null;
   const service = isReady ? status.service : null;
+  // Macara run → no standard cost columns, no commission/collaborator.
+  const isMac = !!breakdown?.macara?.isMacara;
 
   const rowBg =
     status.kind === "error"
@@ -352,26 +360,40 @@ function PairRow({
         )}
       </div>
 
-      {/* Bază — always present once the row is ready */}
-      <NumericCell value={breakdown?.baseTariff} />
-      {/* Km+ — only applies for >50 km bucket */}
-      <ConditionalCell
-        value={breakdown?.extraKmCost}
-        ready={!!breakdown}
-        notAppliedReason="Distanță ≤ 50 km — nu se aplică suplimentul per km."
-      />
-      {/* Inc. — only applies when num_deliveries > 1 */}
-      <ConditionalCell
-        value={breakdown?.incrementCost}
-        ready={!!breakdown}
-        notAppliedReason="O singură livrare — incrementul se aplică doar de la a doua livrare."
-      />
-      {/* Wkd — only applies on Saturday / Sunday */}
-      <ConditionalCell
-        value={breakdown?.weekendSurcharge}
-        ready={!!breakdown}
-        notAppliedReason="Livrare în zi lucrătoare — fără supliment de weekend."
-      />
+      {/* Bază / Km+ / Inc. / Wkd — standard transport calc. Macara runs
+          carry no standard tariff or commission, so these four cells read
+          "—" for a macara row (its price is the macara total only). */}
+      {isMac ? (
+        <>
+          <MacaraNaCell />
+          <MacaraNaCell />
+          <MacaraNaCell />
+          <MacaraNaCell />
+        </>
+      ) : (
+        <>
+          {/* Bază — always present once the row is ready */}
+          <NumericCell value={breakdown?.baseTariff} />
+          {/* Km+ — only applies for >50 km bucket */}
+          <ConditionalCell
+            value={breakdown?.extraKmCost}
+            ready={!!breakdown}
+            notAppliedReason="Distanță ≤ 50 km — nu se aplică suplimentul per km."
+          />
+          {/* Inc. — only applies when num_deliveries > 1 */}
+          <ConditionalCell
+            value={breakdown?.incrementCost}
+            ready={!!breakdown}
+            notAppliedReason="O singură livrare — incrementul se aplică doar de la a doua livrare."
+          />
+          {/* Wkd — only applies on Saturday / Sunday */}
+          <ConditionalCell
+            value={breakdown?.weekendSurcharge}
+            ready={!!breakdown}
+            notAppliedReason="Livrare în zi lucrătoare — fără supliment de weekend."
+          />
+        </>
+      )}
 
       {/* Total client — what the END customer pays for the currently
           selected city. One number per row; the dropdown switches WHICH
@@ -523,6 +545,17 @@ function CityTotalCell({
       </div>
     );
   }
+  // Macara run: the client pays the macara total directly (no commission).
+  if (breakdown.macara?.isMacara) {
+    return (
+      <div
+        className="flex items-center justify-end border-r border-ink-200 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+        title={`Tarif macara (cu TVA, fără comision) — ${breakdown.macara.distanceBucket ?? "—"}, ${breakdown.macara.pallets} palet(i)`}
+      >
+        {ron(breakdown.macara.total)}
+      </div>
+    );
+  }
   const carrierTip = `Tarif transportator ${ron(breakdown.carrierTotal)}`;
   const row = breakdown.cityCommissions[site];
   return (
@@ -550,6 +583,18 @@ function CollaboratorTotalCell({
   breakdown: PricingBreakdown | null;
   collaborator: CollaboratorKey | null;
 }) {
+  // Macara runs pay no collaborator bonus (EMV Macara = preț întreg / Macara
+  // Ploiești = scădem lunar) — the per-row payout column does not apply.
+  if (breakdown?.macara?.isMacara) {
+    return (
+      <div
+        className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400"
+        title="Macara · fără comision colaborator"
+      >
+        —
+      </div>
+    );
+  }
   if (!collaborator) {
     return (
       <div
@@ -649,6 +694,19 @@ function Thumbs({ files }: { files: File[] }) {
 
 function Dash() {
   return <span className="text-ink-400">—</span>;
+}
+
+/** Standard-cost cell rendered for a macara row: muted "—" (macara has no
+ *  base tariff / km / increment / weekend — only the macara total). */
+function MacaraNaCell() {
+  return (
+    <div
+      title="Macara · fără tarif standard / comision"
+      className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400"
+    >
+      —
+    </div>
+  );
 }
 
 /** Compact macara marker shown next to the AWB number in the queue. Coral

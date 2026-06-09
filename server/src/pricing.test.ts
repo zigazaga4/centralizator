@@ -563,6 +563,50 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
     expect(r.macara.total).toBe(1121.9);
   });
 
+  // Ploiești + Iași ERA use Table B (TARIFE MACARA(2).odt): 494 base,
+  // 4.5 lei/km, 24/palet. Ploiești, distance 5 km → "0-15 km" 494 + 1 × 24 = 518.
+  it("Ploiești macara uses Table B (494 base, 24/palet)", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 1, macaraStore: "Ploiesti",
+    });
+    expect(r.macara.distanceBucket).toBe("0-15 km");
+    expect(r.macara.basePrice).toBe(494);
+    expect(r.macara.unloadPerPallet).toBe(24);
+    expect(r.macara.perKm).toBe(4.5);
+    expect(r.macara.total).toBe(518);
+  });
+
+  // Iași ERA (Iași 2) is also Table B; >50 km adds 4.5 lei/km.
+  // 81 km → ">50 km" 728 + (81−50)×4.5 = 139.5 + 2 paleți × 24 = 48 → 915.5.
+  it("Iași ERA macara, >50 km, Table B per-km 4.5", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 81,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 2, macaraStore: "IasiERA",
+    });
+    expect(r.macara.distanceBucket).toBe(">50 km");
+    expect(r.macara.basePrice).toBe(728);
+    expect(r.macara.extraKm).toBe(31);
+    expect(r.macara.kmCost).toBe(139.5);
+    expect(r.macara.unloadCost).toBe(48);
+    expect(r.macara.total).toBe(915.5);
+  });
+
+  // Iași Tudor + Constanța stay on Table A (638.3, 26.7/palet).
+  it("Constanța macara stays on Table A (638.3 base)", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 1, macaraStore: "Constanta",
+    });
+    expect(r.macara.distanceBucket).toBe("0-10 km");
+    expect(r.macara.basePrice).toBe(638.3);
+    expect(r.macara.unloadPerPallet).toBe(26.7);
+    expect(r.macara.total).toBe(665.0);
+  });
+
   // No macara anywhere → all macara fields zeroed, price untouched.
   it("no macara leaves the price untouched", () => {
     const r = calculatePrice({

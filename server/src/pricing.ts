@@ -75,10 +75,8 @@ import {
   BULKY_UNITS_PER_TRANSPORT,
   UNLOADING_TAX_GROSS,
   UNLOADING_TAX_NET,
-  MACARA_TARIFFS_GROSS,
-  MACARA_PER_KM_GROSS,
-  MACARA_EXTRA_KM_THRESHOLD,
-  MACARA_UNLOAD_PER_PALLET_GROSS,
+  MACARA_TABLE_BY_CITY,
+  MACARA_DEFAULT_TABLE,
   CITIES,
   COLLABORATORS,
   COMPANY_COMMISSION_BY_CITY,
@@ -90,7 +88,7 @@ import {
   type City,
   type Collaborator,
 } from "./tariffs.js";
-import { weightBucket, distanceBucket, macaraDistanceBucket, isWeekend } from "./buckets.js";
+import { weightBucket, distanceBucket, isWeekend } from "./buckets.js";
 
 export interface PricingInput {
   /** Service tier — already mapped from AWB free text (Standard → Express, etc). */
@@ -128,6 +126,10 @@ export interface PricingInput {
    *  per-palet macara unloading fee. Falls back to 1 when macara is detected
    *  but no count was read. Default 0 (no macara). */
   macaraPallets?: number;
+  /** Dispatch store the macara run leaves from — picks which macara rate
+   *  table applies (Iași Tudor + Constanța vs. Ploiești + Iași ERA). Null /
+   *  undefined falls back to the default (Table A). */
+  macaraStore?: City | null;
 }
 
 /**
@@ -157,10 +159,12 @@ export interface MacaraBreakdown {
   extraKm: number;
   /** Flat macara delivery price for the bucket (RON cu TVA). */
   basePrice: number;
-  /** Macara per-km surcharge total = extraKm × 5 (RON cu TVA, tur-retur
+  /** Per-km tur-retur rate used (5 for Table A, 4,5 for Table B). RON cu TVA. */
+  perKm: number;
+  /** Macara per-km surcharge total = extraKm × perKm (RON cu TVA, tur-retur
    *  already included, so NOT doubled). */
   kmCost: number;
-  /** Unloading fee per palet (26,7 RON cu TVA). */
+  /** Unloading fee per palet (26,7 Table A / 15 Table B). RON cu TVA. */
   unloadPerPallet: number;
   /** Total macara unloading = pallets × 26,7 (RON cu TVA). */
   unloadCost: number;
@@ -345,6 +349,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     onInvoice: input.macaraOnInvoice ?? false,
     pallets: Math.max(0, Math.floor(input.macaraPallets ?? 0)),
     distanceKm,
+    store: input.macaraStore ?? null,
   });
 
   // The commission/bonus percentage applies ONLY to the base work
@@ -423,9 +428,13 @@ function computeMacara(args: {
   onInvoice: boolean;
   pallets: number;
   distanceKm: number;
+  store: City | null;
 }): MacaraBreakdown {
-  const { onAwb, onInvoice, distanceKm } = args;
+  const { onAwb, onInvoice, distanceKm, store } = args;
   const isMacara = onAwb || onInvoice;
+  // Pick the rate table for the dispatch site (Table A: Iași Tudor +
+  // Constanța; Table B: Ploiești + Iași ERA). Default A when undetermined.
+  const table = store ? MACARA_TABLE_BY_CITY[store] : MACARA_DEFAULT_TABLE;
   if (!isMacara) {
     return {
       isMacara: false,
@@ -436,8 +445,9 @@ function computeMacara(args: {
       distanceBucket: null,
       extraKm: 0,
       basePrice: 0,
+      perKm: table.perKmGross,
       kmCost: 0,
-      unloadPerPallet: MACARA_UNLOAD_PER_PALLET_GROSS,
+      unloadPerPallet: table.unloadPerPalletGross,
       unloadCost: 0,
       total: 0,
     };
@@ -447,12 +457,16 @@ function computeMacara(args: {
   const warning = onInvoice && !onAwb;
   // Macara is detected; bill at least one palet even if the count was unread.
   const pallets = args.pallets > 0 ? args.pallets : 1;
-  const bucket = macaraDistanceBucket(distanceKm);
-  const basePrice = MACARA_TARIFFS_GROSS[bucket];
-  const extraKm = bucket === ">50 km" ? Math.max(0, distanceKm - MACARA_EXTRA_KM_THRESHOLD) : 0;
-  // The 5 lei/km already counts the round trip ("tur-retur"), so no ×2 here.
-  const kmCost = round2(extraKm * MACARA_PER_KM_GROSS);
-  const unloadCost = round2(pallets * MACARA_UNLOAD_PER_PALLET_GROSS);
+  // First bracket whose upper bound the distance falls under; the last row
+  // (maxKm = Infinity) is the ">50 km" sentinel.
+  const bracket =
+    table.brackets.find((b) => distanceKm < b.maxKm) ??
+    table.brackets[table.brackets.length - 1]!;
+  const basePrice = bracket.price;
+  const extraKm = distanceKm > table.thresholdKm ? distanceKm - table.thresholdKm : 0;
+  // The per-km figure already counts the round trip ("tur-retur"), so no ×2.
+  const kmCost = round2(extraKm * table.perKmGross);
+  const unloadCost = round2(pallets * table.unloadPerPalletGross);
   const total = round2(basePrice + kmCost + unloadCost);
   return {
     isMacara: true,
@@ -460,11 +474,12 @@ function computeMacara(args: {
     onInvoice,
     warning,
     pallets,
-    distanceBucket: bucket,
+    distanceBucket: bracket.label,
     extraKm,
     basePrice: round2(basePrice),
+    perKm: table.perKmGross,
     kmCost,
-    unloadPerPallet: MACARA_UNLOAD_PER_PALLET_GROSS,
+    unloadPerPallet: table.unloadPerPalletGross,
     unloadCost,
     total,
   };

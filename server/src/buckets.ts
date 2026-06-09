@@ -1,4 +1,4 @@
-import type { WeightBucket, DistanceBucket, MacaraDistanceBucket } from "./tariffs.js";
+import type { WeightBucket, DistanceBucket } from "./tariffs.js";
 
 /**
  * Weight (kg) → discrete weight bucket used by the tariff lookup.
@@ -31,25 +31,6 @@ export function distanceBucket(distanceKm: number): DistanceBucket {
   if (distanceKm < 20)  return "15-20 km";
   if (distanceKm < 30)  return "20-30 km";
   if (distanceKm < 50)  return "30-50 km";
-  return ">50 km";
-}
-
-/**
- * Distance (km) → macara (crane) distance bucket. Same lower-inclusive,
- * upper-exclusive convention as `distanceBucket`, but the macara tariff
- * splits the first tier into 0-10 and 10-15 km (per "Tarife livrare
- * macara"). Anything > 50 km lands in ">50 km", which triggers the
- * macara per-km surcharge.
- */
-export function macaraDistanceBucket(distanceKm: number): MacaraDistanceBucket {
-  if (!Number.isFinite(distanceKm) || distanceKm < 0) {
-    throw new RangeError(`distanceKm must be a non-negative finite number, got ${distanceKm}`);
-  }
-  if (distanceKm < 10) return "0-10 km";
-  if (distanceKm < 15) return "10-15 km";
-  if (distanceKm < 20) return "15-20 km";
-  if (distanceKm < 30) return "20-30 km";
-  if (distanceKm < 50) return "30-50 km";
   return ">50 km";
 }
 

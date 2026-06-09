@@ -602,6 +602,8 @@ export default function App() {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
       const { service, edits, breakdown } = pair.status;
+      // Dispatch store drives the per-city macara table; carry it forward.
+      const macaraStore = pair.status.store ?? pair.status.routing?.store ?? null;
       try {
         const b = await reprice({
           service,
@@ -620,6 +622,7 @@ export default function App() {
           macara_on_awb: breakdown.macara?.onAwb ?? false,
           macara_on_invoice: breakdown.macara?.onInvoice ?? false,
           macara_pallets: breakdown.macara?.pallets ?? 0,
+          macara_store: macaraStore,
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever

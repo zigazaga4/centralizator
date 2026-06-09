@@ -226,62 +226,99 @@ export const UNLOADING_TAX_NET = 177.69;
 export const UNLOADING_TAX_GROSS = 210;
 
 /* ──────────────────────────────────────────────────────────────────────
- * Macara (crane delivery) — a SEPARATE pricing track.
+ * Macara (crane delivery) — a SEPARATE pricing track, and one that does
+ * NOT carry the dispatcher commission / collaborator bonus at all. A macara
+ * run is priced ONLY off the macara table below; the standard transport
+ * tariff and every commission/bonus are irrelevant for it.
  *
- * Source: "Tarife Macara Constanta si Iasi 1.pdf" — "Tarife livrare macara
- * (cu TVA) Iași Tudor, Iași ERA, Constanța, Ploiești". The SAME table
- * applies to all four dispatch sites. Every figure is RON WITH VAT
- * ("cu TVA"); the document gives no without-VAT figures, so none are
- * invented here.
+ * Two distinct rate tables, by dispatch site:
  *
- * A macara run carries 1-8 paleți at one flat distance-bucketed price, plus
- * a per-palet unloading fee (26,7 lei cu TVA / palet). Over 50 km the base
- * price gets a 5 lei/km tur-retur surcharge on the kilometres past 50 (the
- * "tur-retur" round trip is ALREADY baked into the 5 lei, so it is not
- * doubled the way the standard PER_KM_SURCHARGE is).
+ *   • Table A (RON cu TVA) — "Tarife livrare macara", Iași Tudor + Constanța.
+ *       Source: "Tarife Macara Constanta si Iasi 1.pdf".
+ *       0-10 / 10-15 km = 638,3 · 15-20 = 704,0 · 20-30 = 735,2 ·
+ *       30-50 = 940,2 · >50 = 940,2 + 5 lei/km tur-retur. Descărcare 26,7/palet.
  *
- * Like the descărcare tax, macara is kept ENTIRELY separate: its own
- * breakdown section, NOT commissioned and NOT folded into the carrier /
- * customer / collaborator totals. Detection + warning rule (ops directive
- * 2026-06-05): the AWB "Serviciu" naming macara is the legitimate signal;
- * if instead the AWB reads something else (e.g. "standard") but a macara
- * line is on the invoice, that fires a separate warning for the operator.
+ *   • Table B (RON cu TVA) — "TARIFE MACARA (1-8 paleți)", Ploiești + Iași ERA.
+ *       Source: "TARIFE MACARA(2).odt" (the updated ord. 2 sheet).
+ *       0-15 km = 494 · 15-20 = 545 · 20-30 = 569 · 30-50 = 728 ·
+ *       >50 = 728 + 4,5 lei/km tur-retur. Descărcare 24/palet.
+ *
+ * In both tables the "tur-retur" round trip is ALREADY baked into the per-km
+ * figure, so it is NOT doubled the way the standard PER_KM_SURCHARGE is.
+ * 1-8 paleți ride at one flat distance price; the per-palet descărcare fee
+ * is billed on top. Detection + warning rule (ops directive 2026-06-05): the
+ * AWB "Serviciu" naming macara is the legitimate signal; if instead the AWB
+ * reads something else but a macara line is on the invoice, a separate
+ * warning fires for the operator.
  * ────────────────────────────────────────────────────────────────────── */
 export type MacaraDistanceBucket =
   | "0-10 km"
   | "10-15 km"
+  | "0-15 km"
   | "15-20 km"
   | "20-30 km"
   | "30-50 km"
   | ">50 km";
 
-export const MACARA_DISTANCE_BUCKETS: readonly MacaraDistanceBucket[] = [
-  "0-10 km", "10-15 km", "15-20 km", "20-30 km", "30-50 km", ">50 km",
-] as const;
+/** One distance bracket: distance < `maxKm` selects this row (last row uses
+ *  Infinity as the ">50 km" sentinel). */
+export interface MacaraBracket {
+  maxKm: number;
+  label: MacaraDistanceBucket;
+  price: number;
+}
 
-/** Macara delivery price per distance bucket (RON, cu TVA). Flat for 1-8
- *  paleți. The >50 km bucket shares the 30-50 km base; the per-km surcharge
- *  below is added on top of it. */
-export const MACARA_TARIFFS_GROSS: Readonly<Record<MacaraDistanceBucket, number>> = Object.freeze({
-  "0-10 km":  638.3,
-  "10-15 km": 638.3,
-  "15-20 km": 704.0,
-  "20-30 km": 735.2,
-  "30-50 km": 940.2,
-  ">50 km":   940.2,
+/** A full macara rate table for a group of dispatch sites. */
+export interface MacaraRateTable {
+  brackets: readonly MacaraBracket[];
+  /** Per-km tur-retur surcharge applied to the km past `thresholdKm`
+   *  (round trip already included, so NOT doubled). RON cu TVA. */
+  perKmGross: number;
+  thresholdKm: number;
+  /** Descărcare fee per palet delivered with macara. RON cu TVA. */
+  unloadPerPalletGross: number;
+}
+
+/** Table A — Iași Tudor + Constanța (PDF, cu TVA). */
+export const MACARA_TABLE_A: MacaraRateTable = Object.freeze({
+  brackets: Object.freeze([
+    { maxKm: 10,       label: "0-10 km",  price: 638.3 },
+    { maxKm: 15,       label: "10-15 km", price: 638.3 },
+    { maxKm: 20,       label: "15-20 km", price: 704.0 },
+    { maxKm: 30,       label: "20-30 km", price: 735.2 },
+    { maxKm: 50,       label: "30-50 km", price: 940.2 },
+    { maxKm: Infinity, label: ">50 km",   price: 940.2 },
+  ]) as readonly MacaraBracket[],
+  perKmGross: 5,
+  thresholdKm: 50,
+  unloadPerPalletGross: 26.7,
 });
 
-/** Macara per-km surcharge for the >50 km bucket (RON cu TVA), applied to the
- *  (km − 50) overage. The doc's "5 Ron/km tur-retur" already counts the round
- *  trip, so it is NOT multiplied by 2 (unlike the standard PER_KM_SURCHARGE). */
-export const MACARA_PER_KM_GROSS = 5;
+/** Table B — Ploiești + Iași ERA ("TARIFE MACARA(2).odt", cu TVA). */
+export const MACARA_TABLE_B: MacaraRateTable = Object.freeze({
+  brackets: Object.freeze([
+    { maxKm: 15,       label: "0-15 km",  price: 494 },
+    { maxKm: 20,       label: "15-20 km", price: 545 },
+    { maxKm: 30,       label: "20-30 km", price: 569 },
+    { maxKm: 50,       label: "30-50 km", price: 728 },
+    { maxKm: Infinity, label: ">50 km",   price: 728 },
+  ]) as readonly MacaraBracket[],
+  perKmGross: 4.5,
+  thresholdKm: 50,
+  unloadPerPalletGross: 24,
+});
 
-/** Distance above which the macara per-km surcharge kicks in. */
-export const MACARA_EXTRA_KM_THRESHOLD = 50;
+/** Which macara table each dispatch site uses. */
+export const MACARA_TABLE_BY_CITY: Readonly<Record<City, MacaraRateTable>> = Object.freeze({
+  IasiTudor: MACARA_TABLE_A,
+  Constanta: MACARA_TABLE_A,
+  Ploiesti:  MACARA_TABLE_B,
+  IasiERA:   MACARA_TABLE_B,
+});
 
-/** Unloading fee per palet delivered with macara (RON cu TVA), the doc's
- *  "Taxa descarcare" column. Billed once per palet on the run. */
-export const MACARA_UNLOAD_PER_PALLET_GROSS = 26.7;
+/** Table used when the dispatch store is undetermined — defaults to the
+ *  PDF (Table A) since it covers the headline "Constanța + Iași" sites. */
+export const MACARA_DEFAULT_TABLE: MacaraRateTable = MACARA_TABLE_A;
 
 /**
  * Per-city dispatcher commission, applied on top of the carrier total.

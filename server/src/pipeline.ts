@@ -177,6 +177,9 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
       macaraOnAwb: macara.onAwb,
       macaraOnInvoice: macara.onInvoice,
       macaraPallets: macara.pallets,
+      // Macara rate table is per dispatch site; use the store the routing
+      // step resolved (null falls back to the default table in the engine).
+      macaraStore: routing.store,
     });
   } catch (err) {
     throw new PipelineError("pricing", (err as Error).message, extracted);

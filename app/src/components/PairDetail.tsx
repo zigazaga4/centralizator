@@ -391,6 +391,11 @@ function Spreadsheet({
   // under "Iași"). One coral TOTAL CLIENT row at the bottom.
   const site = primaryDispatchSite(city);
   const collabRow = collaborator ? breakdown.collaboratorPrices[collaborator] : null;
+  // Macara runs are priced ONLY off the macara table — no standard tariff,
+  // no commission, no collaborator payout. For those pairs we hide the whole
+  // commission machinery and show the macara calc as the bottom line.
+  const macara = breakdown.macara;
+  const isMacara = !!macara?.isMacara;
 
   // Split for readability — the spreadsheet renders the AWB section
   // once, then loops through every invoice as its own section. Pricing
@@ -554,6 +559,10 @@ function Spreadsheet({
         );
       })}
 
+      {/* Standard transport calc + the whole commission machinery. Hidden
+          entirely for macara runs, which carry no commission. */}
+      {!isMacara && (
+      <>
       <Section title="Calcul tarif" />
       <DataRow n={r()} label="Cheie tarif" value={breakdown.baseKey} />
       <DataRow n={r()} label="Bucket greutate" value={breakdown.weightBucket} />
@@ -633,57 +642,6 @@ function Spreadsheet({
         />
       )}
 
-      {/* Macara (crane delivery) — a SEPARATE track on its own tariff
-          (cu TVA), not commissioned and NOT part of the client total
-          below. Rendered only when the run is macara; the AWB-vs-invoice
-          mismatch also surfaces as the loud banner at the top of the page. */}
-      {breakdown.macara?.isMacara && (
-        <>
-          <Section title="Macara · taxă separată (cu TVA)" />
-          <DataRow
-            n={r()}
-            label="Sursă macara"
-            value={breakdown.macara.onAwb ? "specificat pe AWB" : "doar pe factură"}
-            hint={breakdown.macara.warning ? "verifică AWB" : undefined}
-          />
-          <DataRow
-            n={r()}
-            label={`Tarif macara (${breakdown.macara.distanceBucket ?? "—"})`}
-            value={ron(breakdown.macara.basePrice)}
-            numeric
-          />
-          {breakdown.macara.kmCost > 0 ? (
-            <DataRow
-              n={r()}
-              label={`Km extra macara (${breakdown.macara.extraKm} km × 5 lei tur-retur)`}
-              value={ron(breakdown.macara.kmCost)}
-              numeric
-            />
-          ) : (
-            <DataRow
-              n={r()}
-              label="Km extra macara"
-              value="— · distanță ≤ 50 km"
-              numeric
-              muted
-            />
-          )}
-          <DataRow
-            n={r()}
-            label={`Descărcare macara (${breakdown.macara.pallets} × 26,7 lei)`}
-            value={ron(breakdown.macara.unloadCost)}
-            numeric
-          />
-          <DataRow
-            n={r()}
-            label="Total macara (cu TVA)"
-            value={ron(breakdown.macara.total)}
-            numeric
-            hint="taxă separată"
-          />
-        </>
-      )}
-
       {/* Carrier subtotal — what Stalexone (transportator) gets. The
           shared base every city and collaborator total grosses up
           from; surfaced muted so the eye walks to the per-city +
@@ -759,6 +717,52 @@ function Spreadsheet({
           label={`PLATĂ COLABORATOR · ${COLLABORATOR_LABEL[collaborator]}`}
           value={ron(collabRow.total)}
         />
+      )}
+      </>
+      )}
+
+      {/* Macara (crane) — its own table (cu TVA), no commission. For a macara
+          pair this REPLACES the standard calc + commission above: the macara
+          total is the bottom line. */}
+      {isMacara && macara && (
+        <>
+          <Section title="Calcul macara (cu TVA)" />
+          <DataRow
+            n={r()}
+            label="Sursă macara"
+            value={macara.onAwb ? "specificat pe AWB" : "doar pe factură"}
+            hint={macara.warning ? "verifică AWB" : undefined}
+          />
+          <DataRow
+            n={r()}
+            label={`Tarif macara (${macara.distanceBucket ?? "—"})`}
+            value={ron(macara.basePrice)}
+            numeric
+          />
+          {macara.kmCost > 0 ? (
+            <DataRow
+              n={r()}
+              label={`Km extra macara (${macara.extraKm} km × ${macara.perKm} lei tur-retur)`}
+              value={ron(macara.kmCost)}
+              numeric
+            />
+          ) : (
+            <DataRow
+              n={r()}
+              label="Km extra macara"
+              value="— · distanță ≤ 50 km"
+              numeric
+              muted
+            />
+          )}
+          <DataRow
+            n={r()}
+            label={`Descărcare macara (${macara.pallets} × ${macara.unloadPerPallet} lei)`}
+            value={ron(macara.unloadCost)}
+            numeric
+          />
+          <TotalRow n={r()} label="TOTAL MACARA · cu TVA" value={ron(macara.total)} />
+        </>
       )}
     </div>
   );
