@@ -501,6 +501,81 @@ describe("calculatePrice — unloading tax (descărcare)", () => {
   });
 });
 
+describe("calculatePrice — macara (crane delivery), a separate track", () => {
+  // Macara named on the AWB Serviciu → legitimate macara, no warning.
+  // distance 5 km → "0-10 km" base 638.3 + 1 palet × 26.7 = 665.0 (cu TVA).
+  // It must NOT touch the carrier/customer/collaborator totals.
+  it("macara on the AWB prices on its own table with no warning", () => {
+    const base = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 1,
+    });
+    expect(r.macara.isMacara).toBe(true);
+    expect(r.macara.onAwb).toBe(true);
+    expect(r.macara.warning).toBe(false);
+    expect(r.macara.distanceBucket).toBe("0-10 km");
+    expect(r.macara.basePrice).toBe(638.3);
+    expect(r.macara.pallets).toBe(1);
+    expect(r.macara.unloadCost).toBe(26.7);
+    expect(r.macara.total).toBe(665.0);
+    // Separate: the standard totals are byte-for-byte the no-macara run.
+    expect(r.carrierTotal).toBe(base.carrierTotal);
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(base.cityCommissions.Ploiesti.customerTotal);
+    expect(r.collaboratorPrices.Bitlo.total).toBe(base.collaboratorPrices.Bitlo.total);
+  });
+
+  // Macara only on the invoice (AWB says something else) → WARNING.
+  // distance 25 km → "20-30 km" base 735.2 + 3 paleți × 26.7 = 80.1 → 815.3.
+  it("macara on the invoice but not the AWB raises the separate warning", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 25,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: false, macaraOnInvoice: true, macaraPallets: 3,
+    });
+    expect(r.macara.isMacara).toBe(true);
+    expect(r.macara.onInvoice).toBe(true);
+    expect(r.macara.onAwb).toBe(false);
+    expect(r.macara.warning).toBe(true);
+    expect(r.macara.distanceBucket).toBe("20-30 km");
+    expect(r.macara.basePrice).toBe(735.2);
+    expect(r.macara.pallets).toBe(3);
+    expect(r.macara.unloadCost).toBe(80.1);
+    expect(r.macara.total).toBe(815.3);
+  });
+
+  // >50 km macara: base 940.2 + (81−50) × 5 = 155 + 1 palet 26.7 = 1121.9.
+  it(">50 km macara adds 5 lei/km tur-retur on the overage", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 81,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true,
+    });
+    expect(r.macara.distanceBucket).toBe(">50 km");
+    expect(r.macara.basePrice).toBe(940.2);
+    expect(r.macara.extraKm).toBe(31);
+    expect(r.macara.kmCost).toBe(155);
+    expect(r.macara.pallets).toBe(1); // fell back to 1 (no count read)
+    expect(r.macara.total).toBe(1121.9);
+  });
+
+  // No macara anywhere → all macara fields zeroed, price untouched.
+  it("no macara leaves the price untouched", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    expect(r.macara.isMacara).toBe(false);
+    expect(r.macara.warning).toBe(false);
+    expect(r.macara.total).toBe(0);
+    expect(r.carrierTotal).toBe(48.40);
+  });
+});
+
 /** Local 2-dp round mirroring the engine, for assertions. */
 function round2(x: number): number {
   return Math.round((x + Number.EPSILON) * 100) / 100;

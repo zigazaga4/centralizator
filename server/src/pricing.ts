@@ -45,6 +45,13 @@
  * 2026-06-05: "descărcare is its own tax, it doesn't go into the commission
  * at all".
  *
+ * Macara (crane delivery) is treated the SAME way: its own breakdown section
+ * (`macara`), priced off the dedicated "Tarife livrare macara" table (cu TVA),
+ * neither commissioned nor folded into any total. It is detected from the AWB
+ * "Serviciu" (legitimate) and/or an invoice macara line; macara on the invoice
+ * with no macara on the AWB raises `macara.warning`. Per ops directive
+ * 2026-06-05.
+ *
  *   cityCommissions[city].commission    = round2(commissionBase × companyPct[city])
  *   cityCommissions[city].customerTotal = round2(commissionBase + commission + extraKmCost)
  *
@@ -68,6 +75,10 @@ import {
   BULKY_UNITS_PER_TRANSPORT,
   UNLOADING_TAX_GROSS,
   UNLOADING_TAX_NET,
+  MACARA_TARIFFS_GROSS,
+  MACARA_PER_KM_GROSS,
+  MACARA_EXTRA_KM_THRESHOLD,
+  MACARA_UNLOAD_PER_PALLET_GROSS,
   CITIES,
   COLLABORATORS,
   COMPANY_COMMISSION_BY_CITY,
@@ -75,10 +86,11 @@ import {
   type Service,
   type WeightBucket,
   type DistanceBucket,
+  type MacaraDistanceBucket,
   type City,
   type Collaborator,
 } from "./tariffs.js";
-import { weightBucket, distanceBucket, isWeekend } from "./buckets.js";
+import { weightBucket, distanceBucket, macaraDistanceBucket, isWeekend } from "./buckets.js";
 
 export interface PricingInput {
   /** Service tier — already mapped from AWB free text (Standard → Express, etc). */
@@ -105,6 +117,56 @@ export interface PricingInput {
    *  "Standard descărcare" service). 0 when no unloading. The >1200 kg
    *  multiplier (one extra unloading per extra transport) is applied here. */
   unloadingUnits?: number;
+  /** Macara (crane delivery) named on the AWB "Serviciu" field — the
+   *  legitimate signal that this is a macara run. Default false. */
+  macaraOnAwb?: boolean;
+  /** A macara line was found on an invoice (product/line named "macara").
+   *  When this is true but `macaraOnAwb` is false, the engine raises a
+   *  separate warning. Default false. */
+  macaraOnInvoice?: boolean;
+  /** Paleți delivered by crane, read off the invoice/AWB — drives the
+   *  per-palet macara unloading fee. Falls back to 1 when macara is detected
+   *  but no count was read. Default 0 (no macara). */
+  macaraPallets?: number;
+}
+
+/**
+ * Macara (crane delivery) breakdown — a SEPARATE pricing track, mirroring how
+ * the descărcare tax is kept apart. It is NOT commissioned and NOT folded into
+ * the carrier / customer / collaborator totals; the operator bills it on its
+ * own. Every figure is RON WITH VAT (cu TVA), straight from "Tarife livrare
+ * macara".
+ */
+export interface MacaraBreakdown {
+  /** True when this run is macara — named on the AWB OR found on an invoice. */
+  isMacara: boolean;
+  /** Macara named on the AWB "Serviciu" — the legitimate signal (no warning). */
+  onAwb: boolean;
+  /** Macara found on an invoice line. */
+  onInvoice: boolean;
+  /** SEPARATE warning: macara is on the invoice but the AWB does NOT declare
+   *  it (e.g. the AWB "Serviciu" reads "standard"). The operator must
+   *  reconcile the AWB. False whenever the AWB itself names macara. */
+  warning: boolean;
+  /** Paleți billed (1-8). 0 when not macara; 1 when macara is detected but no
+   *  palet count was read. */
+  pallets: number;
+  /** Macara distance bucket used for the base price; null when not macara. */
+  distanceBucket: MacaraDistanceBucket | null;
+  /** km charged at the macara per-km rate (overage past 50 km). 0 otherwise. */
+  extraKm: number;
+  /** Flat macara delivery price for the bucket (RON cu TVA). */
+  basePrice: number;
+  /** Macara per-km surcharge total = extraKm × 5 (RON cu TVA, tur-retur
+   *  already included, so NOT doubled). */
+  kmCost: number;
+  /** Unloading fee per palet (26,7 RON cu TVA). */
+  unloadPerPallet: number;
+  /** Total macara unloading = pallets × 26,7 (RON cu TVA). */
+  unloadCost: number;
+  /** Macara total (RON cu TVA) = basePrice + kmCost + unloadCost. COMPLETELY
+   *  separate: not commissioned and NOT in any carrier/customer/collab total. */
+  total: number;
 }
 
 export interface PricingBreakdown {
@@ -158,6 +220,10 @@ export interface PricingBreakdown {
   unloadingTax: number;
   /** Unloading tax WITHOUT VAT = unloadingCount × 177.69 (for reference). */
   unloadingTaxNet: number;
+  /** Macara (crane delivery) breakdown — a SEPARATE track (cu TVA), not
+   *  commissioned and not folded into any total. `macara.isMacara` is false
+   *  for an ordinary delivery. */
+  macara: MacaraBreakdown;
   /** Commission base in RON, VAT included = baseTariff + incrementCost +
    *  weekendSurcharge. This is what the city commission and the
    *  collaborator bonus percentages are applied to. It deliberately
@@ -271,6 +337,16 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const unloadingTax = round2(unloadingCount * UNLOADING_TAX_GROSS);
   const unloadingTaxNet = round2(unloadingCount * UNLOADING_TAX_NET);
 
+  // Macara (crane delivery) — another SEPARATE track on its own tariff,
+  // neither commissioned nor folded into any total. Detected upstream from
+  // the AWB "Serviciu" and/or an invoice macara line.
+  const macara = computeMacara({
+    onAwb: input.macaraOnAwb ?? false,
+    onInvoice: input.macaraOnInvoice ?? false,
+    pallets: Math.max(0, Math.floor(input.macaraPallets ?? 0)),
+    distanceKm,
+  });
+
   // The commission/bonus percentage applies ONLY to the base work
   // (base tariff + increments + weekend), NOT to the per-km surcharge.
   // The km cost is a pass-through that gets added flat at the very end.
@@ -325,10 +401,72 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     unloadingCount,
     unloadingTax,
     unloadingTaxNet,
+    macara,
     commissionBase,
     carrierTotal,
     cityCommissions,
     collaboratorPrices,
+  };
+}
+
+/**
+ * Pure macara computation. Mirrors the operator's rule:
+ *   • macara on the AWB "Serviciu"     → it IS macara, no warning.
+ *   • macara only on an invoice line   → it IS macara, but a SEPARATE
+ *                                         warning fires (the AWB mislabels it).
+ *   • macara nowhere                   → not macara (all fields zeroed).
+ * Every figure is RON cu TVA. The result is kept entirely separate from the
+ * commission/carrier/customer/collaborator math.
+ */
+function computeMacara(args: {
+  onAwb: boolean;
+  onInvoice: boolean;
+  pallets: number;
+  distanceKm: number;
+}): MacaraBreakdown {
+  const { onAwb, onInvoice, distanceKm } = args;
+  const isMacara = onAwb || onInvoice;
+  if (!isMacara) {
+    return {
+      isMacara: false,
+      onAwb: false,
+      onInvoice: false,
+      warning: false,
+      pallets: 0,
+      distanceBucket: null,
+      extraKm: 0,
+      basePrice: 0,
+      kmCost: 0,
+      unloadPerPallet: MACARA_UNLOAD_PER_PALLET_GROSS,
+      unloadCost: 0,
+      total: 0,
+    };
+  }
+  // The big/separate warning: macara reached us only via an invoice line —
+  // the AWB "Serviciu" did NOT declare macara (e.g. it reads "standard").
+  const warning = onInvoice && !onAwb;
+  // Macara is detected; bill at least one palet even if the count was unread.
+  const pallets = args.pallets > 0 ? args.pallets : 1;
+  const bucket = macaraDistanceBucket(distanceKm);
+  const basePrice = MACARA_TARIFFS_GROSS[bucket];
+  const extraKm = bucket === ">50 km" ? Math.max(0, distanceKm - MACARA_EXTRA_KM_THRESHOLD) : 0;
+  // The 5 lei/km already counts the round trip ("tur-retur"), so no ×2 here.
+  const kmCost = round2(extraKm * MACARA_PER_KM_GROSS);
+  const unloadCost = round2(pallets * MACARA_UNLOAD_PER_PALLET_GROSS);
+  const total = round2(basePrice + kmCost + unloadCost);
+  return {
+    isMacara: true,
+    onAwb,
+    onInvoice,
+    warning,
+    pallets,
+    distanceBucket: bucket,
+    extraKm,
+    basePrice: round2(basePrice),
+    kmCost,
+    unloadPerPallet: MACARA_UNLOAD_PER_PALLET_GROSS,
+    unloadCost,
+    total,
   };
 }
 

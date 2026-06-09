@@ -94,6 +94,7 @@ export function PairDetail({
         <section className="lg:col-span-7 xl:col-span-8 space-y-6">
           {status.kind === "ready" ? (
             <>
+              {status.breakdown.macara?.warning && <MacaraWarningBanner />}
               <Spreadsheet
                 data={status.edits}
                 service={status.service}
@@ -327,6 +328,33 @@ function StatusPlaceholder({ status }: { status: Exclude<PairStatus, { kind: "re
     <div className="flex h-64 flex-col items-center justify-center gap-2 rounded-xl border border-ink-200 bg-canvas-50 text-center shadow-sm">
       <p className="text-sm font-semibold uppercase tracking-wider text-ink-600">{m.title}</p>
       <p className="max-w-md px-6 text-sm text-ink-500 whitespace-pre-wrap">{m.body}</p>
+    </div>
+  );
+}
+
+/* ─── Macara warning (separate alarm) ───────────────────────────────── */
+
+/**
+ * Standalone, loud warning for the macara mismatch the operator asked to be
+ * flagged on its own: a macara line is on the INVOICE, but the AWB "Serviciu"
+ * does NOT say macara (it reads "standard" or similar). Kept deliberately
+ * separate from the product/km verification banner — this is its own alarm.
+ */
+function MacaraWarningBanner() {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border-2 border-coral-400 bg-coral-50 px-4 py-3 text-coral-800 shadow-sm">
+      <svg className="mt-0.5 h-6 w-6 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <div>
+        <p className="text-sm font-semibold uppercase tracking-wide">Atenție · macara pe factură</p>
+        <p className="mt-0.5 text-sm">
+          Factura conține „macara”, dar AWB-ul nu specifică macara la „Serviciu”.
+          Verifică AWB-ul: dacă transportul este cu macara, serviciul de pe AWB ar trebui să fie macara.
+        </p>
+      </div>
     </div>
   );
 }
@@ -603,6 +631,57 @@ function Spreadsheet({
           numeric
           muted
         />
+      )}
+
+      {/* Macara (crane delivery) — a SEPARATE track on its own tariff
+          (cu TVA), not commissioned and NOT part of the client total
+          below. Rendered only when the run is macara; the AWB-vs-invoice
+          mismatch also surfaces as the loud banner at the top of the page. */}
+      {breakdown.macara?.isMacara && (
+        <>
+          <Section title="Macara · taxă separată (cu TVA)" />
+          <DataRow
+            n={r()}
+            label="Sursă macara"
+            value={breakdown.macara.onAwb ? "specificat pe AWB" : "doar pe factură"}
+            hint={breakdown.macara.warning ? "verifică AWB" : undefined}
+          />
+          <DataRow
+            n={r()}
+            label={`Tarif macara (${breakdown.macara.distanceBucket ?? "—"})`}
+            value={ron(breakdown.macara.basePrice)}
+            numeric
+          />
+          {breakdown.macara.kmCost > 0 ? (
+            <DataRow
+              n={r()}
+              label={`Km extra macara (${breakdown.macara.extraKm} km × 5 lei tur-retur)`}
+              value={ron(breakdown.macara.kmCost)}
+              numeric
+            />
+          ) : (
+            <DataRow
+              n={r()}
+              label="Km extra macara"
+              value="— · distanță ≤ 50 km"
+              numeric
+              muted
+            />
+          )}
+          <DataRow
+            n={r()}
+            label={`Descărcare macara (${breakdown.macara.pallets} × 26,7 lei)`}
+            value={ron(breakdown.macara.unloadCost)}
+            numeric
+          />
+          <DataRow
+            n={r()}
+            label="Total macara (cu TVA)"
+            value={ron(breakdown.macara.total)}
+            numeric
+            hint="taxă separată"
+          />
+        </>
       )}
 
       {/* Carrier subtotal — what Stalexone (transportator) gets. The

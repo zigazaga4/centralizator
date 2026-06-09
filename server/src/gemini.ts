@@ -120,6 +120,14 @@ const invoiceSchema = {
         "is greater than 1. A 'descărcare' line billed at any OTHER amount is a different service — do " +
         "NOT count it. 0 when there is no qualifying line.",
     },
+    macara_pallets: {
+      type: "integer",
+      description:
+        "How many paleți this invoice delivers by crane ('macara'). Set >0 ONLY when the invoice has a " +
+        "macara service/line (a line whose description contains 'macara'). Read the palet count (1-8) " +
+        "from that line's quantity or from the AWB. If macara is present but the palet count is unclear, " +
+        "set 1. Set 0 when there is no macara line on this invoice.",
+    },
     items: {
       type: "array",
       description: "Invoice line items.",
@@ -260,6 +268,11 @@ const SYSTEM_INSTRUCTION =
   "quantity if > 1). A 'descărcare' line at any OTHER amount is a different service and must NOT be " +
   "counted. Set 0 when there is no qualifying line. This is also implied when the AWB 'Serviciu' field " +
   "reads 'Standard descărcare'.\n" +
+  "• macara_pallets (per invoice): set it to how many paleți are delivered by crane ('macara') on this " +
+  "invoice. Set >0 ONLY when a line/service named 'macara' is present; read the palet count (1-8) from " +
+  "that line's quantity or the AWB, and set 1 if a macara line exists but the count is unclear. Set 0 " +
+  "when there is no macara line. Macara may instead be named on the AWB 'Serviciu' field — still extract " +
+  "service_text verbatim there so the server can reconcile the AWB against the invoice.\n" +
   "• dimensions: on EACH invoice line, copy the product's physical SIZE token verbatim with its unit " +
   "(e.g. '10 x 100 x 50 cm', '2000 x 1000 mm', 'Ø 50 mm') from the product name/description or a size " +
   "column. This is cross-checked against the leroymerlin.ro product page, so accuracy matters. Do NOT " +

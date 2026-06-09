@@ -10,6 +10,8 @@ export type WeightBucket =
   | "0-200kg" | "200-500kg" | "500-800kg" | "800-1200kg" | ">1200kg";
 export type DistanceBucket =
   | "0-15 km" | "15-20 km" | "20-30 km" | "30-50 km" | ">50 km";
+export type MacaraDistanceBucket =
+  | "0-10 km" | "10-15 km" | "15-20 km" | "20-30 km" | "30-50 km" | ">50 km";
 
 export interface InvoiceItem {
   name: string;
@@ -318,6 +320,28 @@ export interface CollaboratorPriceRow {
   total: number;
 }
 
+/**
+ * Macara (crane delivery) breakdown — mirrors the server's MacaraBreakdown.
+ * A SEPARATE track (RON cu TVA): priced off the dedicated "Tarife livrare
+ * macara" table, NOT commissioned and NOT folded into any carrier/customer/
+ * collaborator total. `warning` is the operator's separate alarm: macara is
+ * on the invoice but the AWB does not declare it.
+ */
+export interface MacaraBreakdown {
+  isMacara: boolean;
+  onAwb: boolean;
+  onInvoice: boolean;
+  warning: boolean;
+  pallets: number;
+  distanceBucket: MacaraDistanceBucket | null;
+  extraKm: number;
+  basePrice: number;
+  kmCost: number;
+  unloadPerPallet: number;
+  unloadCost: number;
+  total: number;
+}
+
 export interface PricingBreakdown {
   weightBucket: WeightBucket;
   distanceBucket: DistanceBucket;
@@ -341,6 +365,14 @@ export interface PricingBreakdown {
   unloadingTax: number;
   /** Unloading tax WITHOUT VAT = unloadingCount × 177.69 (reference). */
   unloadingTaxNet: number;
+  /**
+   * Macara (crane delivery) breakdown — a SEPARATE track (RON cu TVA), not
+   * commissioned and not folded into any total. Optional because pairs
+   * priced before macara was added (persisted breakdowns) don't carry it;
+   * always read it through `?.`. `macara.isMacara` is false for an ordinary
+   * delivery.
+   */
+  macara?: MacaraBreakdown;
   /**
    * Carrier subtotal — what Stalexone (the carrier) gets, RON with VAT
    * included at the current rate. The shared base every per-city
@@ -421,6 +453,12 @@ export interface PricingRequest {
    *  so the unloading tax survives a re-price. The >1200 kg multiplier is
    *  re-applied server-side. Optional; defaults to 0. */
   unloading_units?: number;
+  /** Macara signals carried across live edits so the separate macara
+   *  breakdown + warning survive a re-price. Paleți are not user-editable
+   *  here, so they ride along unchanged. Optional; default "no macara". */
+  macara_on_awb?: boolean;
+  macara_on_invoice?: boolean;
+  macara_pallets?: number;
 }
 
 /* ──────────────────────────────────────────────────────────────────────

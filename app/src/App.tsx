@@ -45,6 +45,31 @@ function storeOf(pair: Pair): StoreKey | null {
   return pair.status.store ?? pair.status.routing?.store ?? null;
 }
 
+/**
+ * Top-level list the queue is split into: ordinary deliveries vs. macara
+ * (crane) deliveries. The user flips between the two with a segmented
+ * Standard/Macara switch; each is its own working list.
+ */
+export type ViewMode = "standard" | "macara";
+
+/** True once a pair's ready breakdown classifies it as a macara (crane) run. */
+function isMacaraPair(pair: Pair): boolean {
+  return pair.status.kind === "ready" && !!pair.status.breakdown.macara?.isMacara;
+}
+
+/**
+ * Does this pair belong in the active list? A READY pair shows only in the
+ * list matching its macara state (macara runs in "Macara", everything else
+ * in "Standard"). A pair that hasn't been priced yet (pending / extracting /
+ * error) isn't classified, so it shows in BOTH lists — same principle as an
+ * unfiled store, so a freshly added pair is never hidden before the AI
+ * decides where it goes. Once it goes ready it snaps to the correct list.
+ */
+function inView(pair: Pair, view: ViewMode): boolean {
+  if (pair.status.kind !== "ready") return true;
+  return isMacaraPair(pair) === (view === "macara");
+}
+
 /** localStorage key for the last-viewed day. Survives reloads so the
  *  user lands on the day they were working on, not a random default. */
 const LS_SELECTED_DAY = "centralizator.selectedDay";
@@ -55,6 +80,10 @@ const LS_SELECTED_DAY = "centralizator.selectedDay";
  *  doesn't reselect on every launch. */
 const LS_SELECTED_CITY = "centralizator.selectedCity";
 const LS_SELECTED_COLLABORATOR = "centralizator.selectedCollaborator";
+
+/** localStorage key for the Standard/Macara list switch — survives reloads
+ *  so the user stays on the list they were working in. */
+const LS_SELECTED_VIEW = "centralizator.selectedView";
 
 function readEnumLS<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
@@ -208,6 +237,20 @@ export default function App() {
   // city maps to 1:1.
   const activeStore = useMemo<StoreKey>(() => primaryDispatchSite(selectedCity), [selectedCity]);
 
+  // Standard vs. Macara list. Two top-level buttons switch between them; each
+  // behaves like its own workbook (its own day tabs, table, totals, export).
+  // Persisted so a relaunch keeps the user on the list they were working in.
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    readEnumLS<ViewMode>(LS_SELECTED_VIEW, ["standard", "macara"], "standard"),
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_SELECTED_VIEW, viewMode);
+    } catch {
+      /* localStorage may be disabled — ignore. */
+    }
+  }, [viewMode]);
+
   /** Does this pair belong in the active centralizator? A pair filed to
    *  the active store shows here; an unassigned pair (no store yet) shows
    *  in every store so it's never lost before the AI files it. */
@@ -218,6 +261,9 @@ export default function App() {
     },
     [activeStore],
   );
+
+  /** Does this pair belong in the active Standard/Macara list? */
+  const inActiveView = useCallback((p: Pair) => inView(p, viewMode), [viewMode]);
 
   // Live ref so callbacks (runAll, repricePair, keydown handler) always
   // see the freshest pairs without re-creating themselves on every
@@ -461,7 +507,7 @@ export default function App() {
     // Scoped to the active centralizator: "Goleşte ziua" clears only the
     // current store's pairs for the day, leaving the other stores intact.
     const toDelete = pairsRef.current.filter(
-      (p) => p.day === selectedDay && inActiveStore(p),
+      (p) => p.day === selectedDay && inActiveStore(p) && inActiveView(p),
     );
     if (toDelete.length === 0) return;
     for (const p of toDelete) {
@@ -479,7 +525,7 @@ export default function App() {
         console.error("Failed to delete pair from DB:", err),
       );
     }
-  }, [commit, selectedDay, markLocal, inActiveStore]);
+  }, [commit, selectedDay, markLocal, inActiveStore, inActiveView]);
 
   /* ── Status transitions (shared by run + reprice) ─────────────────── */
 
@@ -567,6 +613,13 @@ export default function App() {
           // (not user-editable here), so a live re-price must preserve it or
           // the separate unloading tax would silently vanish.
           unloading_units: breakdown.unloadingUnits,
+          // Same for macara: detected from the AWB/invoice at extraction time
+          // (not editable here), so carry the signals forward or the separate
+          // macara line + warning would vanish on the first edit. `?.` guards
+          // breakdowns persisted before macara existed.
+          macara_on_awb: breakdown.macara?.onAwb ?? false,
+          macara_on_invoice: breakdown.macara?.onInvoice ?? false,
+          macara_pallets: breakdown.macara?.pallets ?? 0,
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever
@@ -775,9 +828,23 @@ export default function App() {
   // queue table, the totals, and the buttons; the export menu only sees
   // these — so each store exports its own centralizator.
   const dayPairs = useMemo(
-    () => pairs.filter((p) => p.day === selectedDay && inActiveStore(p)),
-    [pairs, selectedDay, inActiveStore],
+    () => pairs.filter((p) => p.day === selectedDay && inActiveStore(p) && inActiveView(p)),
+    [pairs, selectedDay, inActiveStore, inActiveView],
   );
+
+  // Counts behind the Standard/Macara switch, scoped to the selected day +
+  // store. An undecided (not-yet-priced) pair shows in both lists, so it is
+  // counted in both — the badge reflects exactly what each list will show.
+  const modeCounts = useMemo(() => {
+    let standard = 0;
+    let macara = 0;
+    for (const p of pairs) {
+      if (p.day !== selectedDay || !inActiveStore(p)) continue;
+      if (inView(p, "macara")) macara += 1;
+      if (inView(p, "standard")) standard += 1;
+    }
+    return { standard, macara };
+  }, [pairs, selectedDay, inActiveStore]);
 
   // One DayCount per day that holds at least one pair IN THE ACTIVE
   // centralizator, ordered by ISO string. Scoping the tabs to the active
@@ -786,14 +853,14 @@ export default function App() {
   const dayCounts = useMemo<DayCount[]>(() => {
     const m = new Map<string, { count: number; readyCount: number }>();
     for (const p of pairs) {
-      if (!inActiveStore(p)) continue;
+      if (!inActiveStore(p) || !inActiveView(p)) continue;
       const c = m.get(p.day) ?? { count: 0, readyCount: 0 };
       c.count += 1;
       if (p.status.kind === "ready") c.readyCount += 1;
       m.set(p.day, c);
     }
     return Array.from(m.entries()).map(([day, v]) => ({ day, ...v }));
-  }, [pairs, inActiveStore]);
+  }, [pairs, inActiveStore, inActiveView]);
 
   // Header counters — scoped to current day so "Calculează (N)" tells
   // the truth about what pressing the button will run.
@@ -930,6 +997,7 @@ export default function App() {
            * live. Day tabs on top, then the compact add-card, then the
            * table (its column headers stand in for the "empty" state). */
           <>
+            <ModeToggle mode={viewMode} counts={modeCounts} onChange={setViewMode} />
             <DayTabs
               days={dayCounts}
               selectedDay={selectedDay}
@@ -951,6 +1019,70 @@ export default function App() {
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * ModeToggle — the top-level Standard/Macara list switch.
+ *
+ * A segmented control: two buttons, the active one filled coral. Each
+ * carries a count badge for the selected day + store so the user sees how
+ * many pairs sit in each list before switching. Macara (crane) runs live in
+ * their own list; everything else stays in Standard. Pairs that haven't been
+ * priced yet show in both, so a fresh drop is never hidden until the AI
+ * decides where it belongs.
+ * ────────────────────────────────────────────────────────────────────── */
+function ModeToggle({
+  mode,
+  counts,
+  onChange,
+}: {
+  mode: ViewMode;
+  counts: { standard: number; macara: number };
+  onChange: (m: ViewMode) => void;
+}) {
+  const tabs: { key: ViewMode; label: string; count: number }[] = [
+    { key: "standard", label: "Standard", count: counts.standard },
+    { key: "macara", label: "Macara", count: counts.macara },
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Listă standard sau macara"
+      className="inline-flex self-start rounded-lg border border-ink-200 bg-canvas-50 p-1 shadow-sm"
+    >
+      {tabs.map((t) => {
+        const active = t.key === mode;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(t.key)}
+            className={`inline-flex items-center gap-2 rounded-md px-4 py-1.5 text-sm font-medium transition ${
+              active
+                ? "bg-coral-500 text-canvas-50 shadow-sm"
+                : "text-ink-600 hover:bg-canvas-200 hover:text-ink-900"
+            }`}
+            title={
+              t.key === "macara"
+                ? "Perechile cu macara (livrare cu macara)"
+                : "Perechile standard (fără macara)"
+            }
+          >
+            <span>{t.label}</span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[11px] tabular-nums ${
+                active ? "bg-coral-600 text-canvas-50" : "bg-canvas-200 text-ink-500"
+              }`}
+            >
+              {t.count}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -18,31 +18,33 @@ import { ProductBadge } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
-/* Each width below is chosen so the 17-column grid lines up cleanly
- * even when a row is still pending (no extracted data yet). All
- * fixed-width columns sum to 1500 px (40+56+64+148+148+120+120+72+72
- * +60+88+72+72+72+120+140+36); the wrapper scrolls horizontally on
- * smaller windows.
+/* Columns auto-fit to their content, Excel-style. Each track is sized
+ * so the cell never clips and never spills past its border, no matter
+ * how long the value inside it is.
  *
- * The two free-text columns (AWB #, Factură #) are `minmax(148px, 1fr)`
- * instead of `148px` so they absorb any width beyond 1500 px. Without
- * this, on a desktop window wider than the grid total the columns stay
- * packed at the left and the row backgrounds, cell borders, and the
- * sticky coral total row visually "stop" mid-page — the table fails to
- * fill the available width. With 1fr on those two columns the grid
- * always spans the full wrapper, and cells, borders, header and footer
- * all extend cleanly to the right edge.
+ * Three kinds of column:
  *
- * Column 15 ("Total client") is 120 px — each city maps to a single
- * dispatch site now (Iași Tudor and Iași ERA are separate dropdown
- * options, not stacked under one "Iași" choice), so the cell renders
- * a single bold RON number that fits comfortably in 120 px.
+ *  • Icon / fixed columns (#, Stare, Imagini, ✕) stay at a fixed px
+ *    width — their content is a fixed-size glyph, never text that grows.
  *
- * Column 16 ("Plată colab.") is 140 px so the longest short-label
- * "Plată Vic Dinamic" header doesn't overflow the uppercase
- * tracking-widest band. */
+ *  • Editable columns (Data, Serviciu, kg, km, Liv.) stay at a fixed px
+ *    width too — they hold <input>/<select> controls, which clip their
+ *    own overflow internally and so can never spill past the cell.
+ *
+ *  • Display columns size to content. The numeric/total columns use
+ *    `minmax(<floor>px, max-content)`: at least wide enough for the
+ *    header label, but they grow to fit the widest RON value in that
+ *    column across every row (e.g. "1.234,56 RON" no longer overflows
+ *    an 88 px cell). The two free-text columns (AWB #, Factură #) use
+ *    `minmax(max-content, 1fr)`: never narrower than their content (so
+ *    long AWB/invoice numbers are shown in full, not truncated) and
+ *    they absorb any leftover width so the grid, borders, header and
+ *    sticky coral total row all extend cleanly to the right edge.
+ *
+ * The wrapper keeps `min-w-[1500px]` so the table scrolls horizontally
+ * on narrow windows instead of crushing the auto-fit columns. */
 const GRID =
-  "grid grid-cols-[40px_56px_64px_minmax(148px,1fr)_minmax(148px,1fr)_120px_120px_72px_72px_60px_88px_72px_72px_72px_120px_140px_36px]";
+  "grid grid-cols-[40px_56px_64px_minmax(max-content,1fr)_minmax(max-content,1fr)_120px_120px_72px_72px_60px_minmax(88px,max-content)_minmax(72px,max-content)_minmax(72px,max-content)_minmax(72px,max-content)_minmax(120px,max-content)_minmax(140px,max-content)_36px]";
 
 interface Props {
   pairs: Pair[];
@@ -266,7 +268,8 @@ function PairRow({
 
       {/* AWB # + product-check badge (warning / ok / spinner) */}
       <div className="flex items-center gap-1.5 border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
-        <span className="flex-1 truncate">{edits?.awb.awb_number || <Dash />}</span>
+        <span className="flex-1 whitespace-nowrap">{edits?.awb.awb_number || <Dash />}</span>
+        {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
         <ProductBadge
           verification={status.kind === "ready" ? status.verification : undefined}
           routing={status.kind === "ready" ? status.routing : undefined}
@@ -481,7 +484,7 @@ function FacturaCell({ edits }: { edits: Extracted | null }) {
           : undefined
       }
     >
-      <span className="flex-1 truncate">{first.invoice_number || <Dash />}</span>
+      <span className="flex-1 whitespace-nowrap">{first.invoice_number || <Dash />}</span>
       {first.invoice_is_duplicate && (
         <span className="ml-1 rounded bg-coral-100 px-1 py-0.5 text-[9px] font-medium uppercase text-coral-700">
           DUP
@@ -646,6 +649,26 @@ function Thumbs({ files }: { files: File[] }) {
 
 function Dash() {
   return <span className="text-ink-400">—</span>;
+}
+
+/** Compact macara marker shown next to the AWB number in the queue. Coral
+ *  + ⚠ when the macara is only on the invoice (the AWB doesn't declare it),
+ *  neutral when the AWB itself names macara. */
+function MacaraChip({ warning }: { warning: boolean }) {
+  return (
+    <span
+      title={
+        warning
+          ? "Macara pe factură, dar AWB-ul nu o specifică — verifică AWB-ul"
+          : "Macara (specificată pe AWB)"
+      }
+      className={`shrink-0 whitespace-nowrap rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+        warning ? "bg-coral-600 text-canvas-50" : "bg-ink-200 text-ink-700"
+      }`}
+    >
+      {warning ? "⚠ macara" : "macara"}
+    </span>
+  );
 }
 
 function PlaceholderCell({ numeric }: { numeric?: boolean }) {

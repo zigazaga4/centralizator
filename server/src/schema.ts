@@ -79,6 +79,15 @@ export const InvoiceSchema = z.object({
    * vision model sets this per invoice; 0 when there is no such line.
    */
   unloading_count: z.number().int().nonnegative().optional().default(0),
+  /**
+   * How many paleți this invoice delivers by crane ("macara") — set >0 ONLY
+   * when the invoice carries a macara service/line; read the palet count
+   * (1-8) from the macara line or the AWB. If macara is present but the count
+   * is unclear, the value is 1. 0 when there is no macara line. The presence
+   * of macara on the invoice (this > 0 OR a line literally named "macara")
+   * drives the separate macara breakdown + warning.
+   */
+  macara_pallets: z.number().int().nonnegative().optional().default(0),
   items: z.array(InvoiceItemSchema).default([]),
   invoice_total_net: z.number().optional().nullable(),
   invoice_total_vat: z.number().optional().nullable(),
@@ -258,5 +267,15 @@ export const PricingRequestSchema = z.object({
    * by the engine, not here.
    */
   unloading_units: z.number().int().nonnegative().default(0),
+  /**
+   * Macara (crane delivery) signals, preserved across live edits so the
+   * separate macara breakdown survives a re-price. `macara_on_awb` = the AWB
+   * Serviciu names macara; `macara_on_invoice` = a macara line is on an
+   * invoice; `macara_pallets` = paleți read off the invoice/AWB. All optional
+   * (default "no macara") so the current client still reprices.
+   */
+  macara_on_awb: z.boolean().default(false),
+  macara_on_invoice: z.boolean().default(false),
+  macara_pallets: z.number().int().nonnegative().default(0),
 });
 export type PricingRequest = z.infer<typeof PricingRequestSchema>;

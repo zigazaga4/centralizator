@@ -95,6 +95,34 @@ export function summariseUnloading(extracted: Extracted): number {
   return /descarcare/.test(service) ? 1 : 0;
 }
 
+/**
+ * Resolve the macara (crane delivery) signals for the shipment. Two
+ * independent sources, mirroring the operator's rule:
+ *   • `onAwb`     — the AWB "Serviciu" field names macara (the legitimate
+ *                   signal; no warning is raised).
+ *   • `onInvoice` — a macara line was found on an invoice (any line named
+ *                   "macara", or an invoice that reported `macara_pallets > 0`).
+ * `pallets` sums the paleți read across invoices (drives the per-palet fee;
+ * the engine falls back to 1 when macara is detected but no count was read).
+ * The pricing engine turns "macara on the invoice but not on the AWB" into a
+ * separate warning.
+ */
+export function summariseMacara(
+  extracted: Extracted,
+): { onAwb: boolean; onInvoice: boolean; pallets: number } {
+  const norm = (s: string | null | undefined): string =>
+    (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const onAwb = /macara/.test(norm(extracted.awb.service_text));
+  let pallets = 0;
+  let hasMacaraItem = false;
+  for (const inv of extracted.invoices) {
+    pallets += Math.max(0, Math.floor(inv.macara_pallets ?? 0));
+    if (inv.items.some((it) => /macara/.test(norm(it.name)))) hasMacaraItem = true;
+  }
+  const onInvoice = pallets > 0 || hasMacaraItem;
+  return { onAwb, onInvoice, pallets };
+}
+
 export function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasOtherProducts: boolean } {
   let bulkyUnits = 0;
   let hasOtherProducts = false;
@@ -125,6 +153,7 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
   const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
   const unloadingUnits = summariseUnloading(extracted);
+  const macara = summariseMacara(extracted);
 
   // Resolve the origin store + the routed delivery distance. This OVERWRITES
   // the AWB's printed km with the Mapbox shortest-road distance (store →
@@ -145,6 +174,9 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
       bulkyUnits,
       hasOtherProducts,
       unloadingUnits,
+      macaraOnAwb: macara.onAwb,
+      macaraOnInvoice: macara.onInvoice,
+      macaraPallets: macara.pallets,
     });
   } catch (err) {
     throw new PipelineError("pricing", (err as Error).message, extracted);

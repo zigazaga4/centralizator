@@ -225,6 +225,64 @@ export const BULKY_UNITS_PER_TRANSPORT = 24;
 export const UNLOADING_TAX_NET = 177.69;
 export const UNLOADING_TAX_GROSS = 210;
 
+/* ──────────────────────────────────────────────────────────────────────
+ * Macara (crane delivery) — a SEPARATE pricing track.
+ *
+ * Source: "Tarife Macara Constanta si Iasi 1.pdf" — "Tarife livrare macara
+ * (cu TVA) Iași Tudor, Iași ERA, Constanța, Ploiești". The SAME table
+ * applies to all four dispatch sites. Every figure is RON WITH VAT
+ * ("cu TVA"); the document gives no without-VAT figures, so none are
+ * invented here.
+ *
+ * A macara run carries 1-8 paleți at one flat distance-bucketed price, plus
+ * a per-palet unloading fee (26,7 lei cu TVA / palet). Over 50 km the base
+ * price gets a 5 lei/km tur-retur surcharge on the kilometres past 50 (the
+ * "tur-retur" round trip is ALREADY baked into the 5 lei, so it is not
+ * doubled the way the standard PER_KM_SURCHARGE is).
+ *
+ * Like the descărcare tax, macara is kept ENTIRELY separate: its own
+ * breakdown section, NOT commissioned and NOT folded into the carrier /
+ * customer / collaborator totals. Detection + warning rule (ops directive
+ * 2026-06-05): the AWB "Serviciu" naming macara is the legitimate signal;
+ * if instead the AWB reads something else (e.g. "standard") but a macara
+ * line is on the invoice, that fires a separate warning for the operator.
+ * ────────────────────────────────────────────────────────────────────── */
+export type MacaraDistanceBucket =
+  | "0-10 km"
+  | "10-15 km"
+  | "15-20 km"
+  | "20-30 km"
+  | "30-50 km"
+  | ">50 km";
+
+export const MACARA_DISTANCE_BUCKETS: readonly MacaraDistanceBucket[] = [
+  "0-10 km", "10-15 km", "15-20 km", "20-30 km", "30-50 km", ">50 km",
+] as const;
+
+/** Macara delivery price per distance bucket (RON, cu TVA). Flat for 1-8
+ *  paleți. The >50 km bucket shares the 30-50 km base; the per-km surcharge
+ *  below is added on top of it. */
+export const MACARA_TARIFFS_GROSS: Readonly<Record<MacaraDistanceBucket, number>> = Object.freeze({
+  "0-10 km":  638.3,
+  "10-15 km": 638.3,
+  "15-20 km": 704.0,
+  "20-30 km": 735.2,
+  "30-50 km": 940.2,
+  ">50 km":   940.2,
+});
+
+/** Macara per-km surcharge for the >50 km bucket (RON cu TVA), applied to the
+ *  (km − 50) overage. The doc's "5 Ron/km tur-retur" already counts the round
+ *  trip, so it is NOT multiplied by 2 (unlike the standard PER_KM_SURCHARGE). */
+export const MACARA_PER_KM_GROSS = 5;
+
+/** Distance above which the macara per-km surcharge kicks in. */
+export const MACARA_EXTRA_KM_THRESHOLD = 50;
+
+/** Unloading fee per palet delivered with macara (RON cu TVA), the doc's
+ *  "Taxa descarcare" column. Billed once per palet on the run. */
+export const MACARA_UNLOAD_PER_PALLET_GROSS = 26.7;
+
 /**
  * Per-city dispatcher commission, applied on top of the carrier total.
  * The base tariffs above are what the CARRIER charges; the company
