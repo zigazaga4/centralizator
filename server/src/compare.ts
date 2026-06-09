@@ -51,8 +51,13 @@ export interface CompareField {
   app: string | number | null;
   status: FieldStatus;
   severity: FieldSeverity;
-  /** Short Romanian explanation, shown on mismatch/missing rows. */
+  /** Short Romanian explanation of the magnitude, shown on mismatch/missing. */
   note?: string;
+  /** Deterministic CAUSE of the difference, inferred from the pair's own
+   *  breakdown (macara line, weekend date, unloading, missing km on the
+   *  photographed page, rate-card gap). Rendered in parentheses in the UI so
+   *  the operator sees WHY a row differs without opening the documents. */
+  reason?: string;
 }
 
 export interface CompareRow {
@@ -180,6 +185,12 @@ interface AppFacts {
   extraKm: number | null; // routing.awbKm (the courier-comparable km)
   roadKm: number | null; // routing.mapboxKm (our measured road km)
   price: number | null; // breakdown.grandTotal (carrier + unloading + macara)
+  // Breakdown signals used to EXPLAIN a price/field difference.
+  weekendSurcharge: number; // >0 when the AWB date is Sat/Sun
+  unloadingTax: number; // >0 when descărcare is billed (cu TVA)
+  macaraIsMacara: boolean; // a crane line was detected
+  macaraTotal: number; // crane cost folded into grandTotal (cu TVA)
+  deliveryDate: string | null; // AWB date, for the weekend explanation
 }
 
 /** Pull the comparable scalars out of a ready pair; null for non-ready pairs. */
@@ -190,6 +201,7 @@ function appFactsOf(pair: PairWire): AppFacts | null {
   const routing = pair.status.routing as Routing | undefined;
   const awb = edits?.awb;
   if (!awb?.awb_number) return null;
+  const macara = breakdown?.macara;
   return {
     awbRaw: awb.awb_number,
     recipient: awb.recipient_name ?? null,
@@ -199,7 +211,95 @@ function appFactsOf(pair: PairWire): AppFacts | null {
     // All-in total (carrier + descărcare + macara). Fall back to carrierTotal
     // for any older breakdown persisted before grandTotal existed.
     price: breakdown ? num(breakdown.grandTotal ?? breakdown.carrierTotal) : null,
+    weekendSurcharge: breakdown ? num(breakdown.weekendSurcharge) ?? 0 : 0,
+    unloadingTax: breakdown ? num(breakdown.unloadingTax) ?? 0 : 0,
+    macaraIsMacara: macara?.isMacara ?? false,
+    macaraTotal: macara ? num(macara.total) ?? 0 : 0,
+    deliveryDate: awb.delivery_date ?? null,
   };
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Reason classifier — WHY a field differs
+ *
+ * Deterministic, derived purely from the pair's own breakdown + the Excel
+ * row. No guessing beyond what the numbers already prove. The strings are
+ * short Romanian phrases shown in parentheses next to the differing value.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** Weekday name for a YYYY-MM-DD date in the operator's TZ; null if unparseable. */
+function weekdayRo(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return ["duminică", "luni", "marți", "miercuri", "joi", "vineri", "sâmbătă"][d.getDay()] ?? null;
+}
+
+/** True when the courier billed extra km but our side read 0 (the photographed
+ *  page was a proces-verbal/factură without the "Distanță extra" field). */
+function extraKmMissing(excelExtraKm: number | null, app: AppFacts): boolean {
+  return (excelExtraKm ?? 0) > 0 && (app.extraKm ?? 0) === 0;
+}
+
+/** Cause of a PRICE difference (grandTotal vs the portal's "Pret cu TVA"). */
+function priceReason(excelExtraKm: number | null, app: AppFacts): string {
+  const parts: string[] = [];
+  if (app.macaraIsMacara && app.macaraTotal > 0) {
+    parts.push(`include livrare macara ${app.macaraTotal} RON (facturată separat de Leroy, nu intră în prețul curierului)`);
+  }
+  if (app.weekendSurcharge > 0) {
+    const wd = weekdayRo(app.deliveryDate);
+    parts.push(`tarif weekend +${app.weekendSurcharge} RON (AWB datat ${wd ?? "în weekend"})`);
+  }
+  if (app.unloadingTax > 0) {
+    parts.push(`include taxă descărcare ${app.unloadingTax} RON`);
+  }
+  if (extraKmMissing(excelExtraKm, app)) {
+    parts.push("km extra necitiți pe poză → lipsește suprataxa de distanță");
+  }
+  if (parts.length === 0) {
+    parts.push("diferență de grilă tarifară (tarifele noastre vs. cele ale curierului)");
+  }
+  return parts.join("; ");
+}
+
+/** Dispatch the right cause for any differing field. */
+function fieldReason(f: CompareField, excelExtraKm: number | null, app: AppFacts): string {
+  const weightUnread = (app.weight ?? 0) === 0;
+  if (f.status === "missing") {
+    switch (f.key) {
+      case "recipient":
+        return f.app == null ? "destinatar necitit pe poză" : "lipsește în Excel";
+      case "weight":
+        return weightUnread ? "greutate necitită (poza nu e eticheta AWB)" : "lipsește o valoare";
+      case "extraKm":
+        return extraKmMissing(excelExtraKm, app)
+          ? "poză fără câmpul 'Distanță extra' (proces-verbal/factură)"
+          : "lipsește o valoare";
+      case "roadKm":
+        return "fără rută Mapbox (informativ)";
+      default:
+        return "lipsește o valoare";
+    }
+  }
+  switch (f.key) {
+    case "recipient":
+      return "nume citit diferit (posibil OCR sau prescurtat în Excel)";
+    case "weight":
+      return weightUnread
+        ? "greutate necitită (poza e proces-verbal/factură, nu eticheta AWB)"
+        : "greutate citită diferit (verifică OCR)";
+    case "extraKm":
+      return extraKmMissing(excelExtraKm, app)
+        ? "poză fără câmpul 'Distanță extra' (proces-verbal/factură)"
+        : "km diferiți față de AWB";
+    case "roadKm":
+      return "Mapbox vs. măsurătoarea curierului (informativ, nu afectează prețul)";
+    case "price":
+      return priceReason(excelExtraKm, app);
+    default:
+      return "diferență";
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -321,13 +421,20 @@ export function buildReport(
     }
 
     seenApp.add(key);
+    const excelExtraKm = num(xl[COL.extraKm]);
     const fields: CompareField[] = [
       recipientField(excelRecipient, app.recipient),
       numberField("weight", COL.weight, num(xl[COL.weight]), app.weight, TOL.weight, "alert"),
-      numberField("extraKm", COL.extraKm, num(xl[COL.extraKm]), app.extraKm, TOL.extraKm, "alert"),
+      numberField("extraKm", COL.extraKm, excelExtraKm, app.extraKm, TOL.extraKm, "alert"),
       numberField("roadKm", COL.roadKm, num(xl[COL.roadKm]), app.roadKm, TOL.roadKm, "info"),
       numberField("price", COL.price, num(xl[COL.price]), app.price, TOL.price, "info"),
     ];
+    // Attach the deterministic CAUSE to each differing field (shown in
+    // parentheses by the UI). Matches get no reason.
+    for (const f of fields) {
+      if (f.status === "match") continue;
+      f.reason = fieldReason(f, excelExtraKm, app);
+    }
     // A row is "flagged" only on an ALERT-severity mismatch/missing (an
     // extraction error). Info-severity drifts (road km, price) are shown
     // per cell but don't paint the whole row as broken.

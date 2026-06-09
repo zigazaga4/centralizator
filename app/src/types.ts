@@ -565,6 +565,8 @@ export interface CompareField {
   status: CompareFieldStatus;
   severity: CompareFieldSeverity;
   note?: string;
+  /** Deterministic cause of the difference, rendered in parentheses. */
+  reason?: string;
 }
 
 export interface CompareRow {

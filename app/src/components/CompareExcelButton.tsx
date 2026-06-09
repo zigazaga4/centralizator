@@ -273,6 +273,11 @@ function Cell({ field }: { field: CompareField | undefined }) {
             app: {fmt(field.app)}
           </span>
         )}
+        {!match && field.reason && (
+          <span className="mt-0.5 text-[11px] italic leading-snug text-ink-500">
+            ({field.reason})
+          </span>
+        )}
       </div>
     </td>
   );
