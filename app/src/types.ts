@@ -536,3 +536,49 @@ export type PairPatch = {
   num_deliveries?: number;
   delivery_date?: string;
 };
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Excel cross-check (POST /compare-excel)
+ *
+ * Mirrors the server's `CompareReport` (server/src/compare.ts). The courier's
+ * master export is joined to our ready pairs on the AWB number; each shared AWB
+ * yields a per-field comparison. "alert" fields (recipient, weight, extra km)
+ * flag extraction errors; "info" fields (road km, price) are expected to drift.
+ * ────────────────────────────────────────────────────────────────────── */
+
+export type CompareFieldStatus = "match" | "mismatch" | "missing";
+export type CompareFieldSeverity = "alert" | "info";
+export type ComparePresence = "both" | "excelOnly" | "appOnly";
+
+export interface CompareField {
+  key: string;
+  label: string;
+  excel: string | number | null;
+  app: string | number | null;
+  status: CompareFieldStatus;
+  severity: CompareFieldSeverity;
+  note?: string;
+}
+
+export interface CompareRow {
+  awb: string;
+  recipient: string | null;
+  presence: ComparePresence;
+  fields: CompareField[];
+  hasDiscrepancy: boolean;
+}
+
+export interface CompareReport {
+  generatedAt: number;
+  fileName: string | null;
+  summary: {
+    excelRows: number;
+    appPairs: number;
+    matched: number;
+    excelOnly: number;
+    appOnly: number;
+    withDiscrepancies: number;
+    flagged: number;
+  };
+  rows: CompareRow[];
+}

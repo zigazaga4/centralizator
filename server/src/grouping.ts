@@ -34,8 +34,10 @@ const MODEL = process.env.OPENROUTER_GROUPING_MODEL ?? process.env.OPENROUTER_MO
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
-/** Total wall-clock ceiling for the grouping call (incl. the one retry). */
-const GROUP_TIMEOUT_MS = Number(process.env.GROUP_TIMEOUT_MS ?? 120_000);
+/** Total wall-clock ceiling for the grouping call (incl. the one retry).
+ *  Generous by default: one call can now cover a whole day's stack (dozens
+ *  of images), and a big multi-image vision request is legitimately slow. */
+const GROUP_TIMEOUT_MS = Number(process.env.GROUP_TIMEOUT_MS ?? 600_000);
 
 const client = new OpenAI({
   apiKey: API_KEY ?? "",
@@ -112,12 +114,25 @@ const SYSTEM_INSTRUCTION =
   "JUST BEFORE the AWB or JUST AFTER it. The stack may start with an AWB or with an invoice.\n" +
   "  • Walk the images in order. Bind each run of invoices to its adjacent AWB. The boundary between two groups " +
   "is where the next AWB's shipment begins.\n" +
+  "Duplicates & redundant photos (IMPORTANT — deduplicate):\n" +
+  "  • Some images are the SAME physical document photographed more than once (the same AWB twice, the same " +
+  "invoice twice, a blurry copy plus a clear copy, or two pages of the same multi-page invoice). For each real " +
+  "document keep only ONE image — the clearest, most complete one — and OMIT the duplicates entirely. A duplicate " +
+  "must NOT appear in any group.\n" +
+  "  • You do NOT have to use every image. Leaving duplicate or redundant images unassigned is correct and expected.\n" +
+  "  • Match duplicates by their CONTENT: same AWB barcode number, same recipient (Destinatar), same invoice/" +
+  "comandă number, same product lines. If two photos clearly show the same shipment's same document, they are duplicates.\n" +
+  "  • Combined photo: if ONE image shows BOTH an AWB label AND its invoice together (a small courier label laid on " +
+  "the invoice page) and there is no other photo of that shipment's invoice, put that SAME image number in BOTH " +
+  "awb_image AND invoice_images for that one group.\n" +
   "Examples (image:type):\n" +
   "  [1:invoice, 2:invoice, 3:AWB, 4:invoice, 5:AWB] → groups: {awb 3, invoices [1,2]}, {awb 5, invoices [4]}.\n" +
   "  [1:AWB, 2:invoice, 3:invoice, 4:AWB, 5:invoice] → groups: {awb 1, invoices [2,3]}, {awb 4, invoices [5]}.\n" +
+  "  [1:AWB-X, 2:invoice-X, 3:invoice-X(duplicate of 2), 4:AWB-Y, 5:invoice-Y] → groups: {awb 1, invoices [2]}, " +
+  "{awb 4, invoices [5]} (image 3 omitted as a duplicate).\n" +
   "Rules:\n" +
   "  • Use 1-based image numbers exactly as labelled.\n" +
-  "  • Assign every image to exactly one group. Do not invent images.\n" +
+  "  • Assign each DISTINCT shipment to its own group; omit duplicate/redundant images. Do not invent images.\n" +
   "  • Call group_documents EXACTLY ONCE. Never reply in prose.";
 
 const GroupArgsSchema = z.object({
@@ -146,6 +161,10 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
   if (!API_KEY) throw new Error("OPENROUTER_API_KEY is not configured on the server.");
   if (images.length === 0) return [];
 
+  // Send the original full-resolution bytes to the grouping model so it can
+  // read the small content code / comandă number that links an AWB to its
+  // invoice. The retry loop below absorbs the occasional truncated upstream
+  // body that a large payload can trigger.
   const userContent: Array<
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string } }
@@ -160,39 +179,56 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
     type: "text",
     text:
       `You received ${images.length} images. Group them into shipments per the rule, then call ` +
-      "group_documents ONCE. Every image number 1.." +
+      "group_documents ONCE. Use image numbers 1.." +
       String(images.length) +
-      " must appear in exactly one group.",
+      ". Assign each DISTINCT shipment to one group, and OMIT any duplicate or redundant images (do not force every image into a group).",
   });
 
-  let completion;
-  try {
-    completion = await client.chat.completions.create(
-      {
-        model: MODEL,
-        temperature: 0,
-        messages: [
-          { role: "system", content: SYSTEM_INSTRUCTION },
-          { role: "user", content: userContent },
-        ],
-        tools: [groupTool],
-        tool_choice: { type: "function", function: { name: "group_documents" } },
-      },
-      { signal: AbortSignal.timeout(GROUP_TIMEOUT_MS) },
-    );
-  } catch (err) {
-    const e = err as { name?: string; message?: string };
-    const aborted =
-      /abort|timed?\s*out|timeout/i.test(e?.message ?? "") ||
-      ["APIUserAbortError", "APIConnectionTimeoutError", "AbortError", "TimeoutError"].includes(e?.name ?? "");
-    if (aborted) {
-      throw new Error(
-        `Document grouping timed out after ${Math.round(GROUP_TIMEOUT_MS / 1000)}s. ` +
-          "Re-send the batch, ideally with clearer photos.",
+  // A large multi-image grouping request (a whole day's stack) occasionally
+  // comes back from the gateway with a truncated / empty body
+  // ("Unexpected end of JSON input"), a 5xx, or a dropped connection. Those
+  // are transient, so retry a few times with backoff before giving up. A
+  // genuine timeout (the abort signal fired) is NOT retried — re-running a
+  // multi-minute call several times would be pathological.
+  const MAX_TRIES = 5;
+  let completion: OpenAI.Chat.Completions.ChatCompletion | undefined;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+    try {
+      completion = await client.chat.completions.create(
+        {
+          model: MODEL,
+          temperature: 0,
+          messages: [
+            { role: "system", content: SYSTEM_INSTRUCTION },
+            { role: "user", content: userContent },
+          ],
+          tools: [groupTool],
+          tool_choice: { type: "function", function: { name: "group_documents" } },
+        },
+        { signal: AbortSignal.timeout(GROUP_TIMEOUT_MS) },
       );
+      break;
+    } catch (err) {
+      lastErr = err;
+      const e = err as { name?: string; message?: string };
+      const aborted =
+        /abort|timed?\s*out|timeout/i.test(e?.message ?? "") ||
+        ["APIUserAbortError", "APIConnectionTimeoutError", "AbortError", "TimeoutError"].includes(e?.name ?? "");
+      if (aborted) {
+        throw new Error(
+          `Document grouping timed out after ${Math.round(GROUP_TIMEOUT_MS / 1000)}s. ` +
+            "Re-send the batch, ideally with clearer photos.",
+        );
+      }
+      if (attempt < MAX_TRIES) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
+  if (!completion) throw lastErr ?? new Error("Grouping returned no response.");
 
   const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
   if (!toolCall || toolCall.function.name !== "group_documents") {
@@ -213,23 +249,49 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
     throw new Error(`Grouping output failed schema validation:\n${parsed.error.toString()}`);
   }
 
-  // Normalise: 1-based → 0-based, drop out-of-range, dedupe across the
-  // whole batch so no image lands in two groups.
+  // Normalise: 1-based → 0-based, drop out-of-range, and enforce that no
+  // image lands in two DIFFERENT shipments. Images the model deliberately
+  // omitted (duplicates) simply never appear here — that is the dedup.
+  //
+  // Two intentional exceptions to global dedup:
+  //   • a combined photo may be BOTH this group's AWB and its invoice;
+  //   • if a group ends up with an AWB but no invoice (a lone combined photo),
+  //     we reuse the AWB image as the invoice so it still forms a valid pair
+  //     rather than an "incomplete grouping" error.
   const n = images.length;
-  const seen = new Set<number>();
-  const inRange = (oneBased: number): number | null => {
+  const claimed = new Set<number>();
+  const valid = (oneBased: number): number | null => {
     const idx = oneBased - 1;
-    if (!Number.isInteger(idx) || idx < 0 || idx >= n || seen.has(idx)) return null;
-    seen.add(idx);
-    return idx;
+    return Number.isInteger(idx) && idx >= 0 && idx < n ? idx : null;
   };
 
   const groups: DocumentGroup[] = [];
   for (const g of parsed.data.groups) {
-    const awbIndex = inRange(g.awb_image);
-    const invoiceIndices = g.invoice_images
-      .map(inRange)
-      .filter((x): x is number => x !== null);
+    let awbIndex = valid(g.awb_image);
+    if (awbIndex !== null && claimed.has(awbIndex)) awbIndex = null;
+    if (awbIndex !== null) claimed.add(awbIndex);
+
+    const invoiceIndices: number[] = [];
+    for (const oneBased of g.invoice_images) {
+      const idx = valid(oneBased);
+      if (idx === null) continue;
+      // Same image as this group's AWB → combined photo, allow it.
+      if (idx === awbIndex) {
+        if (!invoiceIndices.includes(idx)) invoiceIndices.push(idx);
+        continue;
+      }
+      // Otherwise an invoice image can't be reused across shipments.
+      if (claimed.has(idx)) continue;
+      claimed.add(idx);
+      invoiceIndices.push(idx);
+    }
+
+    // Lone combined photo (AWB shown, no separate invoice image): the same
+    // image carries the invoice too.
+    if (invoiceIndices.length === 0 && awbIndex !== null) {
+      invoiceIndices.push(awbIndex);
+    }
+
     if (awbIndex === null && invoiceIndices.length === 0) continue;
     groups.push({ awbIndex, invoiceIndices });
   }

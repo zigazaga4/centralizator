@@ -1,4 +1,4 @@
-import type { Extracted, ExtractResponse, PricingBreakdown, PricingRequest, Verification } from "../types";
+import type { CompareReport, Extracted, ExtractResponse, PricingBreakdown, PricingRequest, Verification } from "../types";
 
 /**
  * In dev, Vite proxies /api/* to the Fastify server on localhost:3000.
@@ -68,6 +68,27 @@ export async function reprice(req: PricingRequest): Promise<PricingBreakdown> {
  * Slower than pricing (search + scrape), but cached server-side so
  * repeat product codes are instant.
  */
+/**
+ * Upload the courier's master export (.xlsx) and get back a field-by-field
+ * comparison against the app's ready pairs, joined on AWB number. Read-only —
+ * the server persists nothing. The whole sheet rides as one multipart file.
+ */
+export async function compareExcel(file: File): Promise<CompareReport> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/compare-excel`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`compare-excel failed (${res.status}): ${body}`);
+  }
+  const data = (await res.json()) as { report: CompareReport };
+  return data.report;
+}
+
 export async function verifyProducts(extracted: Extracted): Promise<Verification> {
   const res = await fetch(`${BASE}/verify`, {
     method: "POST",

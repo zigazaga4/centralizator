@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DayTabs, type DayCount } from "./components/DayTabs";
 import { ExportMenu } from "./components/ExportMenu";
+import { CompareExcelButton } from "./components/CompareExcelButton";
 import { PairAddCard } from "./components/PairAddCard";
 import { PairsTable } from "./components/PairsTable";
 import { PairDetail } from "./components/PairDetail";
@@ -932,6 +933,10 @@ export default function App() {
             value={selectedCollaborator}
             onChange={setSelectedCollaborator}
           />
+          {/* Cross-check the courier's master export against our data.
+              Always available — the server compares the whole pair queue
+              (joined on AWB number), independent of the selected day. */}
+          <CompareExcelButton />
           {dayPairs.length > 0 && (
             <ExportMenu
               pairs={dayPairs}

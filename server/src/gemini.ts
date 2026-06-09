@@ -20,24 +20,29 @@ const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
 /**
- * Hard ceiling on a single vision extraction, in ms. The OpenAI SDK
- * default request timeout is 10 minutes — far too long for a UI that
- * blocks on this call, and the cause of the "AI hangs for minutes"
- * symptom when the upstream stalls on a hard image (e.g. a small AWB
- * label laid on top of an invoice). We enforce a 5-minute TOTAL ceiling
- * — across every retry AND every zoom round of the agentic loop below —
- * via an AbortSignal so a stalled call fails fast and the queue item flips
- * to an error the operator can retry, instead of spinning forever.
- * Override with EXTRACT_TIMEOUT_MS.
+ * Total ceiling on a single vision extraction, in ms. Deliberately HUGE
+ * (24h ≈ effectively unlimited): we do NOT want to kill a call that is slow
+ * but still actively working on a hard image (a small AWB label on an
+ * invoice, a dense multi-page invoice). A genuinely STUCK call — a severed
+ * or hung connection — throws a connection error (ECONNRESET / socket hang
+ * up / APIConnectionError) which is NOT swallowed here and still flips the
+ * pair to an error. So in practice the pair only errors when it is actually
+ * stuck, never merely because it took a while. Override with
+ * EXTRACT_TIMEOUT_MS (set a small value to re-introduce a hard cap).
  */
-const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS ?? 300_000);
+const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS ?? 86_400_000);
 
 /** How many zoom crops the model may request in one extraction before we
  *  force it to answer. Bounds cost + wall-clock; a handful is plenty to
  *  read a tiny AWB label. Override with EXTRACT_MAX_ZOOMS. */
 const MAX_ZOOMS = Number(process.env.EXTRACT_MAX_ZOOMS ?? 5);
-/** Total model round-trips (including the final extract). */
-const MAX_ROUNDS = MAX_ZOOMS + 2;
+/** How many times a failed-validation extraction may be handed back to the
+ *  model to correct (e.g. it dropped a required field like invoice_number).
+ *  Self-heals the cheap extractor's occasional misses instead of erroring the
+ *  whole pair. Override with EXTRACT_MAX_FIXES. */
+const MAX_EXTRACT_FIXES = Number(process.env.EXTRACT_MAX_FIXES ?? 3);
+/** Total model round-trips (final extract + zoom rounds + correction rounds). */
+const MAX_ROUNDS = MAX_ZOOMS + 2 + MAX_EXTRACT_FIXES;
 
 if (!API_KEY) {
   console.warn("[llm] OPENROUTER_API_KEY is not set — vision calls will fail.");
@@ -71,8 +76,8 @@ const invoiceItemSchema = {
   type: "object",
   properties: {
     name: { type: "string", description: "Product description." },
-    ean: { type: "string" },
-    reference: { type: "string", description: "Internal SKU / referinta column." },
+    ean: { type: "string", description: "Do NOT fill this. Leave empty — the EAN barcode is not the product code we want." },
+    reference: { type: "string", description: "The product code from the invoice 'Referință' column (column 2, e.g. '10814685', '11604796'). This is THE product code — NOT the 'EAN :' barcode printed under the product name." },
     unit: { type: "string", description: "Unit of measure, e.g. 'buc'." },
     quantity: { type: "number" },
     unit_price_net: { type: "number" },
@@ -273,6 +278,11 @@ const SYSTEM_INSTRUCTION =
   "that line's quantity or the AWB, and set 1 if a macara line exists but the count is unclear. Set 0 " +
   "when there is no macara line. Macara may instead be named on the AWB 'Serviciu' field — still extract " +
   "service_text verbatim there so the server can reconcile the AWB against the invoice.\n" +
+  "• product code (per invoice line): the product code is the value in the invoice 'Referință' column " +
+  "(the SKU column — column 2 of the line-items table, e.g. '10814685', '11604796', '12138483'). Put " +
+  "that value in `reference`. Do NOT extract or output the EAN: the 'EAN : …' barcode printed on a " +
+  "sub-line under each product name is NOT the product code — leave `ean` empty. Only the 'Referință' " +
+  "value identifies the product.\n" +
   "• dimensions: on EACH invoice line, copy the product's physical SIZE token verbatim with its unit " +
   "(e.g. '10 x 100 x 50 cm', '2000 x 1000 mm', 'Ø 50 mm') from the product name/description or a size " +
   "column. This is cross-checked against the leroymerlin.ro product page, so accuracy matters. Do NOT " +
@@ -348,14 +358,15 @@ export async function extractFromImages(
     );
 
   let zoomsUsed = 0;
+  let extractFixes = 0;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const left = deadline - Date.now();
     if (left <= 0) throw timeoutError();
 
-    // Once the zoom budget is spent (or this is the last allowed round) force
-    // the final answer; otherwise let the model choose to zoom or extract.
-    const forceExtract = zoomsUsed >= MAX_ZOOMS || round === MAX_ROUNDS - 1;
+    // Force the final answer once the zoom budget is spent, on the last round,
+    // OR while we're correcting a rejected extraction (resubmit, don't chat).
+    const forceExtract = zoomsUsed >= MAX_ZOOMS || extractFixes > 0 || round === MAX_ROUNDS - 1;
 
     let completion;
     try {
@@ -398,12 +409,43 @@ export async function extractFromImages(
         );
       }
       const parsed = ExtractedSchema.safeParse(rawArgs);
-      if (!parsed.success) {
-        throw new Error(
-          `Model output failed schema validation:\n${parsed.error.toString()}\n\nRaw args:\n${JSON.stringify(rawArgs, null, 2)}`,
-        );
+      if (parsed.success) return parsed.data;
+
+      // Self-heal: the model returned an almost-right struct but missed or
+      // mistyped a required field (the cheap extractor occasionally drops e.g.
+      // invoices[].invoice_number). Hand the exact problems back and let it
+      // resubmit, a bounded number of times, before giving up.
+      if (extractFixes < MAX_EXTRACT_FIXES) {
+        extractFixes += 1;
+        const issues = parsed.error.issues
+          .map((i) => `• ${i.path.join(".") || "(root)"}: ${i.message}`)
+          .join("\n");
+        // Protocol: record the assistant turn that issued the tool_calls, and
+        // answer EVERY tool_call with a tool message, before the next turn.
+        messages.push(message as Msg);
+        for (const tc of toolCalls) {
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: tc.id === extractCall.id ? "Validation failed — see correction." : "Superseded; resubmit the full extraction.",
+          });
+        }
+        messages.push({
+          role: "user",
+          content:
+            "Your extract_shipment_data call was REJECTED. These fields are invalid:\n" +
+            issues +
+            "\n\nRead those values off the images (zoom is no longer available — use your best reading) and call " +
+            "extract_shipment_data ONCE more with the FULL struct corrected. Required string fields — especially each " +
+            "invoice's invoice_number, read from the 'FACTURĂ … <number>' header — must be a real string, never null and " +
+            "never omitted. Only if a required value is genuinely unreadable, put an empty string \"\" for that one field (never null).",
+        });
+        continue;
       }
-      return parsed.data;
+
+      throw new Error(
+        `Model output failed schema validation after ${MAX_EXTRACT_FIXES} correction attempts:\n${parsed.error.toString()}\n\nRaw args:\n${JSON.stringify(rawArgs, null, 2)}`,
+      );
     }
 
     const zoomCalls = toolCalls.filter((t) => t.function.name === "zoom_region");

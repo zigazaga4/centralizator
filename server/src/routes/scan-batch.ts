@@ -39,12 +39,12 @@ const ACCEPTED_MIME = new Set([
 /** Hard cap on a single batch upload. A courier's daily stack is well
  *  under this; the ceiling just stops a runaway upload from blowing the
  *  grouping call's token budget. Override with MAX_BATCH_IMAGES. */
-const MAX_BATCH_IMAGES = Number(process.env.MAX_BATCH_IMAGES ?? 60);
+const MAX_BATCH_IMAGES = Number(process.env.MAX_BATCH_IMAGES ?? 120);
 
 /** How many pairs to extract+price+verify at once in the background.
  *  Keeps us from firing 12 multi-image vision calls at OpenRouter in the
  *  same instant. Override with SCAN_BATCH_CONCURRENCY. */
-const BATCH_CONCURRENCY = Number(process.env.SCAN_BATCH_CONCURRENCY ?? 3);
+const BATCH_CONCURRENCY = Number(process.env.SCAN_BATCH_CONCURRENCY ?? 100);
 
 /** One buffered upload: bytes for storage + the slim view the AI needs. */
 interface BatchImage {
