@@ -97,7 +97,9 @@ const COL = {
   weight: "Kg",
   extraKm: "Extra km",
   roadKm: "Distanta pe strada",
-  price: "Pret",
+  // Our totals are cu TVA (every tariff is VAT-included), so we compare
+  // against the portal's WITH-VAT price, not the net "Pret" column.
+  price: "Pret cu TVA",
 } as const;
 
 /** Per-field absolute tolerance for the numeric comparisons. */
@@ -177,7 +179,7 @@ interface AppFacts {
   weight: number | null;
   extraKm: number | null; // routing.awbKm (the courier-comparable km)
   roadKm: number | null; // routing.mapboxKm (our measured road km)
-  price: number | null; // breakdown.carrierTotal
+  price: number | null; // breakdown.grandTotal (carrier + unloading + macara)
 }
 
 /** Pull the comparable scalars out of a ready pair; null for non-ready pairs. */
@@ -194,7 +196,9 @@ function appFactsOf(pair: PairWire): AppFacts | null {
     weight: num(awb.weight_kg),
     extraKm: routing ? num(routing.awbKm) : null,
     roadKm: routing ? num(routing.mapboxKm) : null,
-    price: breakdown ? num(breakdown.carrierTotal) : null,
+    // All-in total (carrier + descărcare + macara). Fall back to carrierTotal
+    // for any older breakdown persisted before grandTotal existed.
+    price: breakdown ? num(breakdown.grandTotal ?? breakdown.carrierTotal) : null,
   };
 }
 

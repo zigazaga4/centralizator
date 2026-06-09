@@ -7,12 +7,19 @@
  *   1. WHICH store did it ship from?  (the centralizator bucket + the
  *      route origin) — read from the AWB's Expeditor via `matchStore`.
  *   2. HOW FAR is the delivery?       (the km the price is built on) —
- *      the shortest driving road distance from that store to the
- *      geocoded delivery address, per the operator's Leroy rule.
+ *      ALWAYS the km printed on the AWB (`distance_extra_km`). That is
+ *      the operator's source of truth and it is never overwritten.
+ *
+ * Mapbox is still consulted, but ONLY to cross-check: when the routed
+ * road distance disagrees with the AWB's printed km we set `mapboxKm` +
+ * `kmWarning` so the UI can flag it. The billed `distanceKm` stays equal
+ * to `awbKm` in every case. Mapbox is also used to pick the origin store
+ * when the Expeditor is ambiguous (nearest-by-road), which does not touch
+ * the billed distance.
  *
  * It is BEST EFFORT by contract: any Mapbox hiccup (no token, geocode
- * miss, route stall) is caught and the result falls back to the km the
- * AWB itself printed (`distance_extra_km`). A pair must never fail just
+ * miss, route stall) is caught — the price is unaffected because it never
+ * depended on Mapbox in the first place. A pair must never fail just
  * because the map service did.
  */
 
@@ -147,23 +154,26 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
       };
     }
 
-    const distanceKm = round1(km);
-    // Reconcile our routed km against the km the AWB printed. The operator
-    // wants ANY difference flagged, so it rides on the warning component.
-    const kmDiff = round1(distanceKm - awbKm);
+    const mapboxKm = round1(km);
+    // The billed distance is ALWAYS the AWB's printed km — Mapbox never
+    // replaces it. We only reconcile the two: the operator wants ANY
+    // difference flagged, so a mismatch rides on the warning component.
+    const kmDiff = round1(mapboxKm - awbKm);
     const kmWarning = Math.abs(kmDiff) > KM_WARN_TOLERANCE + 1e-9;
     return {
       store,
       storeSource,
-      distanceKm,
-      source: "mapbox",
+      distanceKm: awbKm,
+      source: "awb",
       awbKm,
-      mapboxKm: distanceKm,
+      mapboxKm,
       kmDiff,
       kmWarning,
       deliveryAddress,
       resolved: true,
-      note: null,
+      note: kmWarning
+        ? `Mapbox a calculat ${mapboxKm} km față de ${awbKm} km de pe AWB — s-a folosit km de pe AWB.`
+        : null,
     };
   } catch (err) {
     return fallback(`Eroare Mapbox (${(err as Error).message}) — s-a folosit km de pe AWB.`);

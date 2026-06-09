@@ -31,6 +31,10 @@
  *   unloadingTax     = unloadingCount × 210  (RON with VAT; 177.69 without)
  *   commissionBase   = baseTariff + incrementCost + weekendSurcharge
  *   carrierTotal     = commissionBase + extraKmCost
+ *   grandTotal       = carrierTotal + unloadingTax + macara.total
+ *                      (all-in, cu TVA — folds the descărcare + crane tracks
+ *                       back in so it matches the courier portal's one-line
+ *                       price; NOT used for the commission math)
  *
  * The per-km surcharge (extraKmCost) is a pass-through cost that is NOT
  * marked up by the commission/bonus percentage. The company commission
@@ -239,8 +243,18 @@ export interface PricingBreakdown {
    *  added flat at the end, not marked up. */
   commissionBase: number;
   /** Carrier-side total in RON, VAT included = commissionBase + extraKmCost.
-   *  What the carrier actually receives for the run (base work + km). */
+   *  What the carrier actually receives for the run (base work + km). This
+   *  stays PURE (no descărcare, no macara) so the commission math is
+   *  unchanged. */
   carrierTotal: number;
+  /** All-in comparable total in RON, VAT included
+   *  = carrierTotal + unloadingTax + macara.total.
+   *  This folds the two SEPARATE tracks (descărcare unloading + crane) back
+   *  in, so it lines up with what the courier portal bills on one line. It is
+   *  the number the Excel cross-check compares against ("Pret cu TVA"). The
+   *  commission/collaborator totals are NOT derived from this — they still
+   *  use commissionBase. */
+  grandTotal: number;
   /** Per-city company commission. The matching `customerTotal` is what the
    *  END customer in that city pays — commissionBase grossed up by pct,
    *  then the flat km cost added on top. */
@@ -387,6 +401,11 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   // The unloading tax is kept ENTIRELY separate (its own breakdown fields)
   // and is deliberately NOT added into carrierTotal or any other total.
   const carrierTotal = round2(commissionBase + extraKmCost);
+  // All-in total for the courier-portal cross-check: fold the two separate
+  // tracks (descărcare unloading + macara crane, both already cu TVA) back
+  // onto the carrier total. This is what lines up with the portal's single
+  // "Pret" line; it does NOT feed the commission/collaborator math.
+  const grandTotal = round2(carrierTotal + unloadingTax + macara.total);
 
   // City-side company commission (what the END customer in that city pays)
   // and collaborator-side bonus (collaborator-facing price). Both gross up
@@ -435,6 +454,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     macaraByCity,
     commissionBase,
     carrierTotal,
+    grandTotal,
     cityCommissions,
     collaboratorPrices,
   };

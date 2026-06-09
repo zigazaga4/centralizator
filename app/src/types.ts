@@ -388,6 +388,13 @@ export interface PricingBreakdown {
    */
   carrierTotal: number;
   /**
+   * All-in comparable total (cu TVA) = carrierTotal + unloadingTax +
+   * macara.total. Folds the descărcare + crane tracks back in so it matches
+   * the courier portal's single price line. Used by the Excel cross-check.
+   * Optional so an older persisted breakdown (pre-grandTotal) still loads.
+   */
+  grandTotal?: number;
+  /**
    * Per-dispatch-site customer totals. Four entries even though the
    * dropdown only has three — Iași splits into Tudor + ERA, which the
    * UI stacks when the user picks "Iași". Math is server-side:

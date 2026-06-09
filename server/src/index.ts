@@ -31,8 +31,50 @@ const PORT_SCAN_END = 3099;
 // <repo>/server/src/index.ts → up 3 → <repo>
 const PORT_FILE = resolve(import.meta.dirname, "../../.api-port");
 
+/**
+ * Logging — pino (Fastify's built-in logger) fanned out to TWO sinks via
+ * pino-pretty, so everything the app does is captured in both places:
+ *
+ *   1. the console (stdout) — colourised, picked up by `pm2 logs`.
+ *   2. a plain-text file at server/logs/server.log — the durable record you
+ *      can `tail -f` or grep after the fact. Same human-readable format,
+ *      colour stripped. The dir is auto-created (`mkdir: true`) and lines are
+ *      appended across restarts (`append: true`).
+ *
+ * `LOG_LEVEL` (default "info") tunes verbosity for both sinks at once;
+ * Fastify already logs every request/response at info, so the default
+ * captures the full request lifecycle. Set LOG_LEVEL=debug for more.
+ * `*.log` is gitignored, so the file never lands in a commit.
+ */
+const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
+// dist/index.js → up 1 → server/ → logs/server.log
+const LOG_FILE = resolve(import.meta.dirname, "../logs/server.log");
+
 const app = Fastify({
-  logger: { transport: { target: "pino-pretty" } },
+  logger: {
+    level: LOG_LEVEL,
+    transport: {
+      targets: [
+        {
+          target: "pino-pretty",
+          level: LOG_LEVEL,
+          options: { colorize: true, translateTime: "SYS:standard", ignore: "pid,hostname" },
+        },
+        {
+          target: "pino-pretty",
+          level: LOG_LEVEL,
+          options: {
+            colorize: false,
+            translateTime: "SYS:standard",
+            ignore: "pid,hostname",
+            destination: LOG_FILE,
+            mkdir: true,
+            append: true,
+          },
+        },
+      ],
+    },
+  },
   bodyLimit: 25 * 1024 * 1024, // 25 MB headroom for high-DPI invoice scans
 });
 
