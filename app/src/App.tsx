@@ -14,6 +14,7 @@ import {
   loadAllPairs,
   persistPairStatus,
 } from "./lib/db";
+import { loadPairImages, prefetchPairImages } from "./lib/images";
 import { subscribePairLive } from "./lib/live";
 import { date as fmtDate, todayIso } from "./lib/format";
 import {
@@ -318,6 +319,10 @@ export default function App() {
         if (cancelled) return;
         if (loaded.length > 0) {
           commit(loaded);
+          // Background warm: stream every pair's images into the in-app
+          // cache (visible day first) so thumbnails fill progressively
+          // and opening any pair is instant. Fire-and-forget.
+          void prefetchPairImages(loaded, selectedDay);
           // Re-validate `selectedDay` once we know which days actually
           // have pairs. The user's most common confusion after restart
           // was "where's my data?" when the persisted day pointed at
@@ -719,8 +724,15 @@ export default function App() {
   );
 
   const runOne = useCallback(
-    async (id: string, images: File[]) => {
+    async (pair: Pair) => {
+      const { id } = pair;
       try {
+        // Hydrated pairs hold lazy refs, not Files — resolve them first
+        // (instant when the prefetch already warmed the cache).
+        const images = await loadPairImages(pair);
+        if (images.length < 2) {
+          throw new Error("Imaginile perechii nu au putut fi încărcate de pe server.");
+        }
         const res = await extractAndPrice(images);
         // Persist FIRST, then flip UI to "ready". This is the central
         // fix for the "calculate-then-restart-and-data-is-gone" bug —
@@ -783,7 +795,7 @@ export default function App() {
       while (queue.length) {
         const next = queue.shift();
         if (!next) return;
-        await runOne(next.id, next.images);
+        await runOne(next);
       }
     });
     await Promise.all(workers);

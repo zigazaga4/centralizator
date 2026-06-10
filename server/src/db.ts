@@ -235,6 +235,28 @@ export interface PairWire {
   images: PairImageWire[];
 }
 
+/** Image METADATA only — what the light list carries instead of the
+ *  base64 payload. The client lazily pulls the actual bytes from
+ *  `GET /pairs/:id/images/:slot` when (and only when) it needs them. */
+export interface PairImageMetaWire {
+  slot: number;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+/** A pair without image bytes. The hydrate payload drops from ~26 MB
+ *  of base64 to a few hundred KB of JSON — the UI renders instantly
+ *  and images stream in afterwards, one HTTP request per image. */
+export interface PairLightWire {
+  id: string;
+  day: string;
+  createdAt: number;
+  updatedAt: number;
+  status: PairStatus;
+  images: PairImageMetaWire[];
+}
+
 interface PairRow {
   id: string;
   day: string;
@@ -286,6 +308,19 @@ const stmt = {
        FROM pair_images
        WHERE pair_id = ?
        ORDER BY slot ASC`,
+  ),
+  // Metadata-only sweep — deliberately does NOT touch the `bytes`
+  // column, so SQLite never pages the ~20 MB of BLOBs into memory
+  // just to render the queue list.
+  selectAllImageMeta: db.prepare<[], Omit<ImageRow, "bytes">>(
+    `SELECT pair_id, slot, name, mime_type, size
+       FROM pair_images
+       ORDER BY pair_id, slot ASC`,
+  ),
+  selectImage: db.prepare<[string, number], ImageRow>(
+    `SELECT pair_id, slot, name, mime_type, size, bytes
+       FROM pair_images
+       WHERE pair_id = ? AND slot = ?`,
   ),
   selectPair: db.prepare<[string], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
@@ -463,6 +498,46 @@ export function listAllPairs(): PairWire[] {
       .sort((a, b) => a.slot - b.slot)
       .map(imageRowToWire),
   }));
+}
+
+/**
+ * Same queue, no image bytes. This is what `GET /pairs` serves: the
+ * status/pricing JSON the table needs to paint, plus per-image
+ * metadata (slot/name/mime/size) so the client knows what to lazily
+ * fetch. Reconstruction is the same two-query O(n) bucket pass as
+ * `listAllPairs`, just against the byte-free metadata statement.
+ */
+export function listAllPairsLight(): PairLightWire[] {
+  const pairRows = stmt.selectAllPairs.all();
+  if (pairRows.length === 0) return [];
+  const metaRows = stmt.selectAllImageMeta.all();
+
+  const byPair = new Map<string, PairImageMetaWire[]>();
+  for (const r of metaRows) {
+    const arr = byPair.get(r.pair_id) ?? [];
+    arr.push({ slot: r.slot, name: r.name, mimeType: r.mime_type, size: r.size });
+    byPair.set(r.pair_id, arr);
+  }
+
+  return pairRows.map((r) => ({
+    id: r.id,
+    day: r.day,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    status: rowToStatus(r),
+    images: (byPair.get(r.id) ?? []).sort((a, b) => a.slot - b.slot),
+  }));
+}
+
+/** One image's raw bytes by (pair, slot) — the lazy-fetch endpoint's
+ *  data source. `null` when the pair or slot doesn't exist. */
+export function getPairImage(
+  pairId: string,
+  slot: number,
+): { name: string; mimeType: string; size: number; bytes: Buffer } | null {
+  const r = stmt.selectImage.get(pairId, slot);
+  if (!r) return null;
+  return { name: r.name, mimeType: r.mime_type, size: r.size, bytes: r.bytes };
 }
 
 export interface InsertPairInput {

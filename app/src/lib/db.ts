@@ -26,7 +26,7 @@
  * pair queue in App.tsx for what's recoverable on the next request.
  */
 
-import type { Extracted, Pair, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
+import type { Extracted, Pair, PairImageRef, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
 
 /**
  * Vite proxies /api/* to the Fastify server during dev. In a packaged
@@ -70,8 +70,14 @@ interface WireImage {
   name: string;
   mimeType: string;
   size: number;
-  /** Base64-encoded image bytes (no `data:` prefix). */
-  dataB64: string;
+  /** Base64-encoded image bytes (no `data:` prefix). Present on the
+   *  SSE pair-created push (one pair rides fine); ABSENT on the light
+   *  `GET /pairs` hydrate, where only metadata travels and the bytes
+   *  are lazily fetched per-image (see lib/images.ts). */
+  dataB64?: string;
+  /** Slot index on the server — the lazy-fetch URL component. Present
+   *  on the light list; falls back to array position when missing. */
+  slot?: number;
 }
 
 export interface WirePair {
@@ -124,8 +130,8 @@ async function fileToWireImage(file: File): Promise<WireImage> {
   };
 }
 
-function wireImageToFile(w: WireImage): File {
-  const bytes = base64ToBytes(w.dataB64);
+function wireImageToFile(w: WireImage, dataB64: string): File {
+  const bytes = base64ToBytes(dataB64);
   return new File([bytes], w.name, { type: w.mimeType || "image/*" });
 }
 
@@ -140,14 +146,33 @@ function wireImageToFile(w: WireImage): File {
  */
 export function wirePairToClient(wp: WirePair): Pair {
   const images: File[] = [];
-  for (const wi of wp.images) {
-    try {
-      images.push(wireImageToFile(wi));
-    } catch (err) {
-      console.warn(`Failed to decode image for pair ${wp.id}:`, err);
+  const refs: PairImageRef[] = [];
+  wp.images.forEach((wi, i) => {
+    if (wi.dataB64) {
+      // Inline bytes (SSE push) — decode straight to a File.
+      try {
+        images.push(wireImageToFile(wi, wi.dataB64));
+      } catch (err) {
+        console.warn(`Failed to decode image for pair ${wp.id}:`, err);
+      }
+    } else {
+      // Light hydrate — keep a lazy handle; bytes stream in on demand.
+      refs.push({
+        pairId: wp.id,
+        slot: wi.slot ?? i,
+        name: wi.name,
+        mimeType: wi.mimeType,
+        size: wi.size,
+      });
     }
-  }
-  return { id: wp.id, day: wp.day, images, status: wp.status as PairStatus };
+  });
+  return {
+    id: wp.id,
+    day: wp.day,
+    images,
+    ...(refs.length > 0 ? { imageRefs: refs } : {}),
+    status: wp.status as PairStatus,
+  };
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -282,7 +307,7 @@ export async function insertPair(pair: Pair): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: pair.id, day: pair.day, images }),
   });
-  const total = images.reduce((a, w) => a + w.dataB64.length, 0);
+  const total = images.reduce((a, w) => a + (w.dataB64?.length ?? 0), 0);
   console.info(
     `[db] insertPair ${pair.id} (+${images.length} images, ${(total / 1024).toFixed(0)} KB b64)`,
   );

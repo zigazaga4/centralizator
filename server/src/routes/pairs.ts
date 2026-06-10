@@ -9,16 +9,15 @@
  * the same authoritative queue without bolting another SQLite handle
  * onto it.
  *
- * Wire format: JSON with images carried as base64 strings. Two reasons:
- *   • base64 is JSON-friendly (no multipart parsing on every PATCH /
- *     hydrate), and the queue is small enough that the ~33% size tax
- *     is invisible against the network's actual bottleneck.
- *   • the client (browser File ↔ Uint8Array) already speaks base64,
- *     so the encode/decode happens at the natural boundary rather
- *     than splattering across the stack.
+ * Wire format: uploads (POST) carry images as base64 in JSON — the
+ * client already speaks File ↔ base64 and one insert is small. The
+ * READ side is split in two: the list returns image metadata only
+ * (the table paints instantly), and each image's raw bytes stream
+ * from their own immutable, cacheable GET.
  *
  * Endpoints:
- *   GET    /pairs                — list (with images), insertion order.
+ *   GET    /pairs                — light list (image metadata, no bytes).
+ *   GET    /pairs/:id/images/:slot — one image, raw bytes, immutable cache.
  *   POST   /pairs                — insert a new pair (id, day, images).
  *   PUT    /pairs/:id/status     — replace the status (ready | error |
  *                                  pending; "extracting" is a no-op).
@@ -31,8 +30,9 @@ import { z } from "zod";
 import {
   deleteAllPairs,
   deletePair,
+  getPairImage,
   insertPair,
-  listAllPairs,
+  listAllPairsLight,
   persistPairStatus,
   type PairStatus,
 } from "../db.js";
@@ -154,11 +154,47 @@ const StatusSchema = z.discriminatedUnion("kind", [
 ]);
 
 export default async function pairRoutes(app: FastifyInstance) {
-  /* ── List ─────────────────────────────────────────────────────── */
+  /* ── List (light) ─────────────────────────────────────────────── */
+  // Image METADATA only. The old shape inlined every image as base64,
+  // which grew the hydrate payload to ~26 MB and made the app stare at
+  // a blank screen for the whole transfer. Now the table paints from a
+  // few hundred KB of JSON and the client streams each image it needs
+  // from the endpoint below.
   app.get("/pairs", async () => {
-    const pairs = listAllPairs();
+    const pairs = listAllPairsLight();
     return { pairs };
   });
+
+  /* ── One image, raw bytes ─────────────────────────────────────── */
+  // Lazy-fetch companion to the light list. Images are immutable per
+  // (pair, slot) — written once at POST /pairs, never updated — so we
+  // mark them `immutable` with a year-long max-age plus an ETag. The
+  // WebView's HTTP cache (and the client's Cache Storage layer) then
+  // serves repeat opens from disk without touching the network.
+  app.get<{ Params: { id: string; slot: string } }>(
+    "/pairs/:id/images/:slot",
+    async (req, reply) => {
+      const slot = Number(req.params.slot);
+      if (!Number.isInteger(slot) || slot < 0) {
+        return reply.code(400).send({ error: `Bad slot "${req.params.slot}".` });
+      }
+      const img = getPairImage(req.params.id, slot);
+      if (!img) {
+        return reply.code(404).send({ error: `No image ${req.params.id}/${slot}.` });
+      }
+      const etag = `"${req.params.id}-${slot}-${img.size}"`;
+      if (req.headers["if-none-match"] === etag) {
+        return reply.code(304).header("etag", etag).send();
+      }
+      return reply
+        .header("content-type", img.mimeType || "application/octet-stream")
+        .header("content-length", img.bytes.length)
+        .header("cache-control", "private, max-age=31536000, immutable")
+        .header("etag", etag)
+        .header("x-image-name", encodeURIComponent(img.name))
+        .send(img.bytes);
+    },
+  );
 
   /* ── Create ───────────────────────────────────────────────────── */
   app.post("/pairs", async (req, reply) => {

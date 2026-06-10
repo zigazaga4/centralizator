@@ -14,6 +14,7 @@ import {
   type Service,
 } from "../types";
 import { date, ron } from "../lib/format";
+import { usePairImages } from "../lib/images";
 import { ProductBadge } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
@@ -271,7 +272,7 @@ function PairRow({
 
       {/* Image thumbs */}
       <div className="flex items-center justify-center border-r border-ink-200 px-2 py-1.5">
-        <Thumbs files={pair.images} />
+        <Thumbs pair={pair} />
       </div>
 
       {/* AWB # + product-check badge (warning / ok / spinner) */}
@@ -673,13 +674,31 @@ function StatusPill({ status }: { status: PairStatus }) {
   }
 }
 
-function Thumbs({ files }: { files: File[] }) {
+function Thumbs({ pair }: { pair: Pair }) {
+  // Lazy: hydrated pairs stream their bytes from the server-side image
+  // endpoint (cached in-app); local pairs resolve instantly from their
+  // Files. While loading we show one skeleton per expected image so
+  // the row keeps its final width and nothing jumps.
+  const { files, loading } = usePairImages(pair);
   const [urls, setUrls] = useState<string[]>([]);
   useEffect(() => {
     const u = files.map((f) => URL.createObjectURL(f));
     setUrls(u);
     return () => u.forEach(URL.revokeObjectURL);
   }, [files]);
+  if (loading) {
+    const expected = pair.imageRefs?.length ?? 0;
+    return (
+      <div className="flex gap-0.5">
+        {Array.from({ length: expected }, (_, i) => (
+          <div
+            key={i}
+            className="h-9 w-6 animate-pulse rounded-sm bg-ink-200/60 ring-1 ring-ink-200"
+          />
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="flex gap-0.5">
       {urls.map((u, i) => (

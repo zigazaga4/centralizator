@@ -514,6 +514,20 @@ export type PairStatus =
     }
   | { kind: "error"; message: string };
 
+/**
+ * A lazy handle to one server-stored image. The hydrate payload carries
+ * only this metadata — the actual bytes stream from
+ * `GET /pairs/:pairId/images/:slot` when a component first needs them
+ * (and are cached in-app after that). Immutable per (pairId, slot).
+ */
+export interface PairImageRef {
+  pairId: string;
+  slot: number;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface Pair {
   /** Stable id — survives re-renders, re-orders, and removals. */
   id: string;
@@ -531,8 +545,16 @@ export interface Pair {
   day: string;
   /** N images in submit order (one AWB + one or more invoices). The
    *  vision model decides which one is the AWB; all others are
-   *  invoices, ordered as the user dropped them. */
+   *  invoices, ordered as the user dropped them.
+   *
+   *  For pairs created on THIS device the Files are populated up
+   *  front. For pairs hydrated from the server this array starts
+   *  EMPTY — the bytes live behind `imageRefs` and are streamed in
+   *  lazily (see lib/images.ts) so the queue paints instantly. */
   images: File[];
+  /** Lazy image handles for server-hydrated pairs. Absent on pairs
+   *  created locally (those already hold real Files in `images`). */
+  imageRefs?: PairImageRef[];
   status: PairStatus;
 }
 

@@ -3,7 +3,8 @@
  * and get back a field-by-field comparison against this app's ready pairs.
  *
  * Stateless: the upload is parsed in memory, compared against the live pair
- * queue (db.listAllPairs), and the report is returned. Nothing is persisted —
+ * queue (db.listAllPairsLight — comparison never needs image bytes), and the
+ * report is returned. Nothing is persisted —
  * it's a read-only cross-check the operator runs on demand.
  *
  * The heavy lifting (xlsx parse + join + per-field tolerance) lives in
@@ -13,7 +14,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { compareExcelBuffer } from "../compare.js";
-import { listAllPairs } from "../db.js";
+import { listAllPairsLight } from "../db.js";
 
 /** Accepted upload types for the .xlsx (browsers vary on what they tag). */
 const ACCEPTED_MIME = new Set([
@@ -50,7 +51,7 @@ export default async function compareRoutes(app: FastifyInstance) {
     }
 
     try {
-      const report = compareExcelBuffer(buf, listAllPairs(), fileName);
+      const report = compareExcelBuffer(buf, listAllPairsLight(), fileName);
       return reply.send({ report });
     } catch (err) {
       req.log.error({ err }, "Excel comparison failed");

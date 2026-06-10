@@ -17,6 +17,7 @@ import {
   type Verification,
 } from "../types";
 import { date, ron } from "../lib/format";
+import { usePairImages } from "../lib/images";
 import { ProductBadge, ProductCheckSummary, hasAnyWarning } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
@@ -88,7 +89,7 @@ export function PairDetail({
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <aside className="lg:col-span-5 xl:col-span-4">
-          <ImageGallery files={pair.images} />
+          <ImageGallery pair={pair} />
         </aside>
 
         <section className="lg:col-span-7 xl:col-span-8 space-y-6">
@@ -241,7 +242,11 @@ function StatusBadge({ status }: { status: PairStatus }) {
 
 /* ─── Image gallery ─────────────────────────────────────────────────── */
 
-function ImageGallery({ files }: { files: File[] }) {
+function ImageGallery({ pair }: { pair: Pair }) {
+  // Lazy: bytes stream in per-image from the server (cached in-app
+  // after the first load); local pairs resolve instantly. While
+  // loading, one skeleton card per expected image keeps the layout.
+  const { files, loading } = usePairImages(pair);
   const [urls, setUrls] = useState<string[]>([]);
   const [zoomed, setZoomed] = useState<string | null>(null);
 
@@ -260,6 +265,21 @@ function ImageGallery({ files }: { files: File[] }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [zoomed]);
+
+  if (loading) {
+    const expected = pair.imageRefs?.length ?? 1;
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: expected }, (_, i) => (
+          <div
+            key={i}
+            className="h-48 animate-pulse rounded-xl border border-ink-200 bg-canvas-100"
+            title={`Se încarcă imaginea ${i + 1}…`}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <>

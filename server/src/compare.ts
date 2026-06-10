@@ -16,7 +16,7 @@
  * measurement and Mapbox).
  */
 
-import type { PairWire } from "./db.js";
+import type { PairLightWire } from "./db.js";
 import type { Extracted, Routing } from "./schema.js";
 import type { PricingBreakdown } from "./pricing.js";
 import { parseXlsxFirstSheet, type SheetTable } from "./xlsx.js";
@@ -194,7 +194,7 @@ interface AppFacts {
 }
 
 /** Pull the comparable scalars out of a ready pair; null for non-ready pairs. */
-function appFactsOf(pair: PairWire): AppFacts | null {
+function appFactsOf(pair: PairLightWire): AppFacts | null {
   if (pair.status.kind !== "ready") return null;
   const edits = pair.status.edits as Extracted;
   const breakdown = pair.status.breakdown as PricingBreakdown;
@@ -377,7 +377,7 @@ function recipientField(excel: string | null, app: string | null): CompareField 
  */
 export function buildReport(
   sheet: SheetTable,
-  pairs: PairWire[],
+  pairs: PairLightWire[],
   fileName: string | null,
 ): CompareReport {
   // Index app pairs by AWB key. A normal day has unique AWBs; if a duplicate
@@ -483,7 +483,7 @@ export function buildReport(
 /** Convenience: parse raw .xlsx bytes and compare in one call. */
 export function compareExcelBuffer(
   buf: Buffer,
-  pairs: PairWire[],
+  pairs: PairLightWire[],
   fileName: string | null,
 ): CompareReport {
   const sheet = parseXlsxFirstSheet(buf);
