@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { type ImageInput } from "../gemini.js";
 import { calculatePrice, type PricingBreakdown } from "../pricing.js";
 import { type Service } from "../tariffs.js";
-import { extractAndPrice, PipelineError } from "../pipeline.js";
+import { extractAndPrice, PipelineError, todayFilingDay } from "../pipeline.js";
 import {
   PricingRequestSchema,
   type Extracted,
@@ -78,7 +78,7 @@ export default async function extractRoutes(app: FastifyInstance) {
 
     try {
       const { extracted, resolvedService, serviceFallback, breakdown, routing } =
-        await extractAndPrice(images);
+        await extractAndPrice(images, todayFilingDay());
       const body: ExtractResponse = { extracted, resolvedService, serviceFallback, breakdown, routing };
       return reply.send(body);
     } catch (err) {

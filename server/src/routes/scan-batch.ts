@@ -120,7 +120,7 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
   signalExtracting(id);
 
   try {
-    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await extractAndPrice(aiImages);
+    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await extractAndPrice(aiImages, day);
     persistPairStatus(id, {
       kind: "ready",
       service: resolvedService,

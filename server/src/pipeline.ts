@@ -23,6 +23,20 @@ import type { Extracted } from "./schema.js";
 
 export type { ImageInput } from "./gemini.js";
 
+/**
+ * Today's working day in the operator's timezone (YYYY-MM-DD). en-CA formats
+ * as ISO. This is the default "delivery day" used for the weekend surcharge
+ * when a caller doesn't supply the pair's filing day explicitly.
+ */
+export function todayFilingDay(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: process.env.CENTRALIZATOR_TZ ?? "Europe/Bucharest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 export interface ExtractAndPriceResult {
   extracted: Extracted;
   resolvedService: Service;
@@ -142,7 +156,10 @@ export function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasO
  * how to surface it (an HTTP code on the sync route, an "error" pair
  * status on the async batch path).
  */
-export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndPriceResult> {
+export async function extractAndPrice(
+  images: ImageInput[],
+  filingDay?: string,
+): Promise<ExtractAndPriceResult> {
   let extracted: Extracted;
   try {
     extracted = await extractFromImages(images);
@@ -163,6 +180,14 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
   const routing = await resolveRouting(extracted);
   extracted.awb.distance_extra_km = routing.distanceKm;
 
+  // Weekend surcharge keys off the DELIVERY working day, NOT the AWB's printed
+  // timestamp. That timestamp is the AWB *creation* date, which is routinely a
+  // day or two before the actual delivery (an order placed Saturday/Sunday is
+  // delivered Monday). Using it wrongly tags Monday deliveries as weekend runs.
+  // The pair's filing day (the day the operator processes the deliveries) is
+  // the right proxy; fall back to today, then to the AWB date as a last resort.
+  const weekendBasis = filingDay ?? todayFilingDay() ?? extracted.awb.delivery_date;
+
   let breakdown: PricingBreakdown;
   try {
     breakdown = calculatePrice({
@@ -170,7 +195,7 @@ export async function extractAndPrice(images: ImageInput[]): Promise<ExtractAndP
       weightKg: extracted.awb.weight_kg,
       distanceKm: routing.distanceKm,
       numDeliveries: extracted.awb.num_deliveries ?? 1,
-      deliveryDate: extracted.awb.delivery_date,
+      deliveryDate: weekendBasis,
       bulkyUnits,
       hasOtherProducts,
       unloadingUnits,
