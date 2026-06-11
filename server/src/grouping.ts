@@ -119,22 +119,32 @@ const SYSTEM_INSTRUCTION =
   "JUST BEFORE the AWB or JUST AFTER it. The stack may start with an AWB or with an invoice.\n" +
   "  • Walk the images in order. Bind each run of invoices to its adjacent AWB. The boundary between two groups " +
   "is where the next AWB's shipment begins.\n" +
-  "Duplicates & redundant photos (IMPORTANT — deduplicate):\n" +
-  "  • Some images are the SAME physical document photographed more than once (the same AWB twice, the same " +
-  "invoice twice, a blurry copy plus a clear copy, or two pages of the same multi-page invoice). For each real " +
-  "document keep only ONE image — the clearest, most complete one — and OMIT the duplicates entirely. A duplicate " +
-  "must NOT appear in any group.\n" +
+  "Duplicates & redundant photos (CRITICAL — the photographers are couriers in a hurry, they shoot carelessly):\n" +
+  "  • The SAME physical document is often photographed more than once, or the same photo is sent twice: the same " +
+  "AWB label twice, the same invoice twice, the same combined label-on-invoice photo twice — possibly at a " +
+  "different angle, crop, blur, lighting, or with a hand in the frame. Those are DUPLICATES, not new shipments.\n" +
+  "  • ONE SHIPMENT = ONE GROUP, always. NEVER output two groups for the same shipment. Two images showing the " +
+  "same AWB number (or the same Destinatar + the same invoice/comandă) are the SAME shipment, no matter how many " +
+  "times it was photographed.\n" +
+  "  • For each real document keep only ONE image — the clearest, most complete one — and OMIT the duplicates " +
+  "entirely. A duplicate must NOT appear in any group: not as an awb_image, not inside invoice_images.\n" +
   "  • You do NOT have to use every image. Leaving duplicate or redundant images unassigned is correct and expected.\n" +
   "  • Match duplicates by their CONTENT: same AWB barcode number, same recipient (Destinatar), same invoice/" +
   "comandă number, same product lines. If two photos clearly show the same shipment's same document, they are duplicates.\n" +
   "  • Combined photo: if ONE image shows BOTH an AWB label AND its invoice together (a small courier label laid on " +
   "the invoice page) and there is no other photo of that shipment's invoice, put that SAME image number in BOTH " +
   "awb_image AND invoice_images for that one group.\n" +
+  "  • A duplicated COMBINED photo is the trap to avoid: two photos of the same label-on-invoice arrangement are " +
+  "ONE shipment with ONE group — never anchor a second group on the duplicate copy.\n" +
+  "Self-check before answering: scan the groups you are about to return; if any two groups rest on the same AWB " +
+  "number or the same Destinatar+invoice, merge them and drop the duplicate images, THEN call the tool.\n" +
   "Examples (image:type):\n" +
   "  [1:invoice, 2:invoice, 3:AWB, 4:invoice, 5:AWB] → groups: {awb 3, invoices [1,2]}, {awb 5, invoices [4]}.\n" +
   "  [1:AWB, 2:invoice, 3:invoice, 4:AWB, 5:invoice] → groups: {awb 1, invoices [2,3]}, {awb 4, invoices [5]}.\n" +
   "  [1:AWB-X, 2:invoice-X, 3:invoice-X(duplicate of 2), 4:AWB-Y, 5:invoice-Y] → groups: {awb 1, invoices [2]}, " +
   "{awb 4, invoices [5]} (image 3 omitted as a duplicate).\n" +
+  "  [1:combined AWB-Z+invoice-Z, 2:duplicate photo of the same combined document] → ONE group: {awb 1, " +
+  "invoices [1]} (image 2 omitted — the same shipment photographed twice is still one shipment).\n" +
   "Rules:\n" +
   "  • Use 1-based image numbers exactly as labelled.\n" +
   "  • Assign each DISTINCT shipment to its own group; omit duplicate/redundant images. Do not invent images.\n" +
@@ -186,7 +196,8 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
       `You received ${images.length} images. Group them into shipments per the rule, then call ` +
       "group_documents ONCE. Use image numbers 1.." +
       String(images.length) +
-      ". Assign each DISTINCT shipment to one group, and OMIT any duplicate or redundant images (do not force every image into a group).",
+      ". Assign each DISTINCT shipment to exactly ONE group — never two groups for the same AWB number — and " +
+      "OMIT any duplicate or redundant images (do not force every image into a group).",
   });
 
   // A large multi-image grouping request (a whole day's stack) occasionally
