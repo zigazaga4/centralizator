@@ -16,7 +16,7 @@
  */
 
 import { extractFromImages, type ImageInput } from "./gemini.js";
-import { calculatePrice, type PricingBreakdown } from "./pricing.js";
+import { calculatePrice, type PricingBreakdown, type PricingInput } from "./pricing.js";
 import { SERVICE_TEXT_MAP, type Service } from "./tariffs.js";
 import { resolveRouting, type Routing } from "./routing.js";
 import type { Extracted } from "./schema.js";
@@ -150,6 +150,45 @@ export function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasO
 }
 
 /**
+ * Assemble the calculatePrice input for an extraction. The ONE place the
+ * extraction-to-pricing mapping lives — shared by the live pipeline and the
+ * offline reprice script so the two can never drift (the script once passed
+ * a stale subset and silently dropped macara / mis-applied the weekend).
+ *
+ * The caller supplies the three context values that do NOT come from the
+ * extraction itself:
+ *   • distanceKm   — the authoritative billed km (routed, or as persisted)
+ *   • weekendBasis — the filing day that drives the weekend surcharge
+ *   • macaraStore  — the resolved dispatch store (picks the macara table)
+ */
+export function buildPricingInput(
+  extracted: Extracted,
+  service: Service,
+  opts: {
+    distanceKm: number;
+    weekendBasis: string;
+    macaraStore: PricingInput["macaraStore"];
+  },
+): PricingInput {
+  const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
+  const macara = summariseMacara(extracted);
+  return {
+    service,
+    weightKg: extracted.awb.weight_kg,
+    distanceKm: opts.distanceKm,
+    numDeliveries: extracted.awb.num_deliveries ?? 1,
+    deliveryDate: opts.weekendBasis,
+    bulkyUnits,
+    hasOtherProducts,
+    unloadingUnits: summariseUnloading(extracted),
+    macaraOnAwb: macara.onAwb,
+    macaraOnInvoice: macara.onInvoice,
+    macaraPallets: macara.pallets,
+    macaraStore: opts.macaraStore,
+  };
+}
+
+/**
  * Run the full extract + price pipeline over one pair's images.
  *
  * Throws on a vision failure or a pricing failure; the caller decides
@@ -168,9 +207,6 @@ export async function extractAndPrice(
   }
 
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
-  const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
-  const unloadingUnits = summariseUnloading(extracted);
-  const macara = summariseMacara(extracted);
 
   // Resolve the origin store + the routed delivery distance. This OVERWRITES
   // the AWB's printed km with the Mapbox shortest-road distance (store →
@@ -190,22 +226,15 @@ export async function extractAndPrice(
 
   let breakdown: PricingBreakdown;
   try {
-    breakdown = calculatePrice({
-      service,
-      weightKg: extracted.awb.weight_kg,
-      distanceKm: routing.distanceKm,
-      numDeliveries: extracted.awb.num_deliveries ?? 1,
-      deliveryDate: weekendBasis,
-      bulkyUnits,
-      hasOtherProducts,
-      unloadingUnits,
-      macaraOnAwb: macara.onAwb,
-      macaraOnInvoice: macara.onInvoice,
-      macaraPallets: macara.pallets,
-      // Macara rate table is per dispatch site; use the store the routing
-      // step resolved (null falls back to the default table in the engine).
-      macaraStore: routing.store,
-    });
+    breakdown = calculatePrice(
+      buildPricingInput(extracted, service, {
+        distanceKm: routing.distanceKm,
+        weekendBasis,
+        // Macara rate table is per dispatch site; use the store the routing
+        // step resolved (null falls back to the default table in the engine).
+        macaraStore: routing.store ?? null,
+      }),
+    );
   } catch (err) {
     throw new PipelineError("pricing", (err as Error).message, extracted);
   }

@@ -18,9 +18,9 @@
 import Database from "better-sqlite3";
 import { resolve } from "node:path";
 import { calculatePrice } from "../pricing.js";
-import { summariseBulky, summariseUnloading } from "../pipeline.js";
-import type { Extracted } from "../schema.js";
-import type { Service } from "../tariffs.js";
+import { buildPricingInput, todayFilingDay } from "../pipeline.js";
+import type { Extracted, Routing } from "../schema.js";
+import type { City, Service } from "../tariffs.js";
 
 const DB_PATH =
   process.env.CENTRALIZATOR_DB_PATH ??
@@ -33,14 +33,17 @@ db.pragma("foreign_keys = ON");
 
 interface Row {
   id: string;
+  day: string;
   service: Service | null;
   edits_json: string | null;
   breakdown_json: string | null;
+  store: City | null;
+  routing_json: string | null;
 }
 
 const rows = db
   .prepare<unknown[], Row>(
-    `SELECT id, service, edits_json, breakdown_json
+    `SELECT id, day, service, edits_json, breakdown_json, store, routing_json
        FROM pairs
       WHERE status_kind = 'ready'
         AND edits_json IS NOT NULL
@@ -66,17 +69,21 @@ db.transaction(() => {
   for (const row of rows) {
     try {
       const edits = JSON.parse(row.edits_json!) as Extracted;
-      const { bulkyUnits, hasOtherProducts } = summariseBulky(edits);
-      const breakdown = calculatePrice({
-        service: row.service!,
-        weightKg: edits.awb.weight_kg,
-        distanceKm: edits.awb.distance_extra_km,
-        numDeliveries: edits.awb.num_deliveries,
-        deliveryDate: edits.awb.delivery_date,
-        bulkyUnits,
-        hasOtherProducts,
-        unloadingUnits: summariseUnloading(edits),
-      });
+      const routing = row.routing_json
+        ? (JSON.parse(row.routing_json) as Routing)
+        : null;
+      // Mirror the live pipeline exactly via the SHARED input builder:
+      //   • distanceKm   — the persisted km (already overwritten with the
+      //                    routed distance when the pair was priced);
+      //   • weekendBasis — the pair's FILING day (NOT the AWB timestamp);
+      //   • macaraStore  — the resolved dispatch store column.
+      const breakdown = calculatePrice(
+        buildPricingInput(edits, row.service!, {
+          distanceKm: edits.awb.distance_extra_km,
+          weekendBasis: row.day || todayFilingDay(),
+          macaraStore: row.store ?? routing?.store ?? null,
+        }),
+      );
       const next = JSON.stringify(breakdown);
       if (next === row.breakdown_json) {
         unchanged += 1;

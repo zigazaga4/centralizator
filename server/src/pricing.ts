@@ -15,11 +15,12 @@
  *                      where baseBucket = 800-1200kg when weight > 1200,
  *                      else weightBucket itself.
  *   bulkyTransports  = extra truck runs forced by bulky-but-light goods
- *                      (polystyrene / mineral wool). One extra transport
- *                      per 24 bulky units; the first 24 ride in the base
- *                      transport only when the WHOLE shipment is bulky:
- *                        all-bulky  → ceil(units / 24) - 1
- *                        + others   → ceil(units / 24)
+ *                      (polystyrene / mineral wool). The ONLY criteria is
+ *                      the piece count: 24 bulky pieces fill one transport.
+ *                      Below 24 pieces nothing is charged; from 24 up the
+ *                      calculation applies once per started block of 24:
+ *                        units < 24 → 0
+ *                        24 → 1,  25 → 2,  48 → 2,  49 → 3
  *                      Each one is a real extra trip → +1 increment tariff
  *                      AND +1 round of the per-km surcharge.
  *   extraKmCost      = (km - 50) × 1.90 × 2 × (rounds × deliveries + bulkyTransports)  [>50 km]
@@ -109,10 +110,10 @@ export interface PricingInput {
    *  across every invoice on this AWB. Drives the extra-transport
    *  surcharge. Default 0 (no bulky goods). */
   bulkyUnits?: number;
-  /** Whether the invoice(s) also carry non-bulky products. Changes the
-   *  bulky formula: when the whole shipment is bulky the first 24 units
-   *  ride in the base transport; when other products share the truck,
-   *  every 24 bulky units needs its own transport. Default false. */
+  /** Whether the invoice(s) also carry non-bulky products. ACCEPTED for
+   *  wire compatibility but NO LONGER affects the price: per the ops rule
+   *  of 2026-06-11 the bulky surcharge depends ONLY on the piece count
+   *  (24 pieces per transport), mixed or not. Default false. */
   hasOtherProducts?: boolean;
   /** Count of standard unloading fees ("descărcare", 177.69 net / 210 gross)
    *  billed on the shipment — detected from the invoice(s) (or the AWB's
@@ -196,8 +197,8 @@ export interface PricingBreakdown {
   /** Bulky-but-light units (polystyrene / mineral wool) counted across
    *  all invoices on this AWB. 0 when none. */
   bulkyUnits: number;
-  /** Extra truck transports forced by the bulky units (one per 24, less
-   *  the first 24 when the whole shipment is bulky). Each adds one
+  /** Extra truck transports forced by the bulky units: 0 below 24 pieces,
+   *  then one per started block of 24 (24 → 1, 25 → 2). Each adds one
    *  increment tariff and one round of the per-km surcharge. */
   bulkyTransports: number;
   /** Whether the weekend surcharge was applied. */
@@ -285,7 +286,6 @@ export interface CollaboratorPrice {
 export function calculatePrice(input: PricingInput): PricingBreakdown {
   const { service, weightKg, distanceKm, numDeliveries, deliveryDate } = input;
   const bulkyUnits = Math.max(0, Math.floor(input.bulkyUnits ?? 0));
-  const hasOtherProducts = input.hasOtherProducts ?? false;
   const unloadingUnits = Math.max(0, Math.floor(input.unloadingUnits ?? 0));
 
   if (!Number.isInteger(numDeliveries) || numDeliveries < 1) {
@@ -321,14 +321,13 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const rounds = 1 + weightIncrements;
 
   // Bulky-but-light goods (polystyrene / mineral wool) fill the truck by
-  // volume regardless of weight. One extra transport per 24 bulky units.
-  // When the whole shipment is bulky the first 24 ride in the base
-  // transport (ceil(n/24) - 1); when other products share the truck the
-  // base is taken by those, so every 24 bulky units needs its own
-  // transport (ceil(n/24)). Ops rule 2026-06-03.
-  const bulkyGroups = bulkyUnits > 0 ? Math.ceil(bulkyUnits / BULKY_UNITS_PER_TRANSPORT) : 0;
-  const bulkyTransports = bulkyUnits > 0
-    ? (hasOtherProducts ? bulkyGroups : bulkyGroups - 1)
+  // volume regardless of weight. The ONLY qualifying criteria is the piece
+  // count: 24 bulky pieces per transport. Below 24 pieces nothing is
+  // charged; 24 pieces → 1 extra transport; 25 → the calculation applies
+  // twice → 2. Whether other products share the truck is irrelevant.
+  // Ops rule 2026-06-11.
+  const bulkyTransports = bulkyUnits >= BULKY_UNITS_PER_TRANSPORT
+    ? Math.ceil(bulkyUnits / BULKY_UNITS_PER_TRANSPORT)
     : 0;
 
   // Extra-km surcharge only for the >50 km tier; the (km - 50) overage
