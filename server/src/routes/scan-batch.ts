@@ -21,7 +21,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 import type { ImageInput } from "../gemini.js";
-import { groupImages, type DocumentGroup } from "../grouping.js";
+import { groupImagesChunked, type DocumentGroup } from "../grouping.js";
 import { extractAndPrice } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
@@ -159,7 +159,10 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
 async function processBatch(batchId: string, images: BatchImage[], day: string, log: FastifyBaseLogger): Promise<void> {
   try {
     const aiImages: ImageInput[] = images.map((img) => ({ data: img.bytes, mimeType: img.mimeType }));
-    const groups = await groupImages(aiImages);
+    // Session-chunked: one small parallel grouping call per photo session
+    // (filename timestamps), instead of one fragile mega-call that
+    // reproducibly dropped the tail of an 83-image day.
+    const groups = await groupImagesChunked(aiImages, images.map((img) => img.name));
     log.info({ batchId, images: images.length, groups: groups.length }, "scan-batch: grouped");
 
     if (groups.length === 0) {

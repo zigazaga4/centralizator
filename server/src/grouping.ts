@@ -66,6 +66,13 @@ const client = new OpenAI({
   },
 });
 
+/** Ceiling on how many images ride in ONE grouping call. One 83-image call
+ *  reproducibly dropped the tail of the stack (the model stops assigning
+ *  near the end — observed twice, deterministically, 2026-06-11), while
+ *  per-session calls of ~4-16 images group flawlessly. Override with
+ *  MAX_GROUPING_CHUNK. */
+const MAX_GROUPING_CHUNK = Number(process.env.MAX_GROUPING_CHUNK ?? 24);
+
 /** One pair, expressed as 0-based indices into the uploaded image array. */
 export interface DocumentGroup {
   /** Index of the AWB image, or null when the model found no AWB for this run. */
@@ -339,4 +346,113 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
   }
 
   return groups;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Chunked grouping — one upload, several small model calls.
+ *
+ * The phone (and the operator's bulk re-runs) send a WHOLE DAY in one
+ * POST. Shipments never straddle a photo session: the courier stops the
+ * van, photographs one load, drives on. The session timestamp is right
+ * in the WhatsApp filename ("… at 08.39.25.jpeg" → session "08.39"), so
+ * splitting the stack at session boundaries is free, perfect structure —
+ * each grouping call stays in the size range the model handles flawlessly,
+ * and the calls run in PARALLEL, so the day groups in the time of the
+ * slowest session instead of one fragile mega-call.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** Session key from a WhatsApp-style filename: "… at 08.39.25 (2).jpeg" →
+ *  "08.39" (hour.minute — the seconds vary within one photo session).
+ *  Null when the name doesn't carry the pattern. */
+function sessionKeyOf(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const m = /\bat (\d{1,2}\.\d{2})\.\d{2}/.exec(name);
+  return m ? m[1]! : null;
+}
+
+/** Split n indices into ceil(n/max) parts as even as possible (sizes differ
+ *  by at most 1), preserving order. */
+function evenSplit(indices: number[], max: number): number[][] {
+  if (indices.length <= max) return [indices];
+  const parts = Math.ceil(indices.length / max);
+  const base = Math.floor(indices.length / parts);
+  const extra = indices.length % parts;
+  const out: number[][] = [];
+  let at = 0;
+  for (let p = 0; p < parts; p++) {
+    const size = base + (p < extra ? 1 : 0);
+    out.push(indices.slice(at, at + size));
+    at += size;
+  }
+  return out;
+}
+
+/**
+ * Partition an ordered image stack into grouping chunks (arrays of 0-based
+ * indices, order preserved).
+ *
+ * Rules:
+ *   • consecutive images sharing a session key form one chunk;
+ *   • an image with NO parseable session rides with the current chunk
+ *     (adjacency is the next-best signal we have for it);
+ *   • any chunk above `maxChunk` is hard-split into near-even parts, so a
+ *     stack of unparseable names degrades to plain fixed-size chunking
+ *     instead of recreating the one-giant-call failure.
+ *
+ * Pure — exported for tests.
+ */
+export function sessionChunks(
+  names: (string | null | undefined)[],
+  maxChunk: number = MAX_GROUPING_CHUNK,
+): number[][] {
+  const chunks: number[][] = [];
+  let current: number[] = [];
+  let currentKey: string | null = null;
+  for (let i = 0; i < names.length; i++) {
+    const key = sessionKeyOf(names[i]);
+    const startsNew = key !== null && currentKey !== null && key !== currentKey;
+    if (startsNew && current.length > 0) {
+      chunks.push(current);
+      current = [];
+    }
+    current.push(i);
+    if (key !== null) currentKey = key;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks.flatMap((c) => evenSplit(c, Math.max(1, maxChunk)));
+}
+
+/**
+ * Group a whole day's stack by running `groupImages` once per session
+ * chunk, ALL CHUNKS IN PARALLEL, then remapping each chunk's local image
+ * indices back onto the full stack. Group shape and ordering match a
+ * single `groupImages` call over the same stack.
+ *
+ * A failed chunk fails the whole batch (same contract as groupImages) —
+ * better a loud retryable error than silently missing one van-load.
+ */
+export async function groupImagesChunked(
+  images: ImageInput[],
+  names: (string | null | undefined)[] = [],
+  opts: { maxChunk?: number } = {},
+): Promise<DocumentGroup[]> {
+  if (images.length === 0) return [];
+  const chunks = sessionChunks(
+    images.map((_, i) => names[i] ?? null),
+    opts.maxChunk ?? MAX_GROUPING_CHUNK,
+  );
+  if (chunks.length <= 1) return groupImages(images);
+
+  const perChunk = await Promise.all(
+    chunks.map(async (indices) => {
+      const subset = indices.map((i) => images[i]!);
+      const groups = await groupImages(subset);
+      // Chunk-local index → global stack index.
+      return groups.map((g) => ({
+        awbIndex: g.awbIndex === null ? null : indices[g.awbIndex]!,
+        invoiceIndices: g.invoiceIndices.map((idx) => indices[idx]!),
+      }));
+    }),
+  );
+  return perChunk.flat();
 }
