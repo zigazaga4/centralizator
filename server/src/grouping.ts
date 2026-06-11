@@ -34,10 +34,21 @@ const MODEL = process.env.OPENROUTER_GROUPING_MODEL ?? process.env.OPENROUTER_MO
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
-/** OpenRouter unified reasoning control. "high" = maximum thinking budget on
- *  Gemini. Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
+/** OpenRouter unified reasoning control. Default "high" = maximum thinking.
+ *  CRITICAL: the effort budget is carved out of max_tokens, so an explicit
+ *  max_tokens MUST ride along — "high" with no cap let the thinking consume
+ *  the whole output allowance and starve the forced tool call (probed live
+ *  2026-06-11: ~57k thinking tokens, truncated/absent group_documents call).
+ *  65535 is the model's maximum output, giving the answer guaranteed room.
+ *  Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
 const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "high";
-const REASONING = REASONING_EFFORT === "off" ? {} : { reasoning: { effort: REASONING_EFFORT } };
+const REASONING =
+  REASONING_EFFORT === "off"
+    ? {}
+    : {
+        reasoning: { effort: REASONING_EFFORT },
+        max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS ?? 65_535),
+      };
 
 /** Total wall-clock ceiling for the grouping call (incl. the one retry).
  *  Generous by default: one call can now cover a whole day's stack (dozens
@@ -206,10 +217,17 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
   // are transient, so retry a few times with backoff before giving up. A
   // genuine timeout (the abort signal fired) is NOT retried — re-running a
   // multi-minute call several times would be pathological.
+  //
+  // High-effort thinking adds a second transient class: the gateway can cut
+  // the stream mid-reasoning (finish_reason null, no tool call) or the
+  // thinking can truncate the forced tool call's JSON. Both observed live
+  // 2026-06-11. A bad RESPONSE is therefore retried exactly like a bad
+  // CONNECTION — only a clean, schema-valid tool call breaks the loop.
   const MAX_TRIES = 5;
-  let completion: OpenAI.Chat.Completions.ChatCompletion | undefined;
+  let parsedGroups: z.infer<typeof GroupArgsSchema> | undefined;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+    let completion: OpenAI.Chat.Completions.ChatCompletion;
     try {
       completion = await client.chat.completions.create(
         {
@@ -225,7 +243,6 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
         } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
         { signal: AbortSignal.timeout(GROUP_TIMEOUT_MS) },
       );
-      break;
     } catch (err) {
       lastErr = err;
       const e = err as { name?: string; message?: string };
@@ -244,27 +261,33 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
       }
       throw err;
     }
-  }
-  if (!completion) throw lastErr ?? new Error("Grouping returned no response.");
 
-  const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
-  if (!toolCall || toolCall.function.name !== "group_documents") {
-    throw new Error(
-      `Grouping model did not call group_documents. Got: ${JSON.stringify(completion.choices[0]?.message)}`,
-    );
+    const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
+    if (!toolCall || toolCall.function.name !== "group_documents") {
+      lastErr = new Error(
+        `Grouping model did not call group_documents (attempt ${attempt}/${MAX_TRIES}, ` +
+          `finish=${completion.choices[0]?.finish_reason ?? "null"}).`,
+      );
+    } else {
+      try {
+        const rawArgs: unknown = JSON.parse(toolCall.function.arguments);
+        const result = GroupArgsSchema.safeParse(rawArgs);
+        if (result.success) {
+          parsedGroups = result.data;
+          break;
+        }
+        lastErr = new Error(`Grouping output failed schema validation:\n${result.error.toString()}`);
+      } catch (err) {
+        lastErr = new Error(
+          `Grouping tool arguments were not valid JSON (attempt ${attempt}/${MAX_TRIES}):\n` +
+            `${toolCall.function.arguments.slice(0, 500)}\n\n${(err as Error).message}`,
+        );
+      }
+    }
+    if (attempt < MAX_TRIES) await new Promise((r) => setTimeout(r, 2000 * attempt));
   }
-
-  let rawArgs: unknown;
-  try {
-    rawArgs = JSON.parse(toolCall.function.arguments);
-  } catch (err) {
-    throw new Error(`Grouping tool arguments were not valid JSON:\n${toolCall.function.arguments}\n\n${(err as Error).message}`);
-  }
-
-  const parsed = GroupArgsSchema.safeParse(rawArgs);
-  if (!parsed.success) {
-    throw new Error(`Grouping output failed schema validation:\n${parsed.error.toString()}`);
-  }
+  if (!parsedGroups) throw lastErr ?? new Error("Grouping returned no response.");
+  const parsed = { data: parsedGroups };
 
   // Normalise: 1-based → 0-based, drop out-of-range, and enforce that no
   // image lands in two DIFFERENT shipments. Images the model deliberately

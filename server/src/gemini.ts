@@ -20,9 +20,20 @@ const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
 /** OpenRouter unified reasoning control. "high" = maximum thinking budget on
- *  Gemini. Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
+ *  Default "high" = maximum thinking. CRITICAL: the effort budget is carved
+ *  out of max_tokens, so an explicit max_tokens MUST ride along — "high"
+ *  with no cap let the thinking consume the whole output allowance and
+ *  starve the forced tool call (probed live 2026-06-11). 65535 is the
+ *  model's maximum output, giving the answer guaranteed room.
+ *  Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
 const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "high";
-const REASONING = REASONING_EFFORT === "off" ? {} : { reasoning: { effort: REASONING_EFFORT } };
+const REASONING =
+  REASONING_EFFORT === "off"
+    ? {}
+    : {
+        reasoning: { effort: REASONING_EFFORT },
+        max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS ?? 65_535),
+      };
 
 /**
  * Total ceiling on a single vision extraction, in ms. Deliberately HUGE
@@ -410,8 +421,30 @@ export async function extractFromImages(
       try {
         rawArgs = JSON.parse(extractCall.function.arguments);
       } catch (err) {
+        // High-effort thinking can truncate the forced tool call's JSON
+        // mid-stream (observed live 2026-06-11). Treat it like a rejected
+        // extraction — answer the tool calls, ask for a clean resubmit —
+        // instead of failing the whole pair on a transient cut.
+        if (extractFixes < MAX_EXTRACT_FIXES) {
+          extractFixes += 1;
+          messages.push(message as Msg);
+          for (const tc of toolCalls) {
+            messages.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: "Arguments arrived truncated / invalid JSON — resubmit the full extraction.",
+            });
+          }
+          messages.push({
+            role: "user",
+            content:
+              "Your extract_shipment_data call arrived as truncated or invalid JSON. Call extract_shipment_data " +
+              "ONCE more with the FULL, complete struct.",
+          });
+          continue;
+        }
         throw new Error(
-          `Tool call arguments were not valid JSON:\n${extractCall.function.arguments}\n\n${(err as Error).message}`,
+          `Tool call arguments were not valid JSON:\n${extractCall.function.arguments.slice(0, 500)}\n\n${(err as Error).message}`,
         );
       }
       const parsed = ExtractedSchema.safeParse(rawArgs);
