@@ -34,6 +34,11 @@ const MODEL = process.env.OPENROUTER_GROUPING_MODEL ?? process.env.OPENROUTER_MO
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
+/** OpenRouter unified reasoning control. "high" = maximum thinking budget on
+ *  Gemini. Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
+const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "high";
+const REASONING = REASONING_EFFORT === "off" ? {} : { reasoning: { effort: REASONING_EFFORT } };
+
 /** Total wall-clock ceiling for the grouping call (incl. the one retry).
  *  Generous by default: one call can now cover a whole day's stack (dozens
  *  of images), and a big multi-image vision request is legitimately slow. */
@@ -205,7 +210,8 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
           ],
           tools: [groupTool],
           tool_choice: { type: "function", function: { name: "group_documents" } },
-        },
+          ...REASONING,
+        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
         { signal: AbortSignal.timeout(GROUP_TIMEOUT_MS) },
       );
       break;

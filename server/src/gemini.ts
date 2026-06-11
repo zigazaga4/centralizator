@@ -19,6 +19,11 @@ const MODEL = process.env.OPENROUTER_MODEL ?? "google/gemini-3.5-flash";
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
+/** OpenRouter unified reasoning control. "high" = maximum thinking budget on
+ *  Gemini. Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
+const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "high";
+const REASONING = REASONING_EFFORT === "off" ? {} : { reasoning: { effort: REASONING_EFFORT } };
+
 /**
  * Total ceiling on a single vision extraction, in ms. Deliberately HUGE
  * (24h ≈ effectively unlimited): we do NOT want to kill a call that is slow
@@ -379,7 +384,8 @@ export async function extractFromImages(
           tool_choice: forceExtract
             ? { type: "function", function: { name: "extract_shipment_data" } }
             : "auto",
-        },
+          ...REASONING,
+        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
         { signal: AbortSignal.timeout(left) },
       );
     } catch (err) {
