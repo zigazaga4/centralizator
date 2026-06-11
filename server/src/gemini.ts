@@ -19,23 +19,6 @@ const MODEL = process.env.OPENROUTER_MODEL ?? "google/gemini-3.5-flash";
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
-/** OpenRouter unified reasoning control. "high" = maximum thinking budget on
- *  Default "off": no reasoning param is sent and the model runs at its fast
- *  native default (the configuration the whole verified DB was built with).
- *  The max-thinking configuration is preserved on the `max-thinking-high`
- *  branch; re-enable any time with OPENROUTER_REASONING_EFFORT=low|medium|
- *  high. CRITICAL when enabling: the effort budget is carved out of
- *  max_tokens, so an explicit max_tokens rides along automatically (65535)
- *  — "high" with no cap starves the forced tool call. */
-const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "off";
-const REASONING =
-  REASONING_EFFORT === "off"
-    ? {}
-    : {
-        reasoning: { effort: REASONING_EFFORT },
-        max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS ?? 65_535),
-      };
-
 /**
  * Total ceiling on a single vision extraction, in ms. Deliberately HUGE
  * (24h ≈ effectively unlimited): we do NOT want to kill a call that is slow
@@ -396,8 +379,7 @@ export async function extractFromImages(
           tool_choice: forceExtract
             ? { type: "function", function: { name: "extract_shipment_data" } }
             : "auto",
-          ...REASONING,
-        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+        },
         { signal: AbortSignal.timeout(left) },
       );
     } catch (err) {
@@ -413,7 +395,7 @@ export async function extractFromImages(
     }
 
     // `choices` itself can be ABSENT when the gateway returns an error-shaped
-    // 200 body (another high-thinking transient, observed live 2026-06-11) —
+    // 200 body (rare gateway transient, observed live 2026-06-11) —
     // an undefined message falls through to the no-tool-call nudge below.
     const message = completion.choices?.[0]?.message;
     const toolCalls = message?.tool_calls ?? [];
@@ -425,10 +407,10 @@ export async function extractFromImages(
       try {
         rawArgs = JSON.parse(extractCall.function.arguments);
       } catch (err) {
-        // High-effort thinking can truncate the forced tool call's JSON
-        // mid-stream (observed live 2026-06-11). Treat it like a rejected
-        // extraction — answer the tool calls, ask for a clean resubmit —
-        // instead of failing the whole pair on a transient cut.
+        // The gateway can truncate the tool call's JSON mid-stream
+        // (observed live 2026-06-11). Treat it like a rejected extraction
+        // — answer the tool calls, ask for a clean resubmit — instead of
+        // failing the whole pair on a transient cut.
         if (extractFixes < MAX_EXTRACT_FIXES) {
           extractFixes += 1;
           messages.push(message as Msg);

@@ -34,24 +34,6 @@ const MODEL = process.env.OPENROUTER_GROUPING_MODEL ?? process.env.OPENROUTER_MO
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
-/** OpenRouter unified reasoning control. Default "off": no reasoning param
- *  is sent and the model runs at its fast native default — which grouped
- *  41/41 benchmark pairs correctly at ~70x the speed and ~50x cheaper than
- *  effort "high" (probed live 2026-06-11). The max-thinking configuration
- *  is preserved on the `max-thinking-high` branch; re-enable any time with
- *  OPENROUTER_REASONING_EFFORT=low|medium|high. CRITICAL when enabling: the
- *  effort budget is carved out of max_tokens, so an explicit max_tokens
- *  rides along automatically (65535, the model's maximum output) — "high"
- *  with no cap starves the forced tool call. */
-const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "off";
-const REASONING =
-  REASONING_EFFORT === "off"
-    ? {}
-    : {
-        reasoning: { effort: REASONING_EFFORT },
-        max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS ?? 65_535),
-      };
-
 /** Total wall-clock ceiling for the grouping call (incl. the one retry).
  *  Generous by default: one call can now cover a whole day's stack (dozens
  *  of images), and a big multi-image vision request is legitimately slow. */
@@ -227,11 +209,10 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
   // genuine timeout (the abort signal fired) is NOT retried — re-running a
   // multi-minute call several times would be pathological.
   //
-  // High-effort thinking adds a second transient class: the gateway can cut
-  // the stream mid-reasoning (finish_reason null, no tool call) or the
-  // thinking can truncate the forced tool call's JSON. Both observed live
-  // 2026-06-11. A bad RESPONSE is therefore retried exactly like a bad
-  // CONNECTION — only a clean, schema-valid tool call breaks the loop.
+  // The gateway can also cut a response mid-stream (finish_reason null, no
+  // tool call, or truncated tool-call JSON) — observed live 2026-06-11. A
+  // bad RESPONSE is therefore retried exactly like a bad CONNECTION — only
+  // a clean, schema-valid tool call breaks the loop.
   const MAX_TRIES = 5;
   let parsedGroups: z.infer<typeof GroupArgsSchema> | undefined;
   let lastErr: unknown;
@@ -248,8 +229,7 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
           ],
           tools: [groupTool],
           tool_choice: { type: "function", function: { name: "group_documents" } },
-          ...REASONING,
-        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+        },
         { signal: AbortSignal.timeout(GROUP_TIMEOUT_MS) },
       );
     } catch (err) {
