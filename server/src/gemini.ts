@@ -19,14 +19,15 @@ const MODEL = process.env.OPENROUTER_MODEL ?? "google/gemini-3.5-flash";
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
-/** OpenRouter unified reasoning control. "high" = maximum thinking budget on
- *  Default "high" = maximum thinking. CRITICAL: the effort budget is carved
- *  out of max_tokens, so an explicit max_tokens MUST ride along — "high"
- *  with no cap let the thinking consume the whole output allowance and
- *  starve the forced tool call (probed live 2026-06-11). 65535 is the
- *  model's maximum output, giving the answer guaranteed room.
+/** OpenRouter unified reasoning control. Default "low": a small thinking
+ *  budget keeps extraction sharp without high's multi-minute latency.
+ *  CRITICAL: the effort budget is carved out of max_tokens, so an explicit
+ *  max_tokens MUST ride along — unbounded thinking once consumed the whole
+ *  output allowance and starved the forced tool call (probed live
+ *  2026-06-11). 65535 is the model's maximum output, giving the answer
+ *  guaranteed room.
  *  Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
-const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "high";
+const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "low";
 const REASONING =
   REASONING_EFFORT === "off"
     ? {}

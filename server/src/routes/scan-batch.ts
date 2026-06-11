@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 import type { ImageInput } from "../gemini.js";
 import { groupImagesChunked, type DocumentGroup } from "../grouping.js";
+import { dedupeByDhash } from "../dhash.js";
 import { extractAndPrice } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
@@ -155,9 +156,29 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
   }
 }
 
-/** The background job: group, then fan the groups out to the pipeline. */
-async function processBatch(batchId: string, images: BatchImage[], day: string, log: FastifyBaseLogger): Promise<void> {
+/** The background job: dedup, group, then fan the groups out to the pipeline. */
+async function processBatch(batchId: string, allImages: BatchImage[], day: string, log: FastifyBaseLogger): Promise<void> {
   try {
+    // Perceptual dedup FIRST: the couriers re-shoot and re-send the same
+    // photo; dHash drops near-identical copies deterministically so the
+    // grouping model never sees them (and can never anchor a phantom
+    // second group on a duplicate). Order is preserved.
+    const { keptIndices, duplicates } = await dedupeByDhash(allImages.map((img) => img.bytes));
+    if (duplicates.length > 0) {
+      log.info(
+        {
+          batchId,
+          dropped: duplicates.map((d) => ({
+            name: allImages[d.index]!.name,
+            duplicateOf: allImages[d.ofIndex]!.name,
+            distance: d.distance,
+          })),
+        },
+        "scan-batch: dHash dedup dropped near-duplicate photos",
+      );
+    }
+    const images = keptIndices.map((i) => allImages[i]!);
+
     const aiImages: ImageInput[] = images.map((img) => ({ data: img.bytes, mimeType: img.mimeType }));
     // Session-chunked: one small parallel grouping call per photo session
     // (filename timestamps), instead of one fragile mega-call that
