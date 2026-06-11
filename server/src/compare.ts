@@ -3,22 +3,24 @@
  * what this app extracted and computed.
  *
  * The courier portal exports one row per AWB with the authoritative facts:
- * recipient, weight, the extra-km it billed, the road distance it measured,
- * and the carrier price. Our app independently reads the same AWB by vision,
- * routes the distance through Mapbox, and prices it with our own engine. This
- * module joins the two on the AWB number and reports, field by field, where
- * they agree and where they drift — so the operator can see at a glance whether
- * a discrepancy comes from the vision read, the routing, or the pricing.
+ * recipient, weight, the extra-km it billed, and the road distance it
+ * measured. Our app independently reads the same AWB by vision and routes the
+ * distance through Mapbox. This module joins the two on the AWB number and
+ * reports, field by field, where they agree and where they drift — so the
+ * operator can see at a glance whether a discrepancy comes from the vision
+ * read or the routing. Price is deliberately NOT compared here: the courier
+ * export is a customer-facing sell price computed on a different commercial
+ * layer, so a price column would only ever show an expected (non-actionable)
+ * drift.
  *
  * The join is the AWB number. Everything else is a per-field comparison with a
- * tolerance chosen for that field's nature (exact-ish for money and weight,
- * looser for the road distance which is known to diverge between the courier's
+ * tolerance chosen for that field's nature (exact-ish for weight, looser for
+ * the road distance which is known to diverge between the courier's
  * measurement and Mapbox).
  */
 
 import type { PairLightWire } from "./db.js";
 import type { Extracted, Routing } from "./schema.js";
-import type { PricingBreakdown } from "./pricing.js";
 import { parseXlsxFirstSheet, type SheetTable } from "./xlsx.js";
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -102,13 +104,6 @@ const COL = {
   weight: "Kg",
   extraKm: "Extra km",
   roadKm: "Distanta pe strada",
-  // Our totals are cu TVA (every tariff is VAT-included), so we compare
-  // against the portal's WITH-VAT price, not the net "Pret" column. The
-  // app side is the CITY-COMMISSIONED customer price (customerTotal for the
-  // pair's resolved store) + descărcare + macara — the portal's export is
-  // the customer-facing sell price, so the commission layer must be included
-  // for the two to line up.
-  price: "Pret cu TVA",
 } as const;
 
 /** Per-field absolute tolerance for the numeric comparisons. */
@@ -116,7 +111,6 @@ const TOL = {
   weight: 0.5, // kg — OCR/rounding noise
   extraKm: 0.5, // km — printed integer vs our stored value
   roadKm: 1.0, // km — courier measurement vs Mapbox legitimately differ a bit
-  price: 0.5, // RON
 } as const;
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -178,10 +172,6 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 /* ──────────────────────────────────────────────────────────────────────
  * App-side projection
  * ────────────────────────────────────────────────────────────────────── */
@@ -192,51 +182,21 @@ interface AppFacts {
   weight: number | null;
   extraKm: number | null; // routing.awbKm (the courier-comparable km)
   roadKm: number | null; // routing.mapboxKm (our measured road km)
-  price: number | null; // city customerTotal + unloading + macara (grandTotal fallback)
-  // Breakdown signals used to EXPLAIN a price/field difference.
-  weekendSurcharge: number; // >0 when the AWB date is Sat/Sun
-  unloadingTax: number; // >0 when descărcare is billed (cu TVA)
-  macaraIsMacara: boolean; // a crane line was detected
-  macaraTotal: number; // crane cost folded into the comparable price (cu TVA)
-  deliveryDate: string | null; // AWB date, for the weekend explanation
 }
 
 /** Pull the comparable scalars out of a ready pair; null for non-ready pairs. */
 function appFactsOf(pair: PairLightWire): AppFacts | null {
   if (pair.status.kind !== "ready") return null;
   const edits = pair.status.edits as Extracted;
-  const breakdown = pair.status.breakdown as PricingBreakdown;
   const routing = pair.status.routing as Routing | undefined;
   const awb = edits?.awb;
   if (!awb?.awb_number) return null;
-  const macara = breakdown?.macara;
-  // The portal's "Pret cu TVA" is the customer-facing sell price, so our
-  // comparable side is the CITY-COMMISSIONED price for the pair's resolved
-  // store (customerTotal = commissionBase grossed up by the city pct + km),
-  // with the two separate tracks (descărcare + macara) folded back in.
-  // Falls back to grandTotal (uncommissioned) when no store was resolved,
-  // and to carrierTotal for breakdowns persisted before grandTotal existed.
-  const store = pair.status.store ?? routing?.store ?? null;
-  const cityCommission = store ? breakdown?.cityCommissions?.[store] : undefined;
-  const unloadingGross = breakdown ? num(breakdown.unloadingTax) ?? 0 : 0;
-  const macaraGross = macara ? num(macara.total) ?? 0 : 0;
-  const price = !breakdown
-    ? null
-    : cityCommission
-      ? round2(cityCommission.customerTotal + unloadingGross + macaraGross)
-      : num(breakdown.grandTotal ?? breakdown.carrierTotal);
   return {
     awbRaw: awb.awb_number,
     recipient: awb.recipient_name ?? null,
     weight: num(awb.weight_kg),
     extraKm: routing ? num(routing.awbKm) : null,
     roadKm: routing ? num(routing.mapboxKm) : null,
-    price,
-    weekendSurcharge: breakdown ? num(breakdown.weekendSurcharge) ?? 0 : 0,
-    unloadingTax: unloadingGross,
-    macaraIsMacara: macara?.isMacara ?? false,
-    macaraTotal: macaraGross,
-    deliveryDate: awb.delivery_date ?? null,
   };
 }
 
@@ -248,40 +208,10 @@ function appFactsOf(pair: PairLightWire): AppFacts | null {
  * short Romanian phrases shown in parentheses next to the differing value.
  * ────────────────────────────────────────────────────────────────────── */
 
-/** Weekday name for a YYYY-MM-DD date in the operator's TZ; null if unparseable. */
-function weekdayRo(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(`${iso}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return null;
-  return ["duminică", "luni", "marți", "miercuri", "joi", "vineri", "sâmbătă"][d.getDay()] ?? null;
-}
-
 /** True when the courier billed extra km but our side read 0 (the photographed
  *  page was a proces-verbal/factură without the "Distanță extra" field). */
 function extraKmMissing(excelExtraKm: number | null, app: AppFacts): boolean {
   return (excelExtraKm ?? 0) > 0 && (app.extraKm ?? 0) === 0;
-}
-
-/** Cause of a PRICE difference (grandTotal vs the portal's "Pret cu TVA"). */
-function priceReason(excelExtraKm: number | null, app: AppFacts): string {
-  const parts: string[] = [];
-  if (app.macaraIsMacara && app.macaraTotal > 0) {
-    parts.push(`include livrare macara ${app.macaraTotal} RON (facturată separat de Leroy, nu intră în prețul curierului)`);
-  }
-  if (app.weekendSurcharge > 0) {
-    const wd = weekdayRo(app.deliveryDate);
-    parts.push(`tarif weekend +${app.weekendSurcharge} RON (AWB datat ${wd ?? "în weekend"})`);
-  }
-  if (app.unloadingTax > 0) {
-    parts.push(`include taxă descărcare ${app.unloadingTax} RON`);
-  }
-  if (extraKmMissing(excelExtraKm, app)) {
-    parts.push("km extra necitiți pe poză → lipsește suprataxa de distanță");
-  }
-  if (parts.length === 0) {
-    parts.push("diferență de grilă tarifară (tarifele noastre vs. cele ale curierului)");
-  }
-  return parts.join("; ");
 }
 
 /** Dispatch the right cause for any differing field. */
@@ -316,8 +246,6 @@ function fieldReason(f: CompareField, excelExtraKm: number | null, app: AppFacts
         : "km diferiți față de AWB";
     case "roadKm":
       return "Mapbox vs. măsurătoarea curierului (informativ, nu afectează prețul)";
-    case "price":
-      return priceReason(excelExtraKm, app);
     default:
       return "diferență";
   }
@@ -448,7 +376,6 @@ export function buildReport(
       numberField("weight", COL.weight, num(xl[COL.weight]), app.weight, TOL.weight, "alert"),
       numberField("extraKm", COL.extraKm, excelExtraKm, app.extraKm, TOL.extraKm, "alert"),
       numberField("roadKm", COL.roadKm, num(xl[COL.roadKm]), app.roadKm, TOL.roadKm, "info"),
-      numberField("price", COL.price, num(xl[COL.price]), app.price, TOL.price, "info"),
     ];
     // Attach the deterministic CAUSE to each differing field (shown in
     // parentheses by the UI). Matches get no reason.

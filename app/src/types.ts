@@ -572,7 +572,7 @@ export type PairPatch = {
  * Mirrors the server's `CompareReport` (server/src/compare.ts). The courier's
  * master export is joined to our ready pairs on the AWB number; each shared AWB
  * yields a per-field comparison. "alert" fields (recipient, weight, extra km)
- * flag extraction errors; "info" fields (road km, price) are expected to drift.
+ * flag extraction errors; the "info" field (road km) is expected to drift.
  * ────────────────────────────────────────────────────────────────────── */
 
 export type CompareFieldStatus = "match" | "mismatch" | "missing";

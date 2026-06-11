@@ -14,8 +14,8 @@ import type { CompareField, CompareReport, CompareRow } from "../types";
  * Two severities drive the colours:
  *   • "alert"  — recipient / weight / extra-km mismatches (likely extraction
  *                errors). Painted coral; they flag the whole row.
- *   • "info"   — road distance / price drifts (Mapbox vs courier, our tariff
- *                vs theirs). Painted amber; shown but never flag the row.
+ *   • "info"   — road-distance drift (Mapbox vs the courier's measurement).
+ *                Painted amber; shown but never flag the row.
  *
  * The component owns all of its state — it's fire-and-forget from App's view.
  * ────────────────────────────────────────────────────────────────────── */
@@ -186,7 +186,6 @@ function CompareModal({
                     <th className="px-3 py-2 font-medium">Kg</th>
                     <th className="px-3 py-2 font-medium">Extra km</th>
                     <th className="px-3 py-2 font-medium">Distanță stradă</th>
-                    <th className="px-3 py-2 font-medium">Preț</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -222,7 +221,7 @@ function ReportRow({ row }: { row: CompareRow }) {
       <tr className="border-t border-ink-100 bg-amber-50/40">
         <td className="px-4 py-2 font-mono text-[13px] text-ink-800">{row.awb}</td>
         <td className="px-4 py-2 text-ink-700">{row.recipient ?? "—"}</td>
-        <td colSpan={4} className="px-3 py-2">
+        <td colSpan={3} className="px-3 py-2">
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
             {onlyExcel ? "Doar în Excel (lipsește din app)" : "Doar în app (lipsește din Excel)"}
           </span>
@@ -239,7 +238,6 @@ function ReportRow({ row }: { row: CompareRow }) {
       <Cell field={byKey("weight")} />
       <Cell field={byKey("extraKm")} />
       <Cell field={byKey("roadKm")} />
-      <Cell field={byKey("price")} />
     </tr>
   );
 }
