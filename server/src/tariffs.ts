@@ -339,12 +339,42 @@ export const CITIES: readonly City[] = [
   "Ploiesti", "IasiTudor", "IasiERA", "Constanta",
 ] as const;
 
-export const COMPANY_COMMISSION_BY_CITY: Readonly<Record<City, number>> = Object.freeze({
-  Ploiesti:  0.501,
-  IasiTudor: 0.337,
-  IasiERA:   0.337,
-  Constanta: 0.337,
-});
+/**
+ * STAGED company commission ("bonus") per city — operator directive
+ * 2026-06-11 (Ambient Intermed). The bonus is NOT one flat percentage; it
+ * is applied in successive stages, each on the RESULT of the previous one:
+ *
+ *   • Iași ERA / Iași Tudor / Constanța: +2,7%, apoi +3,6% din rezultat,
+ *     apoi +16% din rezultat, apoi +11,4% din rezultat.
+ *   • Ploiești: +22,7%, apoi +16% din rezultat, apoi +11,4% din rezultat.
+ *
+ * Successive percentages on the running result are a product of factors,
+ * so the effective rate is Π(1 + stage) − 1:
+ *   Iași/Constanța: 1.027 × 1.036 × 1.16 × 1.114 − 1 ≈ 0.374907 (≈ 37,5%)
+ *   Ploiești:       1.227 × 1.16 × 1.114 − 1         ≈ 0.585578 (≈ 58,6%)
+ *
+ * This supersedes the flat 33,7% / 50,1% figures from PRETURI
+ * COLABORATORI.ods. Confirmed against reality: the courier's customer
+ * prices in the Main export decode to EXACTLY ×1.375 of the contract grid
+ * on Constanța runs — the staged compound, to the fourth decimal.
+ */
+export const COMPANY_COMMISSION_STAGES_BY_CITY: Readonly<Record<City, readonly number[]>> =
+  Object.freeze({
+    Ploiesti:  [0.227, 0.16, 0.114],
+    IasiTudor: [0.027, 0.036, 0.16, 0.114],
+    IasiERA:   [0.027, 0.036, 0.16, 0.114],
+    Constanta: [0.027, 0.036, 0.16, 0.114],
+  });
+
+/** Effective compound commission rate per city = Π(1 + stage) − 1. */
+export const COMPANY_COMMISSION_BY_CITY: Readonly<Record<City, number>> = Object.freeze(
+  Object.fromEntries(
+    CITIES.map((city) => [
+      city,
+      COMPANY_COMMISSION_STAGES_BY_CITY[city].reduce((f, s) => f * (1 + s), 1) - 1,
+    ]),
+  ) as Record<City, number>,
+);
 
 /**
  * Per-collaborator bonus, applied on top of the SAME carrier total as

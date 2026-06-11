@@ -266,7 +266,10 @@ export interface PricingBreakdown {
 }
 
 export interface CityCommission {
-  /** Commission rate, e.g. 0.501 for Ploiești. */
+  /** EFFECTIVE compound commission rate = Π(1 + stage) − 1 over the city's
+   *  staged bonuses (ops directive 2026-06-11): ≈ 0.374907 for Iași/Constanța
+   *  (+2,7% → +3,6% → +16% → +11,4%), ≈ 0.585578 for Ploiești
+   *  (+22,7% → +16% → +11,4%). */
   pct: number;
   /** Commission amount in RON, = round2(commissionBase × pct). */
   commission: number;

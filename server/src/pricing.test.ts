@@ -127,12 +127,15 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
 
   // Per-city company commissions are applied to commissionBase ONLY
   // (base + increment + weekend), NOT to the per-km surcharge. The km
-  // cost is added flat at the end. Reuses the >50 km case:
+  // cost is added flat at the end. The commission is STAGED (ops directive
+  // 2026-06-11): Iași/Constanța +2,7% → +3,6% → +16% → +11,4% (compound
+  // ≈ 37.4907%), Ploiești +22,7% → +16% → +11,4% (compound ≈ 58.5578%).
+  // Reuses the >50 km case:
   //   commissionBase = 133.10  ·  extraKmCost = 193.80  ·  carrier 326.90
-  //   Ploiești   50.1% → commission 66.68 → customer 133.10 + 66.68 + 193.80 = 393.58
-  //   IasiTudor  33.7% → commission 44.85 → customer 133.10 + 44.85 + 193.80 = 371.75
-  //   IasiERA / Constanța share the 33.7% → same 371.75
-  it("city commissions: percentage on base only, km added flat at the end", () => {
+  //   Ploiești  → commission 77.94 → customer 133.10 + 77.94 + 193.80 = 404.84
+  //   IasiTudor → commission 49.90 → customer 133.10 + 49.90 + 193.80 = 376.80
+  //   IasiERA / Constanța share the staged rate → same 376.80
+  it("city commissions: staged compound percentage on base only, km added flat at the end", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 600,
@@ -144,16 +147,16 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.extraKmCost).toBe(193.80);
     expect(r.carrierTotal).toBe(326.90);
 
-    expect(r.cityCommissions.Ploiesti.pct).toBe(0.501);
-    expect(r.cityCommissions.Ploiesti.commission).toBe(66.68);
-    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(393.58);
+    expect(r.cityCommissions.Ploiesti.pct).toBeCloseTo(1.227 * 1.16 * 1.114 - 1, 10);
+    expect(r.cityCommissions.Ploiesti.commission).toBe(77.94);
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(404.84);
 
-    expect(r.cityCommissions.IasiTudor.pct).toBe(0.337);
-    expect(r.cityCommissions.IasiTudor.commission).toBe(44.85);
-    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(371.75);
+    expect(r.cityCommissions.IasiTudor.pct).toBeCloseTo(1.027 * 1.036 * 1.16 * 1.114 - 1, 10);
+    expect(r.cityCommissions.IasiTudor.commission).toBe(49.90);
+    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(376.80);
 
-    expect(r.cityCommissions.IasiERA.customerTotal).toBe(371.75);
-    expect(r.cityCommissions.Constanta.customerTotal).toBe(371.75);
+    expect(r.cityCommissions.IasiERA.customerTotal).toBe(376.80);
+    expect(r.cityCommissions.Constanta.customerTotal).toBe(376.80);
   });
 
   // Per-collaborator bonuses use the same rule on commissionBase (133.10),
@@ -192,8 +195,8 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
   // Tiny-AWB sanity (the 24.20 RON test row) with the worked example
   // the user gave in plain language: base × (1 + pct).
   //   carrier 24.20
-  //   Ploiești   50.1% → 12.12 → customer 36.32
-  //   Stalexone  25%   →  6.05 → total    30.25
+  //   Ploiești  staged ≈ 58.5578% → 14.17 → customer 38.37
+  //   Stalexone 25%              →  6.05 → total    30.25
   it("AWB 007209914: small invoice still threads through every dimension", () => {
     const r = calculatePrice({
       service: "Express",
@@ -203,7 +206,7 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
       deliveryDate: "2026-05-25",
     });
     expect(r.carrierTotal).toBe(24.20);
-    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(36.32);
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(38.37);
     expect(r.collaboratorPrices.Stalexone.total).toBe(30.25);
   });
 
@@ -221,9 +224,9 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
   //   extraKm = 31 km × 1.90 × 2 (round) × 2 (rounds) × 1 (deliv) = 235.60
   //   commissionBase = 130.66 + 124.66 = 255.32   (km NOT included)
   //   carrier        = 255.32 + 235.60 = 490.92
-  //   Iași 33.7% → commission 86.04 → customer 255.32 + 86.04 + 235.60 = 576.96
+  //   Iași staged ≈ 37.4907% → commission 95.72 → customer 255.32 + 95.72 + 235.60 = 586.64
   //   (the per-km 235.60 is added flat AFTER the commission, not marked up)
-  it("AWB 038112124: 1500kg / 81km / 1 delivery → carrier 490.92, Iași 576.96", () => {
+  it("AWB 038112124: 1500kg / 81km / 1 delivery → carrier 490.92, Iași 586.64", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 1500,
@@ -244,12 +247,12 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.commissionBase).toBe(255.32);
     expect(r.carrierTotal).toBe(490.92);
 
-    expect(r.cityCommissions.IasiTudor.commission).toBe(86.04);
-    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(576.96);
-    expect(r.cityCommissions.IasiERA.customerTotal).toBe(576.96);
-    expect(r.cityCommissions.Constanta.customerTotal).toBe(576.96);
-    // Ploiești 50.1% → commission 127.92 → customer 255.32 + 127.92 + 235.60 = 618.84
-    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(618.84);
+    expect(r.cityCommissions.IasiTudor.commission).toBe(95.72);
+    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(586.64);
+    expect(r.cityCommissions.IasiERA.customerTotal).toBe(586.64);
+    expect(r.cityCommissions.Constanta.customerTotal).toBe(586.64);
+    // Ploiești staged ≈ 58.5578% → commission 149.51 → customer 255.32 + 149.51 + 235.60 = 640.43
+    expect(r.cityCommissions.Ploiesti.customerTotal).toBe(640.43);
   });
 
   // Edge: exactly 1200 kg is still the 800-1200kg bucket, NOT the
