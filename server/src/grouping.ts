@@ -262,11 +262,13 @@ export async function groupImages(images: ImageInput[]): Promise<DocumentGroup[]
       throw err;
     }
 
-    const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
+    // `choices` itself can be ABSENT on an error-shaped 200 body — same
+    // transient class as a truncated stream, so it rides the same retry.
+    const toolCall = completion.choices?.[0]?.message?.tool_calls?.[0];
     if (!toolCall || toolCall.function.name !== "group_documents") {
       lastErr = new Error(
         `Grouping model did not call group_documents (attempt ${attempt}/${MAX_TRIES}, ` +
-          `finish=${completion.choices[0]?.finish_reason ?? "null"}).`,
+          `finish=${completion.choices?.[0]?.finish_reason ?? "null"}).`,
       );
     } else {
       try {

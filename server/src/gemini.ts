@@ -411,7 +411,10 @@ export async function extractFromImages(
       throw err;
     }
 
-    const message = completion.choices[0]?.message;
+    // `choices` itself can be ABSENT when the gateway returns an error-shaped
+    // 200 body (another high-thinking transient, observed live 2026-06-11) —
+    // an undefined message falls through to the no-tool-call nudge below.
+    const message = completion.choices?.[0]?.message;
     const toolCalls = message?.tool_calls ?? [];
 
     // The final extraction wins, even if the model also asked to zoom this turn.
