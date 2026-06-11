@@ -116,8 +116,15 @@ export function summariseUnloading(extracted: Extracted): number {
  *                   signal; no warning is raised).
  *   • `onInvoice` — a macara line was found on an invoice (any line named
  *                   "macara", or an invoice that reported `macara_pallets > 0`).
- * `pallets` sums the paleți read across invoices (drives the per-palet fee;
- * the engine falls back to 1 when macara is detected but no count was read).
+ *
+ * `pallets` is the number of paleți the per-palet macara unload fee multiplies
+ * by. That count is the quantity of the invoice's "DESCĂRCARE PALET" line(s) —
+ * the paleți actually craned down — NOT the macara *delivery* line's quantity
+ * (which is usually 1 for the whole run, e.g. "LIVRARE MACARA 5-8 PALETI" × 1).
+ * When no descărcare-palet line is present we fall back to the macara_pallets
+ * the model read, and the engine falls back to 1 when macara is detected but
+ * no count was found anywhere.
+ *
  * The pricing engine turns "macara on the invoice but not on the AWB" into a
  * separate warning.
  */
@@ -127,13 +134,30 @@ export function summariseMacara(
   const norm = (s: string | null | undefined): string =>
     (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   const onAwb = /macara/.test(norm(extracted.awb.service_text));
-  let pallets = 0;
+  let macaraPalletsRead = 0;
+  let descarcarePalets = 0;
   let hasMacaraItem = false;
   for (const inv of extracted.invoices) {
-    pallets += Math.max(0, Math.floor(inv.macara_pallets ?? 0));
-    if (inv.items.some((it) => /macara/.test(norm(it.name)))) hasMacaraItem = true;
+    macaraPalletsRead += Math.max(0, Math.floor(inv.macara_pallets ?? 0));
+    for (const it of inv.items) {
+      const name = norm(it.name);
+      if (/macara/.test(name)) hasMacaraItem = true;
+      // "DESCĂRCARE PALET …" line: its quantity is the paleți count the
+      // per-palet macara unload fee bills against.
+      if (/descarcare/.test(name) && /palet/.test(name)) {
+        descarcarePalets += Math.max(0, Math.floor(it.quantity ?? 0));
+      }
+    }
   }
-  const onInvoice = pallets > 0 || hasMacaraItem;
+  const onInvoice = macaraPalletsRead > 0 || hasMacaraItem;
+  const isMacara = onAwb || onInvoice;
+  // Prefer the precise descărcare-palet count; fall back to the macara line's
+  // palet count. Only meaningful when this is actually a macara run.
+  const pallets = isMacara
+    ? descarcarePalets > 0
+      ? descarcarePalets
+      : macaraPalletsRead
+    : 0;
   return { onAwb, onInvoice, pallets };
 }
 
