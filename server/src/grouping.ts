@@ -34,14 +34,16 @@ const MODEL = process.env.OPENROUTER_GROUPING_MODEL ?? process.env.OPENROUTER_MO
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 
-/** OpenRouter unified reasoning control. Default "high" = maximum thinking.
- *  CRITICAL: the effort budget is carved out of max_tokens, so an explicit
- *  max_tokens MUST ride along — "high" with no cap let the thinking consume
- *  the whole output allowance and starve the forced tool call (probed live
- *  2026-06-11: ~57k thinking tokens, truncated/absent group_documents call).
- *  65535 is the model's maximum output, giving the answer guaranteed room.
- *  Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
-const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "high";
+/** OpenRouter unified reasoning control. Default "off": no reasoning param
+ *  is sent and the model runs at its fast native default — which grouped
+ *  41/41 benchmark pairs correctly at ~70x the speed and ~50x cheaper than
+ *  effort "high" (probed live 2026-06-11). The max-thinking configuration
+ *  is preserved on the `max-thinking-high` branch; re-enable any time with
+ *  OPENROUTER_REASONING_EFFORT=low|medium|high. CRITICAL when enabling: the
+ *  effort budget is carved out of max_tokens, so an explicit max_tokens
+ *  rides along automatically (65535, the model's maximum output) — "high"
+ *  with no cap starves the forced tool call. */
+const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "off";
 const REASONING =
   REASONING_EFFORT === "off"
     ? {}
