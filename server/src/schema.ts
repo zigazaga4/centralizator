@@ -233,6 +233,16 @@ export const RoutingSchema = z
     kmWarning: z.boolean().optional(),
     /** Delivery address text that was geocoded. */
     deliveryAddress: z.string().nullable(),
+    /** Geocoded delivery point the Mapbox km was measured to — persisted so
+     *  the route-map endpoint draws the exact same route. Absent on older
+     *  pairs and on geocode fallbacks. */
+    destLng: z.number().nullable().optional(),
+    destLat: z.number().nullable().optional(),
+    /** True when the street wasn't found in the address's locality and the
+     *  km is measured to the locality's center instead. */
+    approxGeocode: z.boolean().optional(),
+    /** Locality/place name the geocoder actually resolved into. */
+    geocodedPlace: z.string().nullable().optional(),
     /** True only when geocode + route both succeeded. */
     resolved: z.boolean(),
     /** Short Romanian note explaining a fallback, for the UI. */

@@ -445,6 +445,15 @@ export interface Routing {
   kmWarning?: boolean;
   /** Delivery address text that was geocoded. */
   deliveryAddress: string | null;
+  /** Geocoded delivery point the Mapbox km was measured to (when resolved).
+   *  Absent on older pairs and on geocode fallbacks. */
+  destLng?: number | null;
+  destLat?: number | null;
+  /** True when the street wasn't found in the address's locality and the
+   *  km is measured to the locality's center instead. */
+  approxGeocode?: boolean;
+  /** Locality/place name the geocoder actually resolved into. */
+  geocodedPlace?: string | null;
   /** True only when geocode + route both succeeded. */
   resolved: boolean;
   /** Short Romanian note explaining a fallback, for the UI. */

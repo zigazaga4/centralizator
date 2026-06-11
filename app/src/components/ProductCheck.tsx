@@ -1,6 +1,7 @@
 import { useState, type ReactNode, type MouseEvent } from "react";
 import { CITY_COMMISSION_LABEL, type CheckStatus, type ItemCheck, type Routing, type Verification } from "../types";
 import { ron } from "../lib/format";
+import { RouteMapModal } from "./RouteMapModal";
 
 /**
  * Does this pair deserve the warning icon? Two independent sources feed
@@ -65,10 +66,13 @@ export function ProductBadge({
   verification,
   routing,
   verifying,
+  pairId,
 }: {
   verification?: Verification;
   routing?: Routing;
   verifying?: boolean;
+  /** When given, the km box can open the route-map modal for this pair. */
+  pairId?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -128,7 +132,14 @@ export function ProductBadge({
           </svg>
         )}
       </button>
-      {open && <ProductCheckDialog verification={verification} routing={routing} onClose={() => setOpen(false)} />}
+      {open && (
+        <ProductCheckDialog
+          verification={verification}
+          routing={routing}
+          pairId={pairId}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }
@@ -138,10 +149,12 @@ export function ProductBadge({
 function ProductCheckDialog({
   verification,
   routing,
+  pairId,
   onClose,
 }: {
   verification?: Verification;
   routing?: Routing;
+  pairId?: string;
   onClose: () => void;
 }) {
   return (
@@ -182,7 +195,7 @@ function ProductCheckDialog({
           </button>
         </div>
 
-        <ProductCheckSummary verification={verification} routing={routing} />
+        <ProductCheckSummary verification={verification} routing={routing} pairId={pairId} />
       </div>
     </div>
   );
@@ -193,9 +206,11 @@ function ProductCheckDialog({
 export function ProductCheckSummary({
   verification,
   routing,
+  pairId,
 }: {
   verification?: Verification;
   routing?: Routing;
+  pairId?: string;
 }) {
   const v = verification;
   const prodWarn = !!v?.hasWarning;
@@ -238,7 +253,7 @@ export function ProductCheckSummary({
 
       {/* Km reconciliation — our Mapbox shortest-road km vs the AWB's printed
           km. Any gap is a warning per the operator's rule. */}
-      <KmCheck routing={routing} />
+      <KmCheck routing={routing} pairId={pairId} />
 
       {v && (
         <>
@@ -291,7 +306,8 @@ export function ProductCheckSummary({
  * gap, and a Diferă/OK chip. Rendered only when we actually computed a
  * Mapbox route; on an AWB fallback there is nothing to reconcile.
  */
-function KmCheck({ routing }: { routing?: Routing }) {
+function KmCheck({ routing, pairId }: { routing?: Routing; pairId?: string }) {
+  const [mapOpen, setMapOpen] = useState(false);
   if (!routing || routing.mapboxKm == null) return null;
   const diff = routing.kmDiff ?? routing.mapboxKm - routing.awbKm;
   const warn = !!routing.kmWarning;
@@ -317,6 +333,30 @@ function KmCheck({ routing }: { routing?: Routing }) {
         </span>
         <span className="text-ink-500">({storeLabel} → livrare, drum rutier cel mai scurt)</span>
       </div>
+      {routing.approxGeocode && (
+        <p className="mt-1.5 text-xs text-amber-700">
+          ⚠ Strada nu a fost găsită în {routing.geocodedPlace ?? "localitate"} — km-ul Mapbox e
+          măsurat până la centrul localității.
+        </p>
+      )}
+      {pairId && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMapOpen(true);
+            }}
+            onMouseDown={stop}
+            className="rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-xs font-medium text-ink-700 transition hover:border-coral-400 hover:text-coral-700"
+          >
+            🗺 Vezi ruta pe hartă
+          </button>
+        </div>
+      )}
+      {mapOpen && pairId && (
+        <RouteMapModal pairId={pairId} routing={routing} onClose={() => setMapOpen(false)} />
+      )}
     </div>
   );
 }

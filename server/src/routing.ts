@@ -140,6 +140,23 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
       km = null;
     }
     if (km == null) km = nearestKm; // matrix value, if we have one
+
+    // The exact point the km was (or would have been) measured to — kept on
+    // the routing so the route-map endpoint draws the SAME route, plus the
+    // honesty flag when the geocode is only the locality's center.
+    const destPoint = {
+      destLng: dest.lng,
+      destLat: dest.lat,
+      approxGeocode: dest.approximate,
+      geocodedPlace: dest.place,
+    };
+    const approxNote =
+      dest.confidence === "center"
+        ? `Strada nu a fost găsită în ${dest.place ?? "localitate"} — Mapbox a măsurat până la centrul localității.`
+        : dest.confidence === "unvalidated"
+          ? "Localitatea din adresă nu a fost recunoscută — ruta Mapbox poate fi imprecisă."
+          : null;
+
     if (km == null) {
       return {
         store,
@@ -151,6 +168,7 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
         deliveryAddress,
         resolved: false,
         note: "Ruta nu a putut fi calculată — s-a folosit km de pe AWB.",
+        ...destPoint,
       };
     }
 
@@ -160,6 +178,9 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
     // difference flagged, so a mismatch rides on the warning component.
     const kmDiff = round1(mapboxKm - awbKm);
     const kmWarning = Math.abs(kmDiff) > KM_WARN_TOLERANCE + 1e-9;
+    const kmNote = kmWarning
+      ? `Mapbox a calculat ${mapboxKm} km față de ${awbKm} km de pe AWB — s-a folosit km de pe AWB.`
+      : null;
     return {
       store,
       storeSource,
@@ -171,9 +192,8 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
       kmWarning,
       deliveryAddress,
       resolved: true,
-      note: kmWarning
-        ? `Mapbox a calculat ${mapboxKm} km față de ${awbKm} km de pe AWB — s-a folosit km de pe AWB.`
-        : null,
+      note: [approxNote, kmNote].filter(Boolean).join(" ") || null,
+      ...destPoint,
     };
   } catch (err) {
     return fallback(`Eroare Mapbox (${(err as Error).message}) — s-a folosit km de pe AWB.`);

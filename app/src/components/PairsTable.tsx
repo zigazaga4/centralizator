@@ -283,6 +283,7 @@ function PairRow({
           verification={status.kind === "ready" ? status.verification : undefined}
           routing={status.kind === "ready" ? status.routing : undefined}
           verifying={verifying}
+          pairId={pair.id}
         />
       </div>
 

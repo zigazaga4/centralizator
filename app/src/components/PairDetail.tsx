@@ -83,6 +83,7 @@ export function PairDetail({
         verification={verification}
         routing={routing}
         verifying={verifying}
+        pairId={pair.id}
         onBack={onBack}
         onRemove={onRemove}
       />
@@ -122,7 +123,7 @@ export function PairDetail({
                       </span>
                     )}
                   </div>
-                  <ProductCheckSummary verification={verification} routing={routing} />
+                  <ProductCheckSummary verification={verification} routing={routing} pairId={pair.id} />
                 </div>
               )}
             </>
@@ -143,6 +144,7 @@ function DetailHeader({
   verification,
   routing,
   verifying,
+  pairId,
   onBack,
   onRemove,
 }: {
@@ -151,6 +153,7 @@ function DetailHeader({
   verification?: Verification;
   routing?: Routing;
   verifying?: boolean;
+  pairId?: string;
   onBack: () => void;
   onRemove: () => void;
 }) {
@@ -179,7 +182,7 @@ function DetailHeader({
         </button>
         <h2 className="text-lg font-semibold tracking-tight text-ink-900">{title}</h2>
         <StatusBadge status={status} />
-        <ProductBadge verification={verification} routing={routing} verifying={verifying} />
+        <ProductBadge verification={verification} routing={routing} verifying={verifying} pairId={pairId} />
       </div>
       <div className="flex items-center gap-2">
         <button

@@ -89,6 +89,29 @@ export async function compareExcel(file: File): Promise<CompareReport> {
   return data.report;
 }
 
+/**
+ * Fetch the routed-road map image (origin store → delivery point) for one
+ * pair. The server draws it via Mapbox's Static Images API and proxies the
+ * bytes, so no map token ships in this bundle. Returns a Blob ready for
+ * `URL.createObjectURL`; throws with the server's Romanian error message
+ * when the route can't be drawn (no store, address not found, …).
+ */
+export async function fetchRouteMap(pairId: string): Promise<Blob> {
+  const res = await fetch(`${BASE}/pairs/${encodeURIComponent(pairId)}/route-map`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    let msg: string | null = null;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* non-JSON error body — fall through to the generic message */
+    }
+    throw new Error(msg ?? `route-map failed (${res.status})`);
+  }
+  return await res.blob();
+}
+
 export async function verifyProducts(extracted: Extracted): Promise<Verification> {
   const res = await fetch(`${BASE}/verify`, {
     method: "POST",

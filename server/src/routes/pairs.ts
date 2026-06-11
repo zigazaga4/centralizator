@@ -30,6 +30,7 @@ import { z } from "zod";
 import {
   deleteAllPairs,
   deletePair,
+  getPair,
   getPairImage,
   insertPair,
   listAllPairsLight,
@@ -37,6 +38,15 @@ import {
   type PairStatus,
 } from "../db.js";
 import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
+import type { Routing } from "../schema.js";
+import { STORES } from "../stores.js";
+import {
+  geocode,
+  mapboxConfigured,
+  shortestDrivingRoute,
+  staticRouteMapUrl,
+  type LngLat,
+} from "../mapbox.js";
 
 /* ──────────────────────────────────────────────────────────────────────
  * Request schemas
@@ -195,6 +205,58 @@ export default async function pairRoutes(app: FastifyInstance) {
         .send(img.bytes);
     },
   );
+
+  /* ── Route map (store → delivery) ─────────────────────────────── */
+  // A static Mapbox image of the routed road between the origin store and
+  // the geocoded delivery point — what the operator opens from a km warning
+  // to SEE the route the Mapbox km came from. The image is fetched
+  // server-side and proxied as raw bytes so MAPBOX_TOKEN never reaches the
+  // client. Prefers the dest point persisted at routing time (the exact
+  // point the km was measured to); older pairs re-geocode the same address.
+  app.get<{ Params: { id: string } }>("/pairs/:id/route-map", async (req, reply) => {
+    const pair = getPair(req.params.id);
+    if (!pair) return reply.code(404).send({ error: `No pair ${req.params.id}.` });
+    if (pair.status.kind !== "ready") {
+      return reply.code(422).send({ error: "Perechea nu este procesată încă." });
+    }
+    if (!mapboxConfigured()) {
+      return reply.code(422).send({ error: "Mapbox neconfigurat pe server." });
+    }
+    const routing = pair.status.routing as Routing | undefined;
+    const store = routing?.store ?? pair.status.store ?? null;
+    if (!routing || !store) {
+      return reply.code(422).send({ error: "Fără magazin de origine — nu se poate desena ruta." });
+    }
+    const origin: LngLat = { lng: STORES[store].lng, lat: STORES[store].lat };
+
+    let dest: LngLat | null =
+      routing.destLng != null && routing.destLat != null
+        ? { lng: routing.destLng, lat: routing.destLat }
+        : null;
+    if (!dest && routing.deliveryAddress) {
+      const g = await geocode(routing.deliveryAddress, { proximity: origin }).catch(() => null);
+      if (g) dest = { lng: g.lng, lat: g.lat };
+    }
+    if (!dest) {
+      return reply.code(422).send({ error: "Adresa de livrare nu a putut fi localizată." });
+    }
+
+    // Best effort on the polyline — markers alone still show the two ends.
+    const route = await shortestDrivingRoute(origin, dest, { geometry: true }).catch(() => null);
+    const url = staticRouteMapUrl(origin, dest, route?.polyline ?? null);
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) {
+      req.log.error({ status: res.status }, "Mapbox static map fetch failed");
+      return reply.code(502).send({ error: `Mapbox static map failed (${res.status}).` });
+    }
+    const bytes = Buffer.from(await res.arrayBuffer());
+    return reply
+      .header("content-type", res.headers.get("content-type") ?? "image/png")
+      .header("content-length", bytes.length)
+      // Short private cache: the underlying routing can be refreshed.
+      .header("cache-control", "private, max-age=300")
+      .send(bytes);
+  });
 
   /* ── Create ───────────────────────────────────────────────────── */
   app.post("/pairs", async (req, reply) => {
