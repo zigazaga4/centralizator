@@ -771,8 +771,10 @@ function Spreadsheet({
                 value={
                   m
                     ? `${m.distanceBucket ?? "—"} · bază ${ron(m.basePrice)}${
-                        m.kmCost > 0 ? ` + km ${ron(m.kmCost)}` : ""
-                      } + descărcare ${ron(m.unloadCost)} → ${ron(m.total)}`
+                        m.runs && m.runs > 1 ? ` (${m.runs} curse)` : ""
+                      }${m.kmCost > 0 ? ` + km ${ron(m.kmCost)}` : ""} + descărcare ${ron(
+                        m.unloadCost,
+                      )} → ${ron(m.total)}`
                     : "—"
                 }
                 numeric

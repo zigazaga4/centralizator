@@ -133,8 +133,8 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
   // Reuses the >50 km case:
   //   commissionBase = 133.10  ·  extraKmCost = 193.80  ·  carrier 326.90
   //   Ploiești  → commission 77.94 → customer 133.10 + 77.94 + 193.80 = 404.84
-  //   IasiTudor → commission 49.90 → customer 133.10 + 49.90 + 193.80 = 376.80
-  //   IasiERA / Constanța share the staged rate → same 376.80
+  //   IasiTudor → own rule 1.187×1.114 → commission 42.90 → customer 369.80
+  //   IasiERA / Constanța share 1.027×1.036×1.16×1.114 → 376.80
   it("city commissions: staged compound percentage on base only, km added flat at the end", () => {
     const r = calculatePrice({
       service: "Express",
@@ -151,10 +151,13 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.cityCommissions.Ploiesti.commission).toBe(77.94);
     expect(r.cityCommissions.Ploiesti.customerTotal).toBe(404.84);
 
-    expect(r.cityCommissions.IasiTudor.pct).toBeCloseTo(1.027 * 1.036 * 1.16 * 1.114 - 1, 10);
-    expect(r.cityCommissions.IasiTudor.commission).toBe(49.90);
-    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(376.80);
+    // Iași Tudor has its OWN rule: +18.7% then +11.4% (≈ 32.2318%).
+    expect(r.cityCommissions.IasiTudor.pct).toBeCloseTo(1.187 * 1.114 - 1, 10);
+    expect(r.cityCommissions.IasiTudor.commission).toBe(42.90);
+    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(369.80);
 
+    // Iași ERA + Constanța keep the four-stage rate (≈ 37.4907%).
+    expect(r.cityCommissions.IasiERA.pct).toBeCloseTo(1.027 * 1.036 * 1.16 * 1.114 - 1, 10);
     expect(r.cityCommissions.IasiERA.customerTotal).toBe(376.80);
     expect(r.cityCommissions.Constanta.customerTotal).toBe(376.80);
   });
@@ -247,8 +250,11 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.commissionBase).toBe(255.32);
     expect(r.carrierTotal).toBe(490.92);
 
-    expect(r.cityCommissions.IasiTudor.commission).toBe(95.72);
-    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(586.64);
+    // Iași Tudor own rule (≈ 32.2318%): commission 82.29 → customer
+    // 255.32 + 82.29 + 235.60 = 573.21.
+    expect(r.cityCommissions.IasiTudor.commission).toBe(82.29);
+    expect(r.cityCommissions.IasiTudor.customerTotal).toBe(573.21);
+    // Iași ERA + Constanța keep the four-stage rate → 586.64.
     expect(r.cityCommissions.IasiERA.customerTotal).toBe(586.64);
     expect(r.cityCommissions.Constanta.customerTotal).toBe(586.64);
     // Ploiești staged ≈ 58.5578% → commission 149.51 → customer 255.32 + 149.51 + 235.60 = 640.43
@@ -518,6 +524,27 @@ describe("calculatePrice — unloading tax (descărcare)", () => {
     expect(r.unloadingCount).toBe(0);
     expect(r.unloadingTax).toBe(0);
   });
+
+  // Iași Tudor (Iași 1) bonuses the descărcare by +11,4% (ops directive
+  // 2026-06-11): 210 → 233.94 cu TVA, 177.69 → 197.95 net. Keyed off the
+  // resolved dispatch store. Other cities keep the flat 210.
+  it("Iași Tudor bonuses the descărcare fee by 11.4% (210 → 233.94)", () => {
+    const tudor = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingUnits: 1, macaraStore: "IasiTudor",
+    });
+    expect(tudor.unloadingTax).toBe(233.94);
+    expect(tudor.unloadingTaxNet).toBe(197.95);
+
+    // Constanța (and the rest) stay on the flat 210.
+    const constanta = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingUnits: 1, macaraStore: "Constanta",
+    });
+    expect(constanta.unloadingTax).toBe(210);
+  });
 });
 
 describe("calculatePrice — macara (crane delivery), a separate track", () => {
@@ -654,6 +681,37 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
     expect(r.macara.warning).toBe(false);
     expect(r.macara.total).toBe(0);
     expect(r.carrierTotal).toBe(48.40);
+  });
+
+  // More than 8 paleți needs a second crane truck. Derived from the palet
+  // count alone (no explicit run count): 10 paleți → ceil(10/8) = 2 runs.
+  // Ploiești Table B 0-15 km: base 471.8 × 2 = 943.6 + 10 × 15 = 150 → 1093.6.
+  it("9+ paleți bill the macara delivery once per truck (ceil/8)", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 10, macaraStore: "Ploiesti",
+    });
+    expect(r.macara.runs).toBe(2);
+    expect(r.macara.basePrice).toBe(943.6);
+    expect(r.macara.unloadCost).toBe(150);
+    expect(r.macara.total).toBe(1093.6);
+  });
+
+  // Explicit run count wins when the invoice carries several "LIVRARE MACARA"
+  // lines even though the paleți would fit one truck: 6 paleți but 2 delivery
+  // lines → 2 runs. Constanța Table A: base 638.3 × 2 = 1276.6 + 6 × 26.7 =
+  // 160.2 → 1436.8.
+  it("explicit macaraRuns from multiple delivery lines scales the base", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 6, macaraRuns: 2, macaraStore: "Constanta",
+    });
+    expect(r.macara.runs).toBe(2);
+    expect(r.macara.basePrice).toBe(1276.6);
+    expect(r.macara.unloadCost).toBe(160.2);
+    expect(r.macara.total).toBe(1436.8);
   });
 });
 

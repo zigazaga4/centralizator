@@ -628,6 +628,7 @@ export default function App() {
           macara_on_awb: breakdown.macara?.onAwb ?? false,
           macara_on_invoice: breakdown.macara?.onInvoice ?? false,
           macara_pallets: breakdown.macara?.pallets ?? 0,
+          macara_runs: breakdown.macara?.runs ?? 0,
           macara_store: macaraStore,
         });
         // Re-fetch the current pair: the user may have kept typing during

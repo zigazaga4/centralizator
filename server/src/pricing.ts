@@ -82,9 +82,11 @@ import {
   UNLOADING_TAX_NET,
   MACARA_TABLE_BY_CITY,
   MACARA_DEFAULT_TABLE,
+  MACARA_PALLETS_PER_RUN,
   CITIES,
   COLLABORATORS,
   COMPANY_COMMISSION_BY_CITY,
+  DESCARCARE_BONUS_BY_CITY,
   COLLABORATOR_BONUS_BY_NAME,
   type Service,
   type WeightBucket,
@@ -131,6 +133,10 @@ export interface PricingInput {
    *  per-palet macara unloading fee. Falls back to 1 when macara is detected
    *  but no count was read. Default 0 (no macara). */
   macaraPallets?: number;
+  /** Number of crane truck runs (each carries 1-8 paleți), read from the
+   *  count of "LIVRARE MACARA" lines. Scales the delivery price + per-km.
+   *  When omitted the engine derives it as ceil(macaraPallets / 8). */
+  macaraRuns?: number;
   /** Dispatch store the macara run leaves from — picks which macara rate
    *  table applies (Iași Tudor + Constanța vs. Ploiești + Iași ERA). Null /
    *  undefined falls back to the default (Table A). */
@@ -155,14 +161,20 @@ export interface MacaraBreakdown {
    *  it (e.g. the AWB "Serviciu" reads "standard"). The operator must
    *  reconcile the AWB. False whenever the AWB itself names macara. */
   warning: boolean;
-  /** Paleți billed (1-8). 0 when not macara; 1 when macara is detected but no
+  /** Paleți billed. 0 when not macara; 1 when macara is detected but no
    *  palet count was read. */
   pallets: number;
+  /** Number of crane truck runs = ceil(pallets / 8). One truck carries 1-8
+   *  paleți; more needs another run, and the delivery price + per-km scale by
+   *  this. 0 when not macara. */
+  runs: number;
   /** Macara distance bucket used for the base price; null when not macara. */
   distanceBucket: MacaraDistanceBucket | null;
   /** km charged at the macara per-km rate (overage past 50 km). 0 otherwise. */
   extraKm: number;
-  /** Flat macara delivery price for the bucket (RON cu TVA). */
+  /** Macara delivery price for ALL runs (RON cu TVA) = table bucket price ×
+   *  runs. For ≤8 paleți this is just the bucket price; 9-16 paleți doubles
+   *  it, etc. */
   basePrice: number;
   /** Per-km tur-retur rate used (5 for Table A, 4,5 for Table B). RON cu TVA. */
   perKm: number;
@@ -358,8 +370,14 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   // unloading applies.
   const unloadingExtra = unloadingUnits > 0 && weightKg > 1200 ? weightIncrements : 0;
   const unloadingCount = unloadingUnits > 0 ? unloadingUnits + unloadingExtra : 0;
-  const unloadingTax = round2(unloadingCount * UNLOADING_TAX_GROSS);
-  const unloadingTaxNet = round2(unloadingCount * UNLOADING_TAX_NET);
+  // The descărcare fee is bonused per the pair's dispatch store: Iași Tudor
+  // adds +11,4% on top of the 210 RON (→ 233,94), every other city bills the
+  // flat 210 (factor 0). Keyed off the resolved dispatch store.
+  const descarcareStore = input.macaraStore ?? null;
+  const descarcareBonus = descarcareStore ? DESCARCARE_BONUS_BY_CITY[descarcareStore] : 0;
+  const descarcareFactor = 1 + descarcareBonus;
+  const unloadingTax = round2(unloadingCount * UNLOADING_TAX_GROSS * descarcareFactor);
+  const unloadingTaxNet = round2(unloadingCount * UNLOADING_TAX_NET * descarcareFactor);
 
   // Macara (crane delivery) — another SEPARATE track on its own tariff,
   // neither commissioned nor folded into any total. Detected upstream from
@@ -369,10 +387,12 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const macaraPallets = Math.max(0, Math.floor(input.macaraPallets ?? 0));
   // Primary macara breakdown — uses the pair's resolved dispatch store (or the
   // default table when unknown). This is the one the table/footer fall back to.
+  const macaraRuns = Math.max(0, Math.floor(input.macaraRuns ?? 0));
   const macara = computeMacara({
     onAwb: macaraOnAwb,
     onInvoice: macaraOnInvoice,
     pallets: macaraPallets,
+    runs: macaraRuns,
     distanceKm,
     store: input.macaraStore ?? null,
   });
@@ -387,6 +407,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
         onAwb: macaraOnAwb,
         onInvoice: macaraOnInvoice,
         pallets: macaraPallets,
+        runs: macaraRuns,
         distanceKm,
         store: city,
       }),
@@ -475,6 +496,9 @@ function computeMacara(args: {
   onAwb: boolean;
   onInvoice: boolean;
   pallets: number;
+  /** Explicit crane-run count (from the macara delivery line count). When
+   *  omitted/0 the run count is derived from the palet count alone. */
+  runs?: number;
   distanceKm: number;
   store: City | null;
 }): MacaraBreakdown {
@@ -490,6 +514,7 @@ function computeMacara(args: {
       onInvoice: false,
       warning: false,
       pallets: 0,
+      runs: 0,
       distanceBucket: null,
       extraKm: 0,
       basePrice: 0,
@@ -505,15 +530,29 @@ function computeMacara(args: {
   const warning = onInvoice && !onAwb;
   // Macara is detected; bill at least one palet even if the count was unread.
   const pallets = args.pallets > 0 ? args.pallets : 1;
+  // The macara table is for ONE crane truck = 1-8 paleți (per the docs:
+  // "TARIFE MACARA (1-8 PALETI)"). The run count is the number of crane
+  // deliveries: the explicit count of "LIVRARE MACARA" lines when known,
+  // never below what the palet count demands (ceil(paleți / 8)), and at
+  // least 1. Each run drives the route, so the delivery price + per-km
+  // tur-retur scale with it; the per-palet unload is billed once per palet
+  // regardless. Ops directive 2026-06-11.
+  const runs = Math.max(
+    Math.ceil(pallets / MACARA_PALLETS_PER_RUN),
+    args.runs ?? 0,
+    1,
+  );
   // First bracket whose upper bound the distance falls under; the last row
   // (maxKm = Infinity) is the ">50 km" sentinel.
   const bracket =
     table.brackets.find((b) => distanceKm < b.maxKm) ??
     table.brackets[table.brackets.length - 1]!;
-  const basePrice = bracket.price;
+  // basePrice is the all-runs delivery price (table value × runs).
+  const basePrice = round2(bracket.price * runs);
   const extraKm = distanceKm > table.thresholdKm ? distanceKm - table.thresholdKm : 0;
-  // The per-km figure already counts the round trip ("tur-retur"), so no ×2.
-  const kmCost = round2(extraKm * table.perKmGross);
+  // The per-km figure already counts the round trip ("tur-retur"), so no ×2;
+  // it does scale by the number of truck runs.
+  const kmCost = round2(extraKm * table.perKmGross * runs);
   const unloadCost = round2(pallets * table.unloadPerPalletGross);
   const total = round2(basePrice + kmCost + unloadCost);
   return {
@@ -522,9 +561,10 @@ function computeMacara(args: {
     onInvoice,
     warning,
     pallets,
+    runs,
     distanceBucket: bracket.label,
     extraKm,
-    basePrice: round2(basePrice),
+    basePrice,
     perKm: table.perKmGross,
     kmCost,
     unloadPerPallet: table.unloadPerPalletGross,

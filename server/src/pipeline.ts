@@ -17,7 +17,7 @@
 
 import { extractFromImages, type ImageInput } from "./gemini.js";
 import { calculatePrice, type PricingBreakdown, type PricingInput } from "./pricing.js";
-import { SERVICE_TEXT_MAP, type Service } from "./tariffs.js";
+import { SERVICE_TEXT_MAP, MACARA_PALLETS_PER_RUN, type Service } from "./tariffs.js";
 import { resolveRouting, type Routing } from "./routing.js";
 import type { Extracted } from "./schema.js";
 
@@ -118,47 +118,70 @@ export function summariseUnloading(extracted: Extracted): number {
  *                   "macara", or an invoice that reported `macara_pallets > 0`).
  *
  * `pallets` is the number of paleți the per-palet macara unload fee multiplies
- * by. That count is the quantity of the invoice's "DESCĂRCARE PALET" line(s) —
- * the paleți actually craned down — NOT the macara *delivery* line's quantity
- * (which is usually 1 for the whole run, e.g. "LIVRARE MACARA 5-8 PALETI" × 1).
- * When no descărcare-palet line is present we fall back to the macara_pallets
- * the model read, and the engine falls back to 1 when macara is detected but
- * no count was found anywhere.
+ * by. We read it, in order of preference, from the invoice's "DESCĂRCARE
+ * PALET" line(s), then the "GARANȚIE … PALEȚI / EUROPALEȚI" line(s) (one
+ * guarantee per palet handled), then the model's macara_pallets. NOT the
+ * macara *delivery* line quantity (usually 1, e.g. "LIVRARE MACARA 5-8
+ * PALETI" × 1).
+ *
+ * `runs` is how many crane trucks the run takes. A truck carries 1-8 paleți,
+ * so runs scales the delivery price + per-km. We take it directly from the
+ * count of "LIVRARE MACARA …" lines on the invoice(s) (each line is one crane
+ * delivery — an invoice may carry several, e.g. a "5-8 PALETI" line AND a
+ * "1-4 PALETI" line = 2 runs), and never below ceil(pallets / 8). Pure code
+ * from the line wording — no extra burden on the vision model.
  *
  * The pricing engine turns "macara on the invoice but not on the AWB" into a
  * separate warning.
  */
 export function summariseMacara(
   extracted: Extracted,
-): { onAwb: boolean; onInvoice: boolean; pallets: number } {
+): { onAwb: boolean; onInvoice: boolean; pallets: number; runs: number } {
   const norm = (s: string | null | undefined): string =>
     (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   const onAwb = /macara/.test(norm(extracted.awb.service_text));
   let macaraPalletsRead = 0;
   let descarcarePalets = 0;
+  let garantiePalets = 0;
+  let macaraDeliveryLines = 0;
   let hasMacaraItem = false;
   for (const inv of extracted.invoices) {
     macaraPalletsRead += Math.max(0, Math.floor(inv.macara_pallets ?? 0));
     for (const it of inv.items) {
       const name = norm(it.name);
-      if (/macara/.test(name)) hasMacaraItem = true;
-      // "DESCĂRCARE PALET …" line: its quantity is the paleți count the
-      // per-palet macara unload fee bills against.
-      if (/descarcare/.test(name) && /palet/.test(name)) {
-        descarcarePalets += Math.max(0, Math.floor(it.quantity ?? 0));
+      const qty = Math.max(0, Math.floor(it.quantity ?? 0));
+      if (/macara/.test(name)) {
+        hasMacaraItem = true;
+        // Each "LIVRARE MACARA …" line is ONE crane truck delivery. Count the
+        // line itself, NOT its quantity — the palet range lives in the
+        // description ("5-8 PALETI"), the qty is the service count (≈1). This
+        // keeps a stray qty from inflating the macara charge.
+        if (/livrare/.test(name)) macaraDeliveryLines += 1;
       }
+      // Paleți count signals (for the per-palet unload fee). We pick ONE of
+      // these below (never add them), so an invoice carrying BOTH a descărcare
+      // line AND garanție-paleți lines never double-counts the paleți.
+      if (/descarcare/.test(name) && /palet/.test(name)) descarcarePalets += qty;
+      if (/garantie/.test(name) && /palet/.test(name)) garantiePalets += qty;
     }
   }
   const onInvoice = macaraPalletsRead > 0 || hasMacaraItem;
   const isMacara = onAwb || onInvoice;
-  // Prefer the precise descărcare-palet count; fall back to the macara line's
-  // palet count. Only meaningful when this is actually a macara run.
+  // Paleți for the unload fee: descărcare line wins, then garanție paleți,
+  // then whatever the model read. Only meaningful on a macara run.
   const pallets = isMacara
     ? descarcarePalets > 0
       ? descarcarePalets
-      : macaraPalletsRead
+      : garantiePalets > 0
+        ? garantiePalets
+        : macaraPalletsRead
     : 0;
-  return { onAwb, onInvoice, pallets };
+  // Crane truck runs: the count of macara delivery lines, never below what the
+  // palet count alone demands (8 per truck). The engine clamps to >=1.
+  const runs = isMacara
+    ? Math.max(macaraDeliveryLines, Math.ceil(pallets / MACARA_PALLETS_PER_RUN))
+    : 0;
+  return { onAwb, onInvoice, pallets, runs };
 }
 
 export function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasOtherProducts: boolean } {
@@ -208,6 +231,7 @@ export function buildPricingInput(
     macaraOnAwb: macara.onAwb,
     macaraOnInvoice: macara.onInvoice,
     macaraPallets: macara.pallets,
+    macaraRuns: macara.runs,
     macaraStore: opts.macaraStore,
   };
 }

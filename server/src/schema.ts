@@ -277,6 +277,10 @@ export const PricingRequestSchema = z.object({
   macara_on_awb: z.boolean().default(false),
   macara_on_invoice: z.boolean().default(false),
   macara_pallets: z.number().int().nonnegative().default(0),
+  /** Crane truck runs (count of "LIVRARE MACARA" lines). Scales the macara
+   *  delivery price + per-km. Optional; the engine derives ceil(paleți / 8)
+   *  when omitted. */
+  macara_runs: z.number().int().nonnegative().default(0),
   /** Dispatch store the macara run leaves from — selects the macara rate
    *  table (Iași Tudor + Constanța vs. Ploiești + Iași ERA). Null = default
    *  table. */

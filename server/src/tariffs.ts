@@ -309,6 +309,11 @@ export const MACARA_TABLE_B: MacaraRateTable = Object.freeze({
   unloadPerPalletGross: 15,
 });
 
+/** A single crane truck carries 1-8 paleți (per the macara docs:
+ *  "TARIFE MACARA (1-8 PALETI)"). Past 8 paleți a second truck run is
+ *  needed, and the delivery price is billed once per started block of 8. */
+export const MACARA_PALLETS_PER_RUN = 8;
+
 /** Which macara table each dispatch site uses. */
 export const MACARA_TABLE_BY_CITY: Readonly<Record<City, MacaraRateTable>> = Object.freeze({
   IasiTudor: MACARA_TABLE_A,
@@ -363,10 +368,30 @@ export const CITIES: readonly City[] = [
 export const COMPANY_COMMISSION_STAGES_BY_CITY: Readonly<Record<City, readonly number[]>> =
   Object.freeze({
     Ploiesti:  [0.227, 0.16, 0.114],
-    IasiTudor: [0.027, 0.036, 0.16, 0.114],
+    // Iași Tudor (Iași 1) has its OWN rule (ops directive 2026-06-11):
+    //   1. base prices +18,7%
+    //   2. km suplimentari stay 1,90 lei/km (flat, never commissioned)
+    //   3. the resulting prices are bonused by +11,4%
+    // → compound on the base = 1.187 × 1.114 − 1 ≈ 0.322318 (≈ 32,23%).
+    // The descărcare for Iași Tudor is ALSO bonused by the 11,4% (see
+    // DESCARCARE_BONUS_BY_CITY): 210 → 233,94 RON.
+    IasiTudor: [0.187, 0.114],
     IasiERA:   [0.027, 0.036, 0.16, 0.114],
     Constanta: [0.027, 0.036, 0.16, 0.114],
   });
+
+/**
+ * Per-city bonus applied to the descărcare (unloading) fee, on top of its
+ * base 210 RON cu TVA. Ops directive 2026-06-11: Iași Tudor bonuses the
+ * descărcare by the same +11,4% as its transport prices (210 → 233,94).
+ * Every other city bills the flat 210 (factor 0) until told otherwise.
+ */
+export const DESCARCARE_BONUS_BY_CITY: Readonly<Record<City, number>> = Object.freeze({
+  Ploiesti:  0,
+  IasiTudor: 0.114,
+  IasiERA:   0,
+  Constanta: 0,
+});
 
 /** Effective compound commission rate per city = Π(1 + stage) − 1. */
 export const COMPANY_COMMISSION_BY_CITY: Readonly<Record<City, number>> = Object.freeze(

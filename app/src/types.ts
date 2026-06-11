@@ -333,6 +333,9 @@ export interface MacaraBreakdown {
   onInvoice: boolean;
   warning: boolean;
   pallets: number;
+  /** Crane truck runs = ceil(pallets / 8); the delivery price + per-km scale
+   *  by this. Optional for back-compat with breakdowns persisted earlier. */
+  runs?: number;
   distanceBucket: MacaraDistanceBucket | null;
   extraKm: number;
   basePrice: number;
@@ -473,6 +476,9 @@ export interface PricingRequest {
   macara_on_awb?: boolean;
   macara_on_invoice?: boolean;
   macara_pallets?: number;
+  /** Crane truck runs (count of "LIVRARE MACARA" lines). Carried across edits
+   *  so the multi-run macara price survives a re-price. */
+  macara_runs?: number;
   /** Dispatch store the macara run leaves from — selects the macara rate
    *  table. Carried so a re-price keeps the right per-city macara price. */
   macara_store?: StoreKey | null;

@@ -83,5 +83,43 @@ describe("summariseMacara — palet count drives the per-palet unload fee", () =
     expect(r.onAwb).toBe(false);
     expect(r.onInvoice).toBe(false);
     expect(r.pallets).toBe(0);
+    expect(r.runs).toBe(0);
+  });
+
+  // The Alexandru Munteanu invoice (AWB 038112324): TWO "LIVRARE MACARA"
+  // lines (5-8 PALETI + 1-4 PALETI) = 2 crane runs. No descărcare line, but
+  // garanție-paleți lines give the paleți: 2 + 8 = 10.
+  it("counts two LIVRARE MACARA lines as 2 runs and reads paleți from garanție", () => {
+    const r = summariseMacara(
+      makeExtracted({
+        serviceText: "Standard",
+        items: [
+          { name: "LIVRARE MACARA 5-8 PALETI 5-15KM", quantity: 1 },
+          { name: "LIVRARE MACARA 1-4 PALETI 5-15KM", quantity: 1 },
+          { name: "GARANTIE EUROPALETI", quantity: 2 },
+          { name: "GARANTIE PALETI NON EURO 1", quantity: 8 },
+        ],
+      }),
+    );
+    expect(r.onInvoice).toBe(true);
+    expect(r.pallets).toBe(10);
+    expect(r.runs).toBe(2);
+  });
+
+  // BOTH a descărcare-palet line AND garanție-paleți lines present → paleți
+  // come from the descărcare line only (never summed), so no double charge.
+  it("does not double-count paleți when descărcare AND garanție both appear", () => {
+    const r = summariseMacara(
+      makeExtracted({
+        serviceText: "Macara",
+        items: [
+          { name: "LIVRARE MACARA 1-4 PALETI", quantity: 1 },
+          { name: "DESCARCARE PALET M07", quantity: 4 },
+          { name: "GARANTIE EUROPALETI", quantity: 4 },
+        ],
+      }),
+    );
+    expect(r.pallets).toBe(4); // descărcare wins, NOT 4 + 4
+    expect(r.runs).toBe(1);
   });
 });
