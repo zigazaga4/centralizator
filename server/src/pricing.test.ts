@@ -582,23 +582,24 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
     expect(r.macara.total).toBe(1121.9);
   });
 
-  // Ploiești + Iași ERA use Table B (TARIFE MACARA(2).odt): 494 base,
-  // 4.5 lei/km, 24/palet. Ploiești, distance 5 km → "0-15 km" 494 + 1 × 24 = 518.
-  it("Ploiești macara uses Table B (494 base, 24/palet)", () => {
+  // Ploiești + Iași ERA use Table B (TARIFE MACARA PLOIESTI SI IASI 2.odt):
+  // 471.8 base, 4.5 lei/km, 15/palet. Ploiești, distance 5 km →
+  // "0-15 km" 471.8 + 1 × 15 = 486.8.
+  it("Ploiești macara uses Table B (471.8 base, 15/palet)", () => {
     const r = calculatePrice({
       service: "Express", weightKg: 600, distanceKm: 5,
       numDeliveries: 1, deliveryDate: "2026-05-18",
       macaraOnAwb: true, macaraPallets: 1, macaraStore: "Ploiesti",
     });
     expect(r.macara.distanceBucket).toBe("0-15 km");
-    expect(r.macara.basePrice).toBe(494);
-    expect(r.macara.unloadPerPallet).toBe(24);
+    expect(r.macara.basePrice).toBe(471.8);
+    expect(r.macara.unloadPerPallet).toBe(15);
     expect(r.macara.perKm).toBe(4.5);
-    expect(r.macara.total).toBe(518);
+    expect(r.macara.total).toBe(486.8);
   });
 
   // Iași ERA (Iași 2) is also Table B; >50 km adds 4.5 lei/km.
-  // 81 km → ">50 km" 728 + (81−50)×4.5 = 139.5 + 2 paleți × 24 = 48 → 915.5.
+  // 81 km → ">50 km" 695.5 + (81−50)×4.5 = 139.5 + 2 paleți × 15 = 30 → 865.0.
   it("Iași ERA macara, >50 km, Table B per-km 4.5", () => {
     const r = calculatePrice({
       service: "Express", weightKg: 600, distanceKm: 81,
@@ -606,11 +607,11 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
       macaraOnAwb: true, macaraPallets: 2, macaraStore: "IasiERA",
     });
     expect(r.macara.distanceBucket).toBe(">50 km");
-    expect(r.macara.basePrice).toBe(728);
+    expect(r.macara.basePrice).toBe(695.5);
     expect(r.macara.extraKm).toBe(31);
     expect(r.macara.kmCost).toBe(139.5);
-    expect(r.macara.unloadCost).toBe(48);
-    expect(r.macara.total).toBe(915.5);
+    expect(r.macara.unloadCost).toBe(30);
+    expect(r.macara.total).toBe(865.0);
   });
 
   // Iași Tudor + Constanța stay on Table A (638.3, 26.7/palet).
@@ -634,12 +635,12 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
       numDeliveries: 1, deliveryDate: "2026-05-18",
       macaraOnAwb: true, macaraPallets: 1, macaraStore: "Ploiesti",
     });
-    expect(r.macaraByCity.Ploiesti.basePrice).toBe(494);
-    expect(r.macaraByCity.IasiERA.basePrice).toBe(494);
+    expect(r.macaraByCity.Ploiesti.basePrice).toBe(471.8);
+    expect(r.macaraByCity.IasiERA.basePrice).toBe(471.8);
     expect(r.macaraByCity.IasiTudor.basePrice).toBe(638.3);
     expect(r.macaraByCity.Constanta.basePrice).toBe(638.3);
-    // Ploiești: 494 + 24 = 518 · Constanța: 638.3 + 26.7 = 665.0
-    expect(r.macaraByCity.Ploiesti.total).toBe(518);
+    // Ploiești: 471.8 + 15 = 486.8 · Constanța: 638.3 + 26.7 = 665.0
+    expect(r.macaraByCity.Ploiesti.total).toBe(486.8);
     expect(r.macaraByCity.Constanta.total).toBe(665.0);
   });
 

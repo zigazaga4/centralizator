@@ -278,7 +278,8 @@ export interface MacaraRateTable {
   unloadPerPalletGross: number;
 }
 
-/** Table A — Iași Tudor + Constanța (PDF, cu TVA). */
+/** Table A — Iași Tudor + Constanța
+ *  ("Tarife Macara Constanta si Iasi 1-2.pdf", cu TVA). */
 export const MACARA_TABLE_A: MacaraRateTable = Object.freeze({
   brackets: Object.freeze([
     { maxKm: 10,       label: "0-10 km",  price: 638.3 },
@@ -293,18 +294,19 @@ export const MACARA_TABLE_A: MacaraRateTable = Object.freeze({
   unloadPerPalletGross: 26.7,
 });
 
-/** Table B — Ploiești + Iași ERA ("TARIFE MACARA(2).odt", cu TVA). */
+/** Table B — Ploiești + Iași ERA
+ *  ("TARIFE MACARA PLOIESTI SI IASI 2.odt", cu TVA). */
 export const MACARA_TABLE_B: MacaraRateTable = Object.freeze({
   brackets: Object.freeze([
-    { maxKm: 15,       label: "0-15 km",  price: 494 },
-    { maxKm: 20,       label: "15-20 km", price: 545 },
-    { maxKm: 30,       label: "20-30 km", price: 569 },
-    { maxKm: 50,       label: "30-50 km", price: 728 },
-    { maxKm: Infinity, label: ">50 km",   price: 728 },
+    { maxKm: 15,       label: "0-15 km",  price: 471.8 },
+    { maxKm: 20,       label: "15-20 km", price: 520.6 },
+    { maxKm: 30,       label: "20-30 km", price: 544 },
+    { maxKm: 50,       label: "30-50 km", price: 695.5 },
+    { maxKm: Infinity, label: ">50 km",   price: 695.5 },
   ]) as readonly MacaraBracket[],
   perKmGross: 4.5,
   thresholdKm: 50,
-  unloadPerPalletGross: 24,
+  unloadPerPalletGross: 15,
 });
 
 /** Which macara table each dispatch site uses. */
