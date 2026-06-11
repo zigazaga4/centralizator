@@ -103,7 +103,11 @@ const COL = {
   extraKm: "Extra km",
   roadKm: "Distanta pe strada",
   // Our totals are cu TVA (every tariff is VAT-included), so we compare
-  // against the portal's WITH-VAT price, not the net "Pret" column.
+  // against the portal's WITH-VAT price, not the net "Pret" column. The
+  // app side is the CITY-COMMISSIONED customer price (customerTotal for the
+  // pair's resolved store) + descărcare + macara — the portal's export is
+  // the customer-facing sell price, so the commission layer must be included
+  // for the two to line up.
   price: "Pret cu TVA",
 } as const;
 
@@ -174,6 +178,10 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 /* ──────────────────────────────────────────────────────────────────────
  * App-side projection
  * ────────────────────────────────────────────────────────────────────── */
@@ -184,12 +192,12 @@ interface AppFacts {
   weight: number | null;
   extraKm: number | null; // routing.awbKm (the courier-comparable km)
   roadKm: number | null; // routing.mapboxKm (our measured road km)
-  price: number | null; // breakdown.grandTotal (carrier + unloading + macara)
+  price: number | null; // city customerTotal + unloading + macara (grandTotal fallback)
   // Breakdown signals used to EXPLAIN a price/field difference.
   weekendSurcharge: number; // >0 when the AWB date is Sat/Sun
   unloadingTax: number; // >0 when descărcare is billed (cu TVA)
   macaraIsMacara: boolean; // a crane line was detected
-  macaraTotal: number; // crane cost folded into grandTotal (cu TVA)
+  macaraTotal: number; // crane cost folded into the comparable price (cu TVA)
   deliveryDate: string | null; // AWB date, for the weekend explanation
 }
 
@@ -202,19 +210,32 @@ function appFactsOf(pair: PairLightWire): AppFacts | null {
   const awb = edits?.awb;
   if (!awb?.awb_number) return null;
   const macara = breakdown?.macara;
+  // The portal's "Pret cu TVA" is the customer-facing sell price, so our
+  // comparable side is the CITY-COMMISSIONED price for the pair's resolved
+  // store (customerTotal = commissionBase grossed up by the city pct + km),
+  // with the two separate tracks (descărcare + macara) folded back in.
+  // Falls back to grandTotal (uncommissioned) when no store was resolved,
+  // and to carrierTotal for breakdowns persisted before grandTotal existed.
+  const store = pair.status.store ?? routing?.store ?? null;
+  const cityCommission = store ? breakdown?.cityCommissions?.[store] : undefined;
+  const unloadingGross = breakdown ? num(breakdown.unloadingTax) ?? 0 : 0;
+  const macaraGross = macara ? num(macara.total) ?? 0 : 0;
+  const price = !breakdown
+    ? null
+    : cityCommission
+      ? round2(cityCommission.customerTotal + unloadingGross + macaraGross)
+      : num(breakdown.grandTotal ?? breakdown.carrierTotal);
   return {
     awbRaw: awb.awb_number,
     recipient: awb.recipient_name ?? null,
     weight: num(awb.weight_kg),
     extraKm: routing ? num(routing.awbKm) : null,
     roadKm: routing ? num(routing.mapboxKm) : null,
-    // All-in total (carrier + descărcare + macara). Fall back to carrierTotal
-    // for any older breakdown persisted before grandTotal existed.
-    price: breakdown ? num(breakdown.grandTotal ?? breakdown.carrierTotal) : null,
+    price,
     weekendSurcharge: breakdown ? num(breakdown.weekendSurcharge) ?? 0 : 0,
-    unloadingTax: breakdown ? num(breakdown.unloadingTax) ?? 0 : 0,
+    unloadingTax: unloadingGross,
     macaraIsMacara: macara?.isMacara ?? false,
-    macaraTotal: macara ? num(macara.total) ?? 0 : 0,
+    macaraTotal: macaraGross,
     deliveryDate: awb.delivery_date ?? null,
   };
 }
