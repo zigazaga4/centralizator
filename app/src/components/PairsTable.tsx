@@ -30,7 +30,10 @@ const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
  * Track sizing rules:
  *
  *  • Icon / fixed columns (#, Imagini, ✕) stay at a fixed px width —
- *    their content is a fixed-size glyph, never text that grows.
+ *    their content is a fixed-size glyph, never text that grows. The
+ *    Imagini cell is an overlapping stack capped at 3 tiles (2 thumbs +
+ *    a "+N" counter when there are more), so its footprint is constant
+ *    no matter how many documents ride the pair.
  *
  *  • Editable columns (Data/Serviciu, kg, km, Liv.) stay at a fixed px
  *    width too — they hold <input>/<select> controls, which clip their
@@ -47,7 +50,7 @@ const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
  * The wrapper keeps `min-w-[1080px]` so very narrow windows scroll
  * horizontally instead of crushing the editable columns. */
 const GRID =
-  "grid grid-cols-[44px_64px_minmax(0,1.4fr)_132px_72px_72px_56px_max-content_minmax(108px,max-content)_minmax(108px,max-content)_32px]";
+  "grid grid-cols-[44px_72px_minmax(0,1.4fr)_132px_72px_72px_56px_max-content_minmax(108px,max-content)_minmax(108px,max-content)_32px]";
 
 interface Props {
   pairs: Pair[];
@@ -253,17 +256,17 @@ function PairRow({
           }
         }
       }}
-      className={`${GRID} cursor-pointer border-b border-ink-200 text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-coral-400 ${rowBg}`}
+      className={`${GRID} group min-h-[52px] cursor-pointer border-b border-ink-200 text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-coral-400 ${rowBg}`}
       title={status.kind === "error" ? status.message : "Click pentru detalii"}
     >
       {/* # + status — one narrow column, row number above the icon */}
-      <div className="flex flex-col items-center justify-center gap-1 border-r border-ink-200 bg-canvas-100 px-1 py-1.5">
+      <div className="flex flex-col items-center justify-center gap-1 border-r border-ink-100 bg-canvas-100 px-1 py-1.5">
         <span className="text-[10px] tabular-nums text-ink-400">{index + 1}</span>
         <StatusPill status={status} />
       </div>
 
       {/* Image thumbs */}
-      <div className="flex items-center justify-center border-r border-ink-200 px-2 py-1.5">
+      <div className="flex items-center justify-center border-r border-ink-100 px-2 py-1.5">
         <Thumbs pair={pair} />
       </div>
 
@@ -271,10 +274,13 @@ function PairRow({
           check) on the first line, invoice number(s) on the second,
           destinatar on the third. Everything truncates instead of
           widening the column, so the grid can never overflow. */}
-      <div className="flex min-w-0 flex-col justify-center gap-0.5 border-r border-ink-200 px-3 py-1.5">
-        <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex min-w-0 flex-col justify-center gap-0.5 border-r border-ink-100 px-3 py-1.5">
+        {/* flex-wrap: when macara + voluminos + product-check chips all
+            land on one narrow row, they wrap under the AWB instead of
+            spilling past the cell. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <span
-            className="truncate font-mono text-[12px] font-medium text-ink-800"
+            className="min-w-0 max-w-full truncate font-mono text-[12px] font-medium text-ink-800"
             title={edits?.awb.awb_number || undefined}
           >
             {edits?.awb.awb_number || <Dash />}
@@ -305,7 +311,7 @@ function PairRow({
       </div>
 
       {/* Data + Serviciu — stacked editable pair in one column */}
-      <div className="flex flex-col divide-y divide-ink-100 border-r border-ink-200">
+      <div className="flex flex-col divide-y divide-ink-100 border-r border-ink-100">
         {isReady && edits ? (
           <DateCell value={edits.awb.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
         ) : (
@@ -328,7 +334,7 @@ function PairRow({
       </div>
 
       {/* kg */}
-      <div className="border-r border-ink-200">
+      <div className="border-r border-ink-100">
         {isReady && edits ? (
           <NumberCell
             value={edits.awb.weight_kg}
@@ -342,7 +348,7 @@ function PairRow({
       </div>
 
       {/* km */}
-      <div className="border-r border-ink-200">
+      <div className="border-r border-ink-100">
         {isReady && edits ? (
           <NumberCell
             value={edits.awb.distance_extra_km}
@@ -356,7 +362,7 @@ function PairRow({
       </div>
 
       {/* Livrări */}
-      <div className="border-r border-ink-200">
+      <div className="border-r border-ink-100">
         {isReady && edits ? (
           <NumberCell
             value={edits.awb.num_deliveries}
@@ -398,7 +404,7 @@ function PairRow({
           onRemove();
         }}
         title="Șterge pereche"
-        className="flex items-center justify-center py-2 text-ink-400 transition hover:text-coral-600"
+        className="flex items-center justify-center py-2 text-ink-400 opacity-0 transition hover:text-coral-600 focus-visible:opacity-100 group-hover:opacity-100"
       >
         <svg
           className="h-4 w-4"
@@ -520,7 +526,7 @@ function CityTotalCell({
 }) {
   if (!breakdown) {
     return (
-      <div className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400">
+      <div className="flex items-center justify-end border-r border-ink-100 px-3 py-2 text-right tabular-nums text-ink-400">
         <Dash />
       </div>
     );
@@ -532,7 +538,7 @@ function CityTotalCell({
     const m = breakdown.macaraByCity?.[site] ?? breakdown.macara;
     return (
       <div
-        className="flex items-center justify-end border-r border-ink-200 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+        className="flex items-center justify-end border-r border-ink-100 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
         title={`Tarif macara (cu TVA, fără comision) — ${m.distanceBucket ?? "—"}, ${m.pallets} palet(i)`}
       >
         {ron(m.total)}
@@ -543,7 +549,7 @@ function CityTotalCell({
   const row = breakdown.cityCommissions[site];
   return (
     <div
-      className="flex items-center justify-end border-r border-ink-200 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+      className="flex items-center justify-end border-r border-ink-100 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
       title={
         row
           ? `${carrierTip} + comision ${ron(row.commission)} (${(row.pct * 100).toFixed(1)} %)`
@@ -571,7 +577,7 @@ function CollaboratorTotalCell({
   if (breakdown?.macara?.isMacara) {
     return (
       <div
-        className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400"
+        className="flex items-center justify-end border-r border-ink-100 px-3 py-2 text-right tabular-nums text-ink-400"
         title="Macara · fără comision colaborator"
       >
         —
@@ -581,7 +587,7 @@ function CollaboratorTotalCell({
   if (!collaborator) {
     return (
       <div
-        className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400"
+        className="flex items-center justify-end border-r border-ink-100 px-3 py-2 text-right tabular-nums text-ink-400"
         title="Constanța · fără colaborator"
       >
         —
@@ -590,7 +596,7 @@ function CollaboratorTotalCell({
   }
   if (!breakdown) {
     return (
-      <div className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400">
+      <div className="flex items-center justify-end border-r border-ink-100 px-3 py-2 text-right tabular-nums text-ink-400">
         <Dash />
       </div>
     );
@@ -598,7 +604,7 @@ function CollaboratorTotalCell({
   const row = breakdown.collaboratorPrices[collaborator];
   return (
     <div
-      className="flex items-center justify-end border-r border-ink-200 bg-coral-50/60 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+      className="flex items-center justify-end border-r border-ink-100 bg-coral-50/60 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
       title={
         row
           ? `${COLLABORATOR_LABEL[collaborator]} · bonus ${ron(row.bonus)} (${(row.pct * 100).toFixed(1)} %)`
@@ -664,11 +670,25 @@ function StatusPill({ status }: { status: PairStatus }) {
   }
 }
 
+/**
+ * How many thumbnails to actually render for `total` images.
+ *
+ * The stack shows at most 3 tiles: up to 3 real thumbs when everything
+ * fits, or 2 thumbs + a "+N" counter tile when there are more. That
+ * makes the cell's footprint a CONSTANT (3 tiles max, overlapped), so
+ * a pair with 10 documents occupies exactly the same width as a pair
+ * with 3 — the old uncapped row of thumbs grew past the 64 px column
+ * with the 3rd image and bled into "Documente".
+ */
+function visibleThumbCount(total: number): number {
+  return total <= 3 ? total : 2;
+}
+
 function Thumbs({ pair }: { pair: Pair }) {
   // Lazy: hydrated pairs stream their bytes from the server-side image
   // endpoint (cached in-app); local pairs resolve instantly from their
-  // Files. While loading we show one skeleton per expected image so
-  // the row keeps its final width and nothing jumps.
+  // Files. While loading we show one skeleton per VISIBLE tile so the
+  // row keeps its final width and nothing jumps when the bytes land.
   const { files, loading } = usePairImages(pair);
   const [urls, setUrls] = useState<string[]>([]);
   useEffect(() => {
@@ -676,30 +696,39 @@ function Thumbs({ pair }: { pair: Pair }) {
     setUrls(u);
     return () => u.forEach(URL.revokeObjectURL);
   }, [files]);
-  if (loading) {
-    const expected = pair.imageRefs?.length ?? 0;
-    return (
-      <div className="flex gap-0.5">
-        {Array.from({ length: expected }, (_, i) => (
-          <div
-            key={i}
-            className="h-9 w-6 animate-pulse rounded-sm bg-ink-200/60 ring-1 ring-ink-200"
-          />
-        ))}
-      </div>
-    );
-  }
+
+  const total = loading ? pair.imageRefs?.length ?? 0 : urls.length;
+  if (total === 0) return <Dash />;
+  const visible = visibleThumbCount(total);
+  const extra = total - visible;
+  // Every tile after the first overlaps the previous one (-ml-4 = 16 px
+  // of a 28 px tile), avatar-stack style. Worst case: 28 + 12 + 12 =
+  // 52 px — always inside the 72 px track minus its padding.
+  const tile = (i: number) =>
+    `h-10 w-7 shrink-0 rounded-md ring-2 ring-canvas-50 ${i > 0 ? "-ml-4" : ""}`;
+
   return (
-    <div className="flex gap-0.5">
-      {urls.map((u, i) => (
-        <img
-          key={u}
-          src={u}
-          alt={`Imagine ${i + 1}`}
-          title={files[i]?.name}
-          className="h-9 w-6 rounded-sm object-cover ring-1 ring-ink-200"
-        />
-      ))}
+    <div className="flex items-center" title={`${total} imagin${total === 1 ? "e" : "i"}`}>
+      {loading
+        ? Array.from({ length: visible }, (_, i) => (
+            <div key={i} className={`${tile(i)} animate-pulse bg-ink-200/60`} />
+          ))
+        : urls.slice(0, visible).map((u, i) => (
+            <img
+              key={u}
+              src={u}
+              alt={`Imagine ${i + 1} din ${total}`}
+              title={files[i]?.name}
+              className={`${tile(i)} object-cover shadow-sm`}
+            />
+          ))}
+      {extra > 0 && (
+        <span
+          className={`${tile(visible)} flex items-center justify-center bg-ink-700/90 text-[10px] font-semibold tabular-nums text-canvas-50`}
+        >
+          +{extra}
+        </span>
+      )}
     </div>
   );
 }
@@ -729,7 +758,7 @@ function CostsCell({
   if (isMac) {
     return (
       <div
-        className="flex items-center border-r border-ink-200 px-3 py-1.5 text-[11px] italic text-ink-400"
+        className="flex items-center border-r border-ink-100 px-3 py-1.5 text-[11px] italic text-ink-400"
         title="Macara — fără tarif standard / comision; prețul rândului este tariful macara."
       >
         macara · fără tarif standard
@@ -765,7 +794,7 @@ function CostsCell({
     },
   ] as const;
   return (
-    <div className="flex items-center gap-3 border-r border-ink-200 px-3 py-1.5">
+    <div className="flex items-center gap-3 border-r border-ink-100 px-3 py-1.5">
       {parts.map((p) => {
         const active = breakdown != null && (p.value ?? 0) > 0;
         return (
