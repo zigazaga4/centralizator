@@ -913,9 +913,8 @@ export default function App() {
   /* ── Day-aware derived views ─────────────────────────────────────── */
 
   // Pairs on the visible day AND in the active centralizator. Drives the
-  // queue table, the totals, and the buttons; the export menu only sees
-  // these — so each store exports its own centralizator. Unpaired
-  // documents are NOT pairs — they live in their own strip below.
+  // queue table, the totals, and the buttons. Unpaired documents are NOT
+  // pairs — they live in their own strip below.
   const dayPairs = useMemo(
     () =>
       pairs.filter(
@@ -927,6 +926,22 @@ export default function App() {
           inActiveCollaborator(p),
       ),
     [pairs, selectedDay, inActiveStore, inActiveView, inActiveCollaborator],
+  );
+
+  // Pairs the EXPORT modal can draw from: day + store + view scoped, but
+  // deliberately NOT filtered by the header's collaborator dropdown — the
+  // modal owns its own collaborator scope setting, so the user can export
+  // any partner's file (or a decont) regardless of the current view filter.
+  const exportPairs = useMemo(
+    () =>
+      pairs.filter(
+        (p) =>
+          p.day === selectedDay &&
+          p.status.kind !== "unpaired" &&
+          inActiveStore(p) &&
+          inActiveView(p),
+      ),
+    [pairs, selectedDay, inActiveStore, inActiveView],
   );
 
   // Documents the scanner could not pair by name/address on this day.
@@ -1053,13 +1068,13 @@ export default function App() {
               Always available — the server compares the whole pair queue
               (joined on AWB number), independent of the selected day. */}
           <CompareExcelButton />
-          {dayPairs.length > 0 && (
+          {exportPairs.length > 0 && (
             <ExportMenu
-              pairs={dayPairs}
+              pairs={exportPairs}
               day={selectedDay}
               city={selectedCity}
               collaborator={selectedCollaborator}
-              disabled={counts.ready === 0}
+              disabled={!exportPairs.some((p) => p.status.kind === "ready")}
             />
           )}
           {dayPairs.length > 0 && (
