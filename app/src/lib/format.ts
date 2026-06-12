@@ -9,6 +9,18 @@ const ronFmt = new Intl.NumberFormat("ro-RO", {
 export const ron = (n: number | null | undefined): string =>
   n == null || Number.isNaN(n) ? "—" : ronFmt.format(n);
 
+/** Compact RON amount — same ro-RO digits as `ron` but WITHOUT the
+ *  currency suffix. For dense cells (e.g. the queue's cost mini-grid)
+ *  where several amounts share one cell and a " RON" after each one
+ *  is pure visual noise. */
+const ronBareFmt = new Intl.NumberFormat("ro-RO", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export const ronBare = (n: number | null | undefined): string =>
+  n == null || Number.isNaN(n) ? "—" : ronBareFmt.format(n);
+
 /** Ro-locale date formatter (DD.MM.YYYY). */
 export const date = (iso: string | null | undefined): string => {
   if (!iso) return "—";

@@ -360,6 +360,15 @@ export interface PricingBreakdown {
   incrementTariff: number;
   incrementCost: number;
   weekendSurcharge: number;
+  /** Bulky-but-light units (polistiren / vată) counted across all
+   *  invoices on this AWB. Optional: breakdowns persisted before the
+   *  voluminos rule don't carry it — read through `?? 0`. */
+  bulkyUnits?: number;
+  /** Extra truck transports forced by the bulky units: 0 below 24
+   *  pieces, then one per started block of 24 (24 → 1, 25 → 2). Each
+   *  extra transport bills one increment tariff plus its own round of
+   *  the per-km surcharge. Optional like `bulkyUnits`. */
+  bulkyTransports?: number;
   /** Standard unloading fees detected on the shipment (base count, before
    *  the >1200 kg multiplier). 0 when no unloading applies. */
   unloadingUnits: number;

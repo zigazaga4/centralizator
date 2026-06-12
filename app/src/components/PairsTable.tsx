@@ -13,39 +13,41 @@ import {
   type PricingBreakdown,
   type Service,
 } from "../types";
-import { date, ron } from "../lib/format";
+import { date, ron, ronBare } from "../lib/format";
 import { usePairImages } from "../lib/images";
 import { ProductBadge } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
-/* Columns auto-fit to their content, Excel-style. Each track is sized
- * so the cell never clips and never spills past its border, no matter
- * how long the value inside it is.
+/* The queue is a DENSE spreadsheet: 11 tracks instead of the old 17.
+ * Related values share one cell — AWB + factură + destinatar stack
+ * inside "Documente", data + serviciu stack in one editable column,
+ * and the four standard cost components + descărcare collapse into a
+ * single labeled mini-grid ("Costuri") — so each row carries MORE
+ * information while the table fits a laptop window without the
+ * horizontal scroll the old 1500 px layout forced.
  *
- * Three kinds of column:
+ * Track sizing rules:
  *
- *  • Icon / fixed columns (#, Stare, Imagini, ✕) stay at a fixed px
- *    width — their content is a fixed-size glyph, never text that grows.
+ *  • Icon / fixed columns (#, Imagini, ✕) stay at a fixed px width —
+ *    their content is a fixed-size glyph, never text that grows.
  *
- *  • Editable columns (Data, Serviciu, kg, km, Liv.) stay at a fixed px
+ *  • Editable columns (Data/Serviciu, kg, km, Liv.) stay at a fixed px
  *    width too — they hold <input>/<select> controls, which clip their
  *    own overflow internally and so can never spill past the cell.
  *
- *  • Display columns size to content. The numeric/total columns use
- *    `minmax(<floor>px, max-content)`: at least wide enough for the
- *    header label, but they grow to fit the widest RON value in that
- *    column across every row (e.g. "1.234,56 RON" no longer overflows
- *    an 88 px cell). The two free-text columns (AWB #, Factură #) use
- *    `minmax(max-content, 1fr)`: never narrower than their content (so
- *    long AWB/invoice numbers are shown in full, not truncated) and
- *    they absorb any leftover width so the grid, borders, header and
- *    sticky coral total row all extend cleanly to the right edge.
+ *  • "Documente" takes `minmax(0,1.4fr)` and truncates INTERNALLY —
+ *    a long AWB / invoice number can never push the grid wider; the
+ *    full values live in the tooltip and the detail page.
  *
- * The wrapper keeps `min-w-[1500px]` so the table scrolls horizontally
- * on narrow windows instead of crushing the auto-fit columns. */
+ *  • "Costuri" sizes to its five fixed mini-columns (`max-content`),
+ *    and the two money columns use `minmax(<floor>px, max-content)`
+ *    so the widest RON value always fits without clipping.
+ *
+ * The wrapper keeps `min-w-[1080px]` so very narrow windows scroll
+ * horizontally instead of crushing the editable columns. */
 const GRID =
-  "grid grid-cols-[40px_56px_64px_minmax(max-content,1fr)_minmax(max-content,1fr)_120px_120px_72px_72px_60px_minmax(88px,max-content)_minmax(72px,max-content)_minmax(72px,max-content)_minmax(72px,max-content)_minmax(120px,max-content)_minmax(140px,max-content)_36px]";
+  "grid grid-cols-[44px_64px_minmax(0,1.4fr)_132px_72px_72px_56px_max-content_minmax(108px,max-content)_minmax(108px,max-content)_32px]";
 
 interface Props {
   pairs: Pair[];
@@ -120,7 +122,7 @@ export function PairsTable({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
-      <div className="min-w-[1500px]">
+      <div className="min-w-[1080px]">
         <Header collaborator={collaborator} />
         {pairs.map((p, i) => (
           <PairRow
@@ -150,25 +152,19 @@ export function PairsTable({
 /* ─── Header ────────────────────────────────────────────────────────── */
 
 function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
-  // 17 columns. The penultimate one (Plată colab.) needs special
+  // 11 columns. The penultimate one (Plată colab.) needs special
   // rendering — it's a two-line header so the collaborator's name fits
   // even when it's the longest ("Vic Dinamic") without forcing the
   // column wider than its content needs.
   const cols = [
     { label: "#", align: "center" },
-    { label: "Stare", align: "center" },
     { label: "Imagini", align: "center" },
-    { label: "AWB", align: "left" },
-    { label: "Factură", align: "left" },
-    { label: "Data", align: "left" },
-    { label: "Serviciu", align: "left" },
+    { label: "Documente", align: "left" },
+    { label: "Data / Serviciu", align: "left" },
     { label: "kg", align: "right" },
     { label: "km", align: "right" },
     { label: "Liv.", align: "right" },
-    { label: "Bază", align: "right" },
-    { label: "Km+", align: "right" },
-    { label: "Inc.", align: "right" },
-    { label: "Wkd", align: "right" },
+    { label: "Costuri", align: "left" },
     { label: "Total client", align: "right" },
   ] as const;
 
@@ -260,13 +256,9 @@ function PairRow({
       className={`${GRID} cursor-pointer border-b border-ink-200 text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-coral-400 ${rowBg}`}
       title={status.kind === "error" ? status.message : "Click pentru detalii"}
     >
-      {/* # */}
-      <div className="flex items-center justify-center border-r border-ink-200 bg-canvas-100 px-2 py-2 text-[11px] tabular-nums text-ink-400">
-        {index + 1}
-      </div>
-
-      {/* Status */}
-      <div className="flex items-center justify-center border-r border-ink-200 px-2 py-2">
+      {/* # + status — one narrow column, row number above the icon */}
+      <div className="flex flex-col items-center justify-center gap-1 border-r border-ink-200 bg-canvas-100 px-1 py-1.5">
+        <span className="text-[10px] tabular-nums text-ink-400">{index + 1}</span>
         <StatusPill status={status} />
       </div>
 
@@ -275,34 +267,50 @@ function PairRow({
         <Thumbs pair={pair} />
       </div>
 
-      {/* AWB # + product-check badge (warning / ok / spinner) */}
-      <div className="flex items-center gap-1.5 border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
-        <span className="flex-1 whitespace-nowrap">{edits?.awb.awb_number || <Dash />}</span>
-        {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
-        <ProductBadge
-          verification={status.kind === "ready" ? status.verification : undefined}
-          routing={status.kind === "ready" ? status.routing : undefined}
-          verifying={verifying}
-          pairId={pair.id}
-        />
+      {/* Documente — AWB + marker chips (macara / voluminos / product
+          check) on the first line, invoice number(s) on the second,
+          destinatar on the third. Everything truncates instead of
+          widening the column, so the grid can never overflow. */}
+      <div className="flex min-w-0 flex-col justify-center gap-0.5 border-r border-ink-200 px-3 py-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className="truncate font-mono text-[12px] font-medium text-ink-800"
+            title={edits?.awb.awb_number || undefined}
+          >
+            {edits?.awb.awb_number || <Dash />}
+          </span>
+          {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
+          {(breakdown?.bulkyUnits ?? 0) > 0 && (
+            <VoluminosChip
+              units={breakdown!.bulkyUnits!}
+              transports={breakdown!.bulkyTransports ?? 0}
+            />
+          )}
+          <ProductBadge
+            verification={status.kind === "ready" ? status.verification : undefined}
+            routing={status.kind === "ready" ? status.routing : undefined}
+            verifying={verifying}
+            pairId={pair.id}
+          />
+        </div>
+        <InvoiceLine edits={edits} />
+        {edits?.awb.recipient_name && (
+          <div
+            className="truncate text-[10px] text-ink-400"
+            title={edits.awb.recipient_address ?? undefined}
+          >
+            {edits.awb.recipient_name}
+          </div>
+        )}
       </div>
 
-      {/* Factură # — for a pair carrying multiple invoices we show the
-          first invoice number with a "+N" badge so the row stays
-          single-line. The detail view lists every invoice in full. */}
-      <FacturaCell edits={edits} />
-
-      {/* Data */}
-      <div className="border-r border-ink-200">
+      {/* Data + Serviciu — stacked editable pair in one column */}
+      <div className="flex flex-col divide-y divide-ink-100 border-r border-ink-200">
         {isReady && edits ? (
           <DateCell value={edits.awb.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
         ) : (
           <PlaceholderCell />
         )}
-      </div>
-
-      {/* Serviciu */}
-      <div className="border-r border-ink-200">
         {isReady && service ? (
           <SelectCell
             value={service}
@@ -362,40 +370,11 @@ function PairRow({
         )}
       </div>
 
-      {/* Bază / Km+ / Inc. / Wkd — standard transport calc. Macara runs
-          carry no standard tariff or commission, so these four cells read
-          "—" for a macara row (its price is the macara total only). */}
-      {isMac ? (
-        <>
-          <MacaraNaCell />
-          <MacaraNaCell />
-          <MacaraNaCell />
-          <MacaraNaCell />
-        </>
-      ) : (
-        <>
-          {/* Bază — always present once the row is ready */}
-          <NumericCell value={breakdown?.baseTariff} />
-          {/* Km+ — only applies for >50 km bucket */}
-          <ConditionalCell
-            value={breakdown?.extraKmCost}
-            ready={!!breakdown}
-            notAppliedReason="Distanță ≤ 50 km — nu se aplică suplimentul per km."
-          />
-          {/* Inc. — only applies when num_deliveries > 1 */}
-          <ConditionalCell
-            value={breakdown?.incrementCost}
-            ready={!!breakdown}
-            notAppliedReason="O singură livrare — incrementul se aplică doar de la a doua livrare."
-          />
-          {/* Wkd — only applies on Saturday / Sunday */}
-          <ConditionalCell
-            value={breakdown?.weekendSurcharge}
-            ready={!!breakdown}
-            notAppliedReason="Livrare în zi lucrătoare — fără supliment de weekend."
-          />
-        </>
-      )}
+      {/* Costuri — the standard transport calc as one compact labeled
+          mini-grid (Bază / Km+ / Inc. / Wkd / Desc.). Macara runs carry
+          no standard tariff or commission, so the cell explains itself
+          instead of showing five dashes. */}
+      <CostsCell breakdown={breakdown} isMac={isMac} />
 
       {/* Total client — what the END customer pays for the currently
           selected city. One number per row; the dropdown switches WHICH
@@ -461,7 +440,7 @@ function SumRow({
       <div className="border-r border-coral-600 px-2 py-2.5 text-center text-[11px] tabular-nums opacity-80">
         Σ
       </div>
-      <div className="col-span-13 border-r border-coral-600 px-3 py-2.5 text-right text-sm font-semibold uppercase tracking-wide">
+      <div className="col-span-7 border-r border-coral-600 px-3 py-2.5 text-right text-sm font-semibold uppercase tracking-wide">
         Total {readyCount} / {totalCount} perech{totalCount === 1 ? "e" : "i"}
       </div>
       <div className="flex items-center justify-end border-r border-coral-600 px-3 py-2.5 text-right text-base font-bold tabular-nums">
@@ -478,21 +457,20 @@ function SumRow({
   );
 }
 
-/* ─── Factură cell ──────────────────────────────────────────────────── */
+/* ─── Invoice line (inside the Documente cell) ──────────────────────── */
 
 /**
- * Single-line invoice column for a row.
+ * Compact invoice strip under the AWB number.
  *
- * A pair carries N invoices; the cell still needs to fit on one row of
- * the queue table, so we show the FIRST invoice's number, mark it
- * DUPLICAT if applicable, and append a compact "+N" badge when there
- * are more invoices below. The detail view is where the full list
- * lives — this cell exists to identify the row at a glance.
+ * A pair carries N invoices; the row needs one line, so we show the
+ * FIRST invoice's number, mark it DUPLICAT if applicable, and append a
+ * "+N" badge when more invoices ride the same AWB. The detail view is
+ * where the full list lives — this line identifies the row at a glance.
  */
-function FacturaCell({ edits }: { edits: Extracted | null }) {
+function InvoiceLine({ edits }: { edits: Extracted | null }) {
   if (!edits || edits.invoices.length === 0) {
     return (
-      <div className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800">
+      <div className="font-mono text-[11px] leading-tight">
         <Dash />
       </div>
     );
@@ -501,22 +479,22 @@ function FacturaCell({ edits }: { edits: Extracted | null }) {
   const extras = edits.invoices.length - 1;
   return (
     <div
-      className="flex items-center border-r border-ink-200 px-3 py-2 font-mono text-[12px] text-ink-800"
+      className="flex min-w-0 items-center gap-1 font-mono text-[11px] leading-tight text-ink-500"
       title={
         extras > 0
           ? edits.invoices.map((i) => i.invoice_number).join(" · ")
-          : undefined
+          : first.invoice_number || undefined
       }
     >
-      <span className="flex-1 whitespace-nowrap">{first.invoice_number || <Dash />}</span>
+      <span className="truncate">{first.invoice_number || <Dash />}</span>
       {first.invoice_is_duplicate && (
-        <span className="ml-1 rounded bg-coral-100 px-1 py-0.5 text-[9px] font-medium uppercase text-coral-700">
+        <span className="shrink-0 rounded bg-coral-100 px-1 py-0.5 text-[9px] font-medium uppercase text-coral-700">
           DUP
         </span>
       )}
       {extras > 0 && (
         <span
-          className="ml-1 rounded bg-ink-200 px-1 py-0.5 text-[9px] font-medium text-ink-700"
+          className="shrink-0 rounded bg-ink-200 px-1 py-0.5 text-[9px] font-medium text-ink-700"
           title={`${extras + 1} facturi pe această pereche`}
         >
           +{extras}
@@ -730,15 +708,85 @@ function Dash() {
   return <span className="text-ink-400">—</span>;
 }
 
-/** Standard-cost cell rendered for a macara row: muted "—" (macara has no
- *  base tariff / km / increment / weekend — only the macara total). */
-function MacaraNaCell() {
+/**
+ * The five standard cost components in ONE cell — a labeled mini-grid
+ * (Bază / Km+ / Inc. / Wkd / Desc.) instead of five table columns. The
+ * row gains the descărcare tax (never visible in the queue before)
+ * while the table loses four column borders' worth of width.
+ *
+ * Inactive components render a muted "—" with a tooltip explaining WHY
+ * the rule didn't fire, so the cell reads as "not applied", never as
+ * "broken". A macara row explains itself instead of dashing out — it
+ * has no standard tariff at all.
+ */
+function CostsCell({
+  breakdown,
+  isMac,
+}: {
+  breakdown: PricingBreakdown | null;
+  isMac: boolean;
+}) {
+  if (isMac) {
+    return (
+      <div
+        className="flex items-center border-r border-ink-200 px-3 py-1.5 text-[11px] italic text-ink-400"
+        title="Macara — fără tarif standard / comision; prețul rândului este tariful macara."
+      >
+        macara · fără tarif standard
+      </div>
+    );
+  }
+  const parts = [
+    {
+      label: "Bază",
+      value: breakdown?.baseTariff ?? null,
+      offHint: "Tarif de bază — apare după calcul.",
+    },
+    {
+      label: "Km+",
+      value: breakdown?.extraKmCost ?? null,
+      offHint: "Distanță ≤ 50 km — nu se aplică suplimentul per km.",
+    },
+    {
+      label: "Inc.",
+      value: breakdown?.incrementCost ?? null,
+      offHint:
+        "Fără incremente — o singură livrare, ≤ 1200 kg și fără marfă voluminoasă peste pragul de 24 bucăți.",
+    },
+    {
+      label: "Wkd",
+      value: breakdown?.weekendSurcharge ?? null,
+      offHint: "Livrare în zi lucrătoare — fără supliment de weekend.",
+    },
+    {
+      label: "Desc.",
+      value: breakdown?.unloadingTax ?? null,
+      offHint: "Fără taxă de descărcare.",
+    },
+  ] as const;
   return (
-    <div
-      title="Macara · fără tarif standard / comision"
-      className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400"
-    >
-      —
+    <div className="flex items-center gap-3 border-r border-ink-200 px-3 py-1.5">
+      {parts.map((p) => {
+        const active = breakdown != null && (p.value ?? 0) > 0;
+        return (
+          <div
+            key={p.label}
+            className="flex min-w-[40px] flex-col items-end"
+            title={active ? `${p.label}: ${ron(p.value)}` : breakdown ? p.offHint : undefined}
+          >
+            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-400">
+              {p.label}
+            </span>
+            <span
+              className={`text-[11px] leading-tight tabular-nums ${
+                active ? "text-ink-900" : "text-ink-300"
+              }`}
+            >
+              {active ? ronBare(p.value) : "—"}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -763,65 +811,39 @@ function MacaraChip({ warning }: { warning: boolean }) {
   );
 }
 
+/** Voluminos marker — shown whenever the invoice carries bulky-but-light
+ *  goods (polistiren / vată). Coral ⚠ when the 24-piece rule actually
+ *  fired and extra transports are billed; amber notice when the goods
+ *  are present but under the threshold (no surcharge, still worth the
+ *  user's eye). The tooltip carries the exact piece count. */
+function VoluminosChip({ units, transports }: { units: number; transports: number }) {
+  const billed = transports > 0;
+  return (
+    <span
+      title={
+        billed
+          ? `Marfă voluminoasă (polistiren / vată): ${units} bucăți → ${transports} transport${
+              transports === 1 ? "" : "uri"
+            } suplimentar${transports === 1 ? "" : "e"} facturat${transports === 1 ? "" : "e"}`
+          : `Marfă voluminoasă (polistiren / vată): ${units} bucăți — sub pragul de 24, fără transport suplimentar`
+      }
+      className={`shrink-0 whitespace-nowrap rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+        billed ? "bg-coral-600 text-canvas-50" : "bg-amber-100 text-amber-800"
+      }`}
+    >
+      {billed ? `⚠ voluminos ×${transports}` : "voluminos"}
+    </span>
+  );
+}
+
 function PlaceholderCell({ numeric }: { numeric?: boolean }) {
   return (
     <div
-      className={`flex h-full items-center px-3 py-2 text-ink-400 ${
+      className={`flex h-full min-h-0 flex-1 items-center px-3 py-1 text-ink-400 ${
         numeric ? "justify-end tabular-nums" : ""
       }`}
     >
       —
-    </div>
-  );
-}
-
-function NumericCell({ value, faded }: { value: number | null | undefined; faded?: boolean }) {
-  return (
-    <div
-      className={`flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums ${
-        value == null
-          ? "text-ink-400"
-          : faded
-          ? "text-ink-500"
-          : "text-ink-900"
-      }`}
-    >
-      {value == null ? "—" : ron(value)}
-    </div>
-  );
-}
-
-/**
- * Conditional surcharge cell: renders "—" both before extraction (no
- * breakdown yet) and when the breakdown says the surcharge doesn't
- * apply (value === 0). The tooltip explains WHY, so the user reads it
- * as "the rule didn't fire" instead of "the column is broken".
- */
-function ConditionalCell({
-  value,
-  ready,
-  notAppliedReason,
-}: {
-  value: number | null | undefined;
-  ready: boolean;
-  notAppliedReason: string;
-}) {
-  if (!ready) {
-    return (
-      <div className="flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums text-ink-400">
-        —
-      </div>
-    );
-  }
-  const active = (value ?? 0) > 0;
-  return (
-    <div
-      title={active ? undefined : notAppliedReason}
-      className={`flex items-center justify-end border-r border-ink-200 px-3 py-2 text-right tabular-nums ${
-        active ? "text-ink-900" : "text-ink-400"
-      }`}
-    >
-      {active ? ron(value!) : "—"}
     </div>
   );
 }
@@ -860,7 +882,7 @@ function NumberCell({
         if (!Number.isFinite(raw)) return;
         onChange(integer ? Math.floor(raw) : raw);
       }}
-      className="block h-full w-full bg-coral-50/30 px-3 py-2 text-right text-sm tabular-nums text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className="block h-full w-full bg-coral-50/30 px-2 py-2 text-right text-[13px] tabular-nums text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
     />
   );
 }
@@ -875,7 +897,7 @@ function DateCell({ value, onChange }: { value: string; onChange: (v: string) =>
       onKeyDown={stop}
       onChange={(e) => onChange(e.target.value)}
       title={date(value)}
-      className="block h-full w-full bg-coral-50/30 px-3 py-2 text-sm text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className="block min-h-0 w-full flex-1 bg-coral-50/30 px-2 py-1 text-[13px] text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
     />
   );
 }
@@ -899,7 +921,7 @@ function SelectCell({
       onKeyDown={stop}
       onChange={(e) => onChange(e.target.value)}
       title={hint}
-      className="block h-full w-full bg-coral-50/30 px-3 py-2 text-sm text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className="block min-h-0 w-full flex-1 bg-coral-50/30 px-2 py-1 text-[13px] text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
     >
       {options.map((o) => (
         <option key={o} value={o}>

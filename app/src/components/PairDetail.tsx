@@ -648,6 +648,24 @@ function Spreadsheet({
           muted
         />
       )}
+      {/* Marfă voluminoasă (polistiren / vată) — warn the user whenever
+          the invoice carries bulky goods, billed or not. The 24-piece
+          ops rule (2026-06-11): one extra transport per started block
+          of 24; each extra transport = un increment + km suplimentari. */}
+      {(breakdown.bulkyUnits ?? 0) > 0 && (
+        <DataRow
+          n={r()}
+          label={`⚠ Marfă voluminoasă (${breakdown.bulkyUnits} buc. polistiren / vată)`}
+          value={
+            (breakdown.bulkyTransports ?? 0) > 0
+              ? `+${breakdown.bulkyTransports} transport${
+                  breakdown.bulkyTransports === 1 ? "" : "uri"
+                } suplimentar${breakdown.bulkyTransports === 1 ? "" : "e"} (prag 24 buc.)`
+              : "sub pragul de 24 buc. — fără transport suplimentar"
+          }
+          hint="regula voluminos"
+        />
+      )}
       {/* Unloading tax ("descărcare") — a SEPARATE flat fee (210 RON cu TVA
           each, 177.69 fără TVA), not commissioned. Shown whenever a
           qualifying unloading was detected; muted "—" otherwise. */}
