@@ -344,6 +344,7 @@ describe("linkDocuments — degenerate stacks", () => {
       doc(2, "combined", {
         awbConfident: false,
         recipientName: "Liliana Radu",
+        awbRaw: { recipient_name: "Liliana Radu" }, // the LABEL prints her name
         invoiceRaw: { order_number: "480700" },
       }),
     ]);
@@ -351,6 +352,42 @@ describe("linkDocuments — degenerate stacks", () => {
       { awbIndex: 0, invoiceIndices: [1] },
       { awbIndex: 2, invoiceIndices: [2] },
     ]);
+  });
+
+  it("a phantom label on an invoice photo never anchors a pair — the missing AWB is exposed", () => {
+    // The Roxana Petre case: a stack of her invoice photos, one reported
+    // as "combined" because the model mistook the invoice's printed
+    // Standard/km/L-code fields for a courier label — but that label has
+    // NO digits and NO printed recipient (her name came from the BUYER
+    // block). The real AWB was never photographed. Nothing may pair:
+    // every photo surfaces unpaired so the human SEES the AWB is missing,
+    // instead of a ready pair with an empty AWB and a phantom price.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        awbConfident: false,
+        recipientName: "ROXANA PETRE",
+        awbRaw: { service_text: "Standard", distance_extra_km: 23, content_code: "L07-26-633018" },
+        invoiceRaw: { buyer_name: "ROXANA PETRE", order_number: "481064" },
+        orderNumber: "481064",
+      }),
+      doc(1, "invoice", { recipientName: "ROXANA PETRE" }),
+      doc(2, "invoice", { recipientName: "ROXANA PETRE" }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0, 1, 2]);
+  });
+
+  it("a combined with a printed label recipient but unreadable digits still anchors its pair", () => {
+    const { groups } = linkDocuments([
+      doc(0, "combined", {
+        awbConfident: false,
+        recipientName: "Mihai Popa",
+        awbRaw: { recipient_name: "Mihai Popa" },
+        invoiceRaw: { buyer_name: "Mihai Popa", invoice_total_gross: 250 },
+      }),
+      doc(1, "invoice", { recipientName: "Mihai Popa" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
   });
 
   it("a nameless invoice photo between two shipments is never guessed — unpaired", () => {

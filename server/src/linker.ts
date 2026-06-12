@@ -177,6 +177,28 @@ function nameScore(a: DocInfo, b: DocInfo): number {
 }
 
 /**
+ * Does a combined photo's AWB half show a REAL courier label? Invoices
+ * and avize print "Standard", km and content codes too, so the model
+ * sometimes decorates a plain invoice photo with a phantom report_awb —
+ * no digits, no recipient printed ON THE LABEL (the doc's recipientName
+ * then comes from the invoice buyer fallback, which proves nothing).
+ * Live case: Roxana Petre's invoice stack anchored a 5-image pair with
+ * NO AWB anywhere. A label is real only if it shows usable AWB digits
+ * or its own printed recipient/phone/address/hub.
+ */
+function awbSubstance(d: DocInfo): boolean {
+  if (awbDigits(d) !== null) return true;
+  const r = (d.awbRaw ?? {}) as Record<string, unknown>;
+  const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  return (
+    text(r.recipient_name) !== "" ||
+    text(r.recipient_phone) !== "" ||
+    text(r.recipient_address) !== "" ||
+    text(r.hub_destination) !== ""
+  );
+}
+
+/**
  * Does a combined photo's invoice half show a REAL invoice? Labels are
  * photographed lying ON the document pile, so a SLIVER of whatever sheet
  * is underneath (an item row peeking out below the label) gets reported
@@ -224,6 +246,13 @@ function invoiceSubstance(d: DocInfo): boolean {
  * its own (the self-pair convention the extractor already understands).
  */
 export function linkDocuments(docs: DocInfo[]): LinkResult {
+  // Normalize FIRST: a "combined" whose AWB half identifies nothing
+  // label-like is an INVOICE the model decorated with a phantom label
+  // (avize and invoice headers print Standard/km/codes too). Letting it
+  // act as an anchor would build a pair with NO AWB in it — so it is
+  // demoted to a plain invoice before any anchoring happens.
+  docs = docs.map((d) => (d.type === "combined" && !awbSubstance(d) ? { ...d, type: "invoice" } : d));
+
   const anchorsIn = docs
     .filter((d) => d.type === "awb" || d.type === "combined")
     .sort((a, b) => a.index - b.index);
