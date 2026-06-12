@@ -377,6 +377,26 @@ describe("linkDocuments — degenerate stacks", () => {
     expect(unpaired).toEqual([0, 1, 2]);
   });
 
+  it("an AWB photo showing only the BUYER BLOCK of the invoice behind it never self-pairs", () => {
+    // The Omer Filiz case: the label sits ON its invoice, so the photo
+    // catches the Cumparator block — but no number, no comandă, no
+    // totals. Self-pairing on that ghost masks the real invoice photos
+    // (here misread "FILIS" vs "FILIZ", below the name threshold), so
+    // label AND invoices must all surface unpaired for the human.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "007211755",
+        recipientName: "OMER FILIZ",
+        awbRaw: { recipient_name: "OMER FILIZ", hub_destination: "Constanta Hub" },
+        invoiceRaw: { buyer_name: "FILIS OMER" },
+      }),
+      doc(1, "invoice", { recipientName: "FILIS OMER" }),
+      doc(2, "invoice", { recipientName: "FILIS OMER" }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0, 1, 2]);
+  });
+
   it("a combined with a printed label recipient but unreadable digits still anchors its pair", () => {
     const { groups } = linkDocuments([
       doc(0, "combined", {

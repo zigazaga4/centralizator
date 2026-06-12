@@ -214,7 +214,11 @@ function invoiceSubstance(d: DocInfo): boolean {
   if (inv.length >= 6) return true;
   const ord = (d.orderNumber ?? text(r.order_number)).replace(/\D/g, "");
   if (ord.length >= 4) return true;
-  if (text(r.buyer_name) !== "" || text(r.buyer_cui) !== "") return true;
+  // NOTE: a buyer block alone (Cumparator name/CIF) is NOT substance —
+  // the model reads it off the invoice peeking from BEHIND the label
+  // (live case: AWB 007211755 self-paired on a bare Cumparator block,
+  // masking its real, separately-photographed invoices). A usable
+  // invoice needs billable evidence: a number, a comandă, or totals.
   for (const k of ["invoice_total_gross", "invoice_total_net", "invoice_total_vat"]) {
     const v = r[k];
     const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
