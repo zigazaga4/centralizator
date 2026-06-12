@@ -422,11 +422,48 @@ describe("linkDocuments — degenerate stacks", () => {
     ]);
   });
 
-  it("a lone combined photo forms a complete self-pair", () => {
+  it("a lone combined photo with invoice SUBSTANCE forms a complete self-pair", () => {
+    // The Cerasela Ionescu shape: label clipped onto its full invoice —
+    // number, buyer and totals all readable in the one photo.
     const { groups } = linkDocuments([
-      doc(0, "combined", { awbNumber: "007211001", recipientName: "A B", orderNumber: "1" }),
+      doc(0, "combined", {
+        awbNumber: "007211253",
+        recipientName: "Cerasela Ionescu",
+        invoiceNumber: "0072600058403",
+        orderNumber: "480805",
+        invoiceRaw: { buyer_name: "Cerasela Ionescu", invoice_total_gross: 644 },
+      }),
     ]);
     expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [0] }]);
+  });
+
+  it("a label with only an invoice SLIVER never self-pairs — both halves go unpaired", () => {
+    // The Ambrosie 007211168 case: the label photo caught ONE item row of
+    // the sheet underneath (no number, no buyer, no totals). That sliver
+    // is not an invoice; the photo is a LABEL. Its real invoice photo
+    // read no buyer name, so nothing can marry — both surface unpaired.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "007211168",
+        recipientName: "Ambrosie Camelia Elena Frumosu",
+        invoiceRaw: { items: [{ name: "PERGOLA OMEGA ALUMINIU 400X282CM" }] },
+      }),
+      doc(1, "invoice", {}), // the real invoice — buyer unreadable
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0, 1]);
+  });
+
+  it("a sliver-label still marries its real invoice by NAME", () => {
+    const { groups } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "007211168",
+        recipientName: "Ambrosie Camelia Elena Frumosu",
+        invoiceRaw: { items: [{ name: "PERGOLA OMEGA ALUMINIU 400X282CM" }] },
+      }),
+      doc(1, "invoice", { recipientName: "Camelia Elena Ambrosie" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
   });
 
   it("empty input yields no groups", () => {

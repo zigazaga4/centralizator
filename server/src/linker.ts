@@ -177,6 +177,31 @@ function nameScore(a: DocInfo, b: DocInfo): number {
 }
 
 /**
+ * Does a combined photo's invoice half show a REAL invoice? Labels are
+ * photographed lying ON the document pile, so a SLIVER of whatever sheet
+ * is underneath (an item row peeking out below the label) gets reported
+ * as report_invoice too — but a sliver with no invoice number, no
+ * comandă, no buyer and no totals identifies NO invoice (live case: AWB
+ * 007211168 self-paired on a one-row sliver). Such a photo is a plain
+ * label and must wait for its real invoice, never marry itself.
+ */
+function invoiceSubstance(d: DocInfo): boolean {
+  const r = (d.invoiceRaw ?? {}) as Record<string, unknown>;
+  const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  const inv = (d.invoiceNumber ?? text(r.invoice_number)).replace(/\D/g, "");
+  if (inv.length >= 6) return true;
+  const ord = (d.orderNumber ?? text(r.order_number)).replace(/\D/g, "");
+  if (ord.length >= 4) return true;
+  if (text(r.buyer_name) !== "" || text(r.buyer_cui) !== "") return true;
+  for (const k of ["invoice_total_gross", "invoice_total_net", "invoice_total_vat"]) {
+    const v = r[k];
+    const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+    if (Number.isFinite(n) && n > 0) return true;
+  }
+  return false;
+}
+
+/**
  * Link a stack of per-image readings into shipment groups.
  *
  * Anchors (awb/combined photos) are deduplicated first — same full number,
@@ -397,6 +422,13 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       nameTokenSet(a.recipientName).size > 0 ||
       ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident);
     if (a.type === "combined" && hasAwbIdentity) {
+      if (!invoiceSubstance(a)) {
+        // The "invoice" is a sliver peeking from under the label — this
+        // photo IS a label. It waits for a real invoice photo (married
+        // by name below) like any other lone label, or goes unpaired.
+        pendingLabels.push(a);
+        continue;
+      }
       // Its invoice may be a SECOND PHOTO of an invoice already inside a
       // pair (the recurring stray-sheet label makes such photos look like
       // their own shipment) — same invoice number/comandă proves it.

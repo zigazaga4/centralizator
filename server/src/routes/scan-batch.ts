@@ -96,13 +96,21 @@ async function processGroup(
 
   // Order the stored images AWB-first, then invoices in scan order — the
   // same convention the desktop app uses, so the detail view reads right.
+  // A combined photo (label clipped onto its own invoice) appears in the
+  // group as BOTH halves (awbIndex inside invoiceIndices) but is ONE
+  // photo — store it exactly once, never duplicated.
   const awb = group.awbIndex !== null ? all[group.awbIndex] : undefined;
-  const invoices = group.invoiceIndices.map((i) => all[i]!).filter(Boolean);
+  const selfPaired = group.awbIndex !== null && group.invoiceIndices.includes(group.awbIndex);
+  const invoices = group.invoiceIndices
+    .filter((i) => i !== group.awbIndex)
+    .map((i) => all[i]!)
+    .filter(Boolean);
   const ordered: BatchImage[] = [...(awb ? [awb] : []), ...invoices];
 
-  // The linker guarantees only VALID pairs (AWB + ≥1 invoice). If that
-  // contract ever breaks, skip — the app shows pairs, never fragments.
-  if (!awb || invoices.length === 0) {
+  // The linker guarantees only VALID pairs: an AWB plus ≥1 invoice —
+  // possibly the SAME photo for a combined document. If that contract
+  // ever breaks, skip — the app shows pairs, never fragments.
+  if (!awb || (invoices.length === 0 && !selfPaired)) {
     log.warn({ group }, "scan-batch: linker emitted a non-pair — skipped (contract violation)");
     return;
   }
