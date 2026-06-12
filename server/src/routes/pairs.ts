@@ -38,6 +38,7 @@ import {
   type PairStatus,
 } from "../db.js";
 import { suggestPairs, SUGGEST_MAX_IMAGES } from "../classify.js";
+import { COLLABORATORS, type Collaborator } from "../tariffs.js";
 import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
 import type { Routing } from "../schema.js";
 import { STORES } from "../stores.js";
@@ -77,6 +78,12 @@ const ImageWireSchema = z.object({
 const NewPairSchema = z.object({
   id: z.string().min(1),
   day: isoDay,
+  /** Upload-time collaborator assignment. The manual-pairing flow sends
+   *  the orphan docs' inherited collaborator; omitted/null = direct. */
+  collaborator: z
+    .enum(COLLABORATORS as readonly [Collaborator, ...Collaborator[]])
+    .nullable()
+    .optional(),
   images: z.array(ImageWireSchema).min(2).max(12),
 });
 
@@ -333,6 +340,7 @@ export default async function pairRoutes(app: FastifyInstance) {
       const pair = insertPair({
         id: parsed.data.id,
         day: parsed.data.day,
+        collaborator: parsed.data.collaborator ?? null,
         images,
       });
       return reply.code(201).send({ pair });

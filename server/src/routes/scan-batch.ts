@@ -28,6 +28,7 @@ import { assembleExtracted, priceExtracted } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
 import { insertPair, persistPairStatus, signalExtracting, type UnpairedDocType } from "../db.js";
+import { COLLABORATORS, type Collaborator } from "../tariffs.js";
 
 const ACCEPTED_MIME = new Set([
   "image/jpeg",
@@ -90,6 +91,7 @@ async function processGroup(
   all: BatchImage[],
   docs: DocInfo[],
   day: string,
+  collaborator: Collaborator | null,
   log: FastifyBaseLogger,
 ): Promise<void> {
   const id = randomUUID();
@@ -118,6 +120,9 @@ async function processGroup(
   insertPair({
     id,
     day,
+    // The whole batch belongs to ONE collaborator — the courier picked it
+    // in the scan flow, so every pair the batch produces inherits it.
+    collaborator,
     images: ordered.map((img) => ({
       name: img.name,
       mimeType: img.mimeType,
@@ -174,7 +179,13 @@ async function processGroup(
 }
 
 /** The background job: dedup, group, then fan the groups out to the pipeline. */
-async function processBatch(batchId: string, allImages: BatchImage[], day: string, log: FastifyBaseLogger): Promise<void> {
+async function processBatch(
+  batchId: string,
+  allImages: BatchImage[],
+  day: string,
+  collaborator: Collaborator | null,
+  log: FastifyBaseLogger,
+): Promise<void> {
   try {
     // Perceptual dedup FIRST: the couriers re-shoot and re-send the same
     // photo; dHash drops near-identical copies deterministically so the
@@ -240,6 +251,9 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
         insertPair({
           id: randomUUID(),
           day,
+          // Orphans keep the batch's collaborator too — when a human
+          // manually pairs them later, the new pair inherits it.
+          collaborator,
           status: { kind: "unpaired", docType },
           images: [{ name: img.name, mimeType: img.mimeType, size: img.bytes.length, bytes: img.bytes }],
         });
@@ -264,7 +278,7 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
       log.warn({ batchId }, "scan-batch: grouping produced no groups");
       return;
     }
-    await runPool(groups, BATCH_CONCURRENCY, (g) => processGroup(g, images, docs, day, log));
+    await runPool(groups, BATCH_CONCURRENCY, (g) => processGroup(g, images, docs, day, collaborator, log));
     log.info({ batchId }, "scan-batch: done");
   } catch (err) {
     log.error({ err, batchId }, "scan-batch: grouping failed — no pairs created");
@@ -278,11 +292,22 @@ export default async function scanBatchRoutes(app: FastifyInstance) {
     // the day tab the user dropped onto, so a drop on "tomorrow" files
     // under tomorrow. The phone never sends it → today's bucket.
     let requestedDay: string | null = null;
+    // Optional `collaborator` form field: the partner the user picked in
+    // the upload flow (phone modal / desktop modal). Validated against
+    // the canonical roster; anything else (including "direct") → null.
+    let collaborator: Collaborator | null = null;
 
     for await (const part of req.parts()) {
       if (part.type === "field") {
         if (part.fieldname === "day" && typeof part.value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(part.value)) {
           requestedDay = part.value;
+        }
+        if (
+          part.fieldname === "collaborator" &&
+          typeof part.value === "string" &&
+          (COLLABORATORS as readonly string[]).includes(part.value)
+        ) {
+          collaborator = part.value as Collaborator;
         }
         continue;
       }
@@ -309,7 +334,7 @@ export default async function scanBatchRoutes(app: FastifyInstance) {
 
     // Fire-and-forget: kick off the background job and answer the phone
     // right away. `void` documents that we intentionally don't await it.
-    void processBatch(batchId, images, day, app.log);
+    void processBatch(batchId, images, day, collaborator, app.log);
 
     return reply.code(202).send({ batchId, imageCount: images.length, status: "processing" });
   });

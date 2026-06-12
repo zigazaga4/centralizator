@@ -1,4 +1,4 @@
-import type { CompareReport, Extracted, ExtractResponse, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
+import type { CollaboratorKey, CompareReport, Extracted, ExtractResponse, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
 
 /**
  * In dev, Vite proxies /api/* to the Fastify server on localhost:3000.
@@ -58,12 +58,16 @@ export async function extractAndPrice(images: File[]): Promise<ExtractResponse> 
 export async function scanBatch(
   images: File[],
   day: string,
+  collaborator: CollaboratorKey | null = null,
 ): Promise<{ batchId: string; imageCount: number }> {
   if (images.length < 1) throw new Error("scanBatch needs at least one image.");
   const form = new FormData();
   // The day tab the user is looking at — the server files the resulting
   // pairs under it (the phone omits this and gets "today").
   form.append("day", day);
+  // The collaborator picked in the upload modal — every pair this batch
+  // produces is stamped with it server-side (omitted = direct).
+  if (collaborator) form.append("collaborator", collaborator);
   for (const img of images) form.append("files", img);
   const res = await fetch(`${BASE}/scan-batch`, {
     method: "POST",

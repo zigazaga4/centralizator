@@ -573,6 +573,15 @@ export interface Pair {
   /** Stable id — survives re-renders, re-orders, and removals. */
   id: string;
   /**
+   * Collaborator this pair was filed to AT UPLOAD TIME — the user picks
+   * one in the upload modal (phone scanner / desktop add-card) and the
+   * server stamps every pair of that batch with it. The header dropdown
+   * FILTERS the queue by this assignment, and the payout column shows
+   * THIS collaborator's total. `null`/absent = direct or a legacy pair
+   * from before the column existed (shown under every collaborator).
+   */
+  collaborator?: CollaboratorKey | null;
+  /**
    * Filing day in local-TZ ISO form (`YYYY-MM-DD`). The user organises
    * the queue by day — one tab per day, like an Excel workbook — so
    * Monday's paperwork lives in one bucket and Tuesday's in another.

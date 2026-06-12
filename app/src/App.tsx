@@ -271,6 +271,23 @@ export default function App() {
   /** Does this pair belong in the active Standard/Macara list? */
   const inActiveView = useCallback((p: Pair) => inView(p, viewMode), [viewMode]);
 
+  /**
+   * Does this pair belong to the selected collaborator? The assignment is
+   * made IN THE UPLOAD FLOW (phone/desktop modal) and persisted on the
+   * pair — the header dropdown filters by it. Two never-hide rules:
+   *   • an UNASSIGNED pair (legacy / direct upload) shows under every
+   *     collaborator, same principle as an unfiled store, and
+   *   • when no collaborator is selected (Constanța = direct), nothing
+   *     is filtered out — the store filter already scopes the queue.
+   */
+  const inActiveCollaborator = useCallback(
+    (p: Pair) => {
+      const c = p.collaborator ?? null;
+      return c === null || selectedCollaborator === null || c === selectedCollaborator;
+    },
+    [selectedCollaborator],
+  );
+
   // Live ref so callbacks (runAll, repricePair, keydown handler) always
   // see the freshest pairs without re-creating themselves on every
   // change. We also write to it synchronously inside every mutator so
@@ -454,9 +471,9 @@ export default function App() {
    * "tomorrow's tab" files under tomorrow without an extra click.
    */
   const scanImages = useCallback(
-    async (files: File[]): Promise<boolean> => {
+    async (files: File[], collaborator: CollaboratorKey | null): Promise<boolean> => {
       try {
-        await scanBatch(files, selectedDay);
+        await scanBatch(files, selectedDay, collaborator);
         return true;
       } catch (err) {
         console.error("scan-batch upload failed:", err);
@@ -491,7 +508,11 @@ export default function App() {
     // Scoped to the active centralizator: "Goleşte ziua" clears only the
     // current store's pairs for the day, leaving the other stores intact.
     const toDelete = pairsRef.current.filter(
-      (p) => p.day === selectedDay && inActiveStore(p) && inActiveView(p),
+      (p) =>
+        p.day === selectedDay &&
+        inActiveStore(p) &&
+        inActiveView(p) &&
+        inActiveCollaborator(p),
     );
     if (toDelete.length === 0) return;
     for (const p of toDelete) {
@@ -509,7 +530,7 @@ export default function App() {
         console.error("Failed to delete pair from DB:", err),
       );
     }
-  }, [commit, selectedDay, markLocal, inActiveStore, inActiveView]);
+  }, [commit, selectedDay, markLocal, inActiveStore, inActiveView, inActiveCollaborator]);
 
   /* ── Status transitions (shared by run + reprice) ─────────────────── */
 
@@ -782,6 +803,9 @@ export default function App() {
       const newPair: Pair = {
         id: uuid(),
         day: docs[0]!.day,
+        // Orphans carry the collaborator their batch was uploaded for —
+        // the hand-built pair inherits it so it files correctly.
+        collaborator: docs[0]!.collaborator ?? null,
         images: files,
         status: { kind: "pending" },
       };
@@ -899,9 +923,10 @@ export default function App() {
           p.day === selectedDay &&
           p.status.kind !== "unpaired" &&
           inActiveStore(p) &&
-          inActiveView(p),
+          inActiveView(p) &&
+          inActiveCollaborator(p),
       ),
-    [pairs, selectedDay, inActiveStore, inActiveView],
+    [pairs, selectedDay, inActiveStore, inActiveView, inActiveCollaborator],
   );
 
   // Documents the scanner could not pair by name/address on this day.
@@ -926,13 +951,13 @@ export default function App() {
     let standard = 0;
     let macara = 0;
     for (const p of pairs) {
-      if (p.day !== selectedDay || !inActiveStore(p)) continue;
+      if (p.day !== selectedDay || !inActiveStore(p) || !inActiveCollaborator(p)) continue;
       if (p.status.kind === "unpaired") continue; // orphans are not pairs — they have their own pill
       if (inView(p, "macara")) macara += 1;
       if (inView(p, "standard")) standard += 1;
     }
     return { standard, macara };
-  }, [pairs, selectedDay, inActiveStore]);
+  }, [pairs, selectedDay, inActiveStore, inActiveCollaborator]);
 
   // One DayCount per day that holds at least one pair IN THE ACTIVE
   // centralizator, ordered by ISO string. Scoping the tabs to the active
@@ -941,7 +966,7 @@ export default function App() {
   const dayCounts = useMemo<DayCount[]>(() => {
     const m = new Map<string, { count: number; readyCount: number }>();
     for (const p of pairs) {
-      if (!inActiveStore(p) || !inActiveView(p)) continue;
+      if (!inActiveStore(p) || !inActiveView(p) || !inActiveCollaborator(p)) continue;
       const c = m.get(p.day) ?? { count: 0, readyCount: 0 };
       // Unpaired orphans keep the day's tab alive (so they stay reachable)
       // but are NOT counted — the warning pill is their counter.
@@ -952,7 +977,7 @@ export default function App() {
       m.set(p.day, c);
     }
     return Array.from(m.entries()).map(([day, v]) => ({ day, ...v }));
-  }, [pairs, inActiveStore, inActiveView]);
+  }, [pairs, inActiveStore, inActiveView, inActiveCollaborator]);
 
   // Header counters — scoped to current day so "Calculează (N)" tells
   // the truth about what pressing the button will run.
@@ -1084,7 +1109,7 @@ export default function App() {
             pair={selectedPair}
             index={selectedIdx}
             city={selectedCity}
-            collaborator={selectedCollaborator}
+            collaborator={selectedPair.collaborator ?? selectedCollaborator}
             verifying={verifyingIds.has(selectedPair.id)}
             onPatch={(patch) => patchPair(selectedPair.id, patch)}
             onBack={() => setSelectedId(null)}
@@ -1334,7 +1359,7 @@ function CollaboratorSelect({
       title={
         empty
           ? "Constanța — fără colaborator (plată directă)"
-          : "Colaborator — alege ce variantă de plată să afişeze tabelul"
+          : "Colaborator — filtrează perechile alocate acestui colaborator (alocarea se face la încărcare); perechile vechi, fără alocare, apar peste tot"
       }
     >
       <span>Colaborator</span>

@@ -10,6 +10,11 @@ import {
 } from "./lib/camera";
 import { detect } from "./lib/scanner";
 import { loadTestBatch } from "./lib/testImages";
+import {
+  COLLABORATOR_KEYS,
+  COLLABORATOR_LABEL,
+  type CollaboratorKey,
+} from "@shared/collaborators";
 
 type SendState =
   | { kind: "idle" }
@@ -23,6 +28,23 @@ type CamState = "starting" | "ready" | "denied" | "error";
 // Quick to lock (detection is now reliable), slower to drop → calm + steady.
 const LOCK_ON = 2; // consecutive confident frames to light the frame green
 const LOCK_OFF = 3; // consecutive misses to drop the lock (hysteresis)
+
+/** localStorage key for the last-used collaborator — preselected the next
+ *  time the picker opens, so a courier who always scans for the same
+ *  partner confirms with one tap. */
+const LS_COLLABORATOR = "centralizator.collaborator";
+
+function readStoredCollaborator(): CollaboratorKey | null {
+  try {
+    const s = localStorage.getItem(LS_COLLABORATOR);
+    if (s && (COLLABORATOR_KEYS as readonly string[]).includes(s)) {
+      return s as CollaboratorKey;
+    }
+  } catch {
+    /* localStorage may be unavailable — fall through. */
+  }
+  return null;
+}
 
 /** Draw the always-on viewfinder: four corner brackets framing the target
  *  zone, plus a faint rectangle. White while searching, green when locked.
@@ -90,6 +112,21 @@ export default function App() {
   const [send, setSend] = useState<SendState>({ kind: "idle" });
   const [online, setOnline] = useState<boolean | null>(null);
   const [justCaptured, setJustCaptured] = useState(false);
+
+  // Collaborator assignment — picked in a modal right before the upload,
+  // so every pair the batch produces lands on the right partner. The
+  // last choice is remembered as next time's default.
+  const [collaborator, setCollaborator] = useState<CollaboratorKey | null>(readStoredCollaborator);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (collaborator) localStorage.setItem(LS_COLLABORATOR, collaborator);
+      else localStorage.removeItem(LS_COLLABORATOR);
+    } catch {
+      /* best-effort — losing this only forgets the default */
+    }
+  }, [collaborator]);
 
   // Connection dot — probe on mount, then every 20s.
   useEffect(() => {
@@ -231,32 +268,47 @@ export default function App() {
     });
   }, []);
 
-  const onSend = useCallback(async () => {
+  // "Trimite" opens the collaborator picker — the actual upload happens
+  // in `doSend` once the user confirms whose documents these are.
+  const onSend = useCallback(() => {
     if (images.length < 2 || send.kind === "sending") return;
-    setSend({ kind: "sending" });
-    try {
-      const res = await scanBatch(images.map((i) => i.file));
-      for (const i of images) URL.revokeObjectURL(i.previewUrl);
-      setImages([]);
-      setSend({ kind: "sent", count: res.imageCount });
-    } catch (err) {
-      setSend({ kind: "error", message: (err as Error).message });
-    }
-  }, [images, send.kind]);
+    setPickerOpen(true);
+  }, [images.length, send.kind]);
+
+  /** The real upload, fired by the picker's confirm button. Saves the
+   *  chosen collaborator as the next default, then ships the batch. */
+  const doSend = useCallback(
+    async (chosen: CollaboratorKey | null) => {
+      if (images.length < 2 || send.kind === "sending") return;
+      setPickerOpen(false);
+      setCollaborator(chosen);
+      setSend({ kind: "sending" });
+      try {
+        const res = await scanBatch(images.map((i) => i.file), chosen);
+        for (const i of images) URL.revokeObjectURL(i.previewUrl);
+        setImages([]);
+        setSend({ kind: "sent", count: res.imageCount });
+      } catch (err) {
+        setSend({ kind: "error", message: (err as Error).message });
+      }
+    },
+    [images, send.kind],
+  );
 
   // Fire the bundled six-image sample batch (3 AWB+invoice pairs) at the
-  // server — a one-tap end-to-end check that needs no scanning.
+  // server — a one-tap end-to-end check that needs no scanning. Uses the
+  // remembered collaborator (test data, no extra modal friction).
   const onTest = useCallback(async () => {
     if (send.kind === "sending") return;
     setSend({ kind: "sending" });
     try {
       const files = await loadTestBatch();
-      const res = await scanBatch(files);
+      const res = await scanBatch(files, collaborator);
       setSend({ kind: "sent", count: res.imageCount });
     } catch (err) {
       setSend({ kind: "error", message: (err as Error).message });
     }
-  }, [send.kind]);
+  }, [send.kind, collaborator]);
 
   const retryCamera = useCallback(() => window.location.reload(), []);
 
@@ -439,6 +491,117 @@ export default function App() {
           e.target.value = "";
         }}
       />
+
+      {/* Collaborator picker — the gate every upload passes through */}
+      {pickerOpen && (
+        <CollaboratorPicker
+          initial={collaborator}
+          count={images.length}
+          onCancel={() => setPickerOpen(false)}
+          onConfirm={doSend}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Bottom-sheet modal shown when the courier taps "Trimite": pick WHOSE
+ * documents these are, then confirm. Every pair the server builds from
+ * this batch is stamped with the chosen collaborator, so the desktop
+ * queue files it under the right partner automatically. The last choice
+ * arrives preselected (localStorage) — the common case is one tap on
+ * "Trimite" inside the sheet.
+ */
+function CollaboratorPicker({
+  initial,
+  count,
+  onCancel,
+  onConfirm,
+}: {
+  initial: CollaboratorKey | null;
+  count: number;
+  onCancel: () => void;
+  onConfirm: (chosen: CollaboratorKey | null) => void;
+}) {
+  const [choice, setChoice] = useState<CollaboratorKey | null>(initial);
+
+  const option = (key: CollaboratorKey | null, label: string) => {
+    const active = choice === key;
+    return (
+      <button
+        key={key ?? "direct"}
+        type="button"
+        onClick={() => setChoice(key)}
+        className={
+          "flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm font-medium transition active:scale-[0.99] " +
+          (active
+            ? "border-emerald-400 bg-emerald-600/25 text-emerald-200"
+            : "border-white/15 bg-white/5 text-slate-200")
+        }
+      >
+        <span>{label}</span>
+        <span
+          className={
+            "flex h-5 w-5 items-center justify-center rounded-full border " +
+            (active ? "border-emerald-400 bg-emerald-500" : "border-white/30")
+          }
+        >
+          {active && (
+            <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <div
+      className="absolute inset-0 z-30 flex flex-col justify-end bg-black/70"
+      onClick={onCancel}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Alege colaboratorul"
+    >
+      <div
+        className="rounded-t-2xl bg-slate-900 px-4 pt-4 shadow-2xl"
+        style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom))" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-100">
+              Pentru ce colaborator sunt documentele?
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Toate perechile din acest lot se salvează pe colaboratorul ales.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Renunță"
+            className="rounded-full bg-white/10 px-2.5 py-1 text-sm text-slate-300"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto pb-1">
+          {COLLABORATOR_KEYS.map((k) => option(k, COLLABORATOR_LABEL[k]))}
+          {option(null, "Direct (fără colaborator)")}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onConfirm(choice)}
+          className="mt-3 w-full rounded-xl bg-emerald-600 px-4 py-3.5 text-base font-semibold text-white active:scale-[0.99]"
+        >
+          Trimite ({count} {count === 1 ? "poză" : "poze"})
+        </button>
+      </div>
     </div>
   );
 }

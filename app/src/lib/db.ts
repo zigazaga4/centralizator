@@ -26,7 +26,7 @@
  * pair queue in App.tsx for what's recoverable on the next request.
  */
 
-import type { Extracted, Pair, PairImageRef, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
+import type { CollaboratorKey, Extracted, Pair, PairImageRef, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
 
 /**
  * Vite proxies /api/* to the Fastify server during dev. In a packaged
@@ -86,6 +86,9 @@ export interface WirePair {
   day: string;
   createdAt: number;
   updatedAt: number;
+  /** Upload-time collaborator assignment (see `Pair.collaborator`).
+   *  Optional so a pre-v4 server payload still decodes. */
+  collaborator?: CollaboratorKey | null;
   status: WireStatus;
   images: WireImage[];
 }
@@ -170,6 +173,7 @@ export function wirePairToClient(wp: WirePair): Pair {
   return {
     id: wp.id,
     day: wp.day,
+    collaborator: wp.collaborator ?? null,
     images,
     ...(refs.length > 0 ? { imageRefs: refs } : {}),
     status: wp.status as PairStatus,
@@ -306,7 +310,12 @@ export async function insertPair(pair: Pair): Promise<void> {
   await httpRetry(`insertPair ${pair.id}`, "/pairs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: pair.id, day: pair.day, images }),
+    body: JSON.stringify({
+      id: pair.id,
+      day: pair.day,
+      collaborator: pair.collaborator ?? null,
+      images,
+    }),
   });
   const total = images.reduce((a, w) => a + (w.dataB64?.length ?? 0), 0);
   console.info(

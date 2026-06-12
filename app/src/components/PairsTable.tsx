@@ -118,8 +118,11 @@ export function PairsTable({
       continue;
     }
     sumCity += b.cityCommissions[site]?.customerTotal ?? 0;
-    if (collaborator) {
-      sumCollab += b.collaboratorPrices[collaborator]?.total ?? 0;
+    // Each pair pays ITS OWN collaborator (assigned in the upload flow);
+    // unassigned legacy pairs fall back to the header selection.
+    const rowCollab = p.collaborator ?? collaborator;
+    if (rowCollab) {
+      sumCollab += b.collaboratorPrices[rowCollab]?.total ?? 0;
     }
   }
 
@@ -389,12 +392,16 @@ function PairRow({
           customerTotal is in the breakdown already. */}
       <CityTotalCell breakdown={breakdown} site={site} />
 
-      {/* Plată colab. — what the selected courier-side collaborator
-          gets paid for this row. Same coral accent as the customer
-          total because both are bottom-line numbers; the column
-          header carries the collaborator name so the user knows
-          whose total this is. */}
-      <CollaboratorTotalCell breakdown={breakdown} collaborator={collaborator} />
+      {/* Plată colab. — what this pair's OWN collaborator (assigned in
+          the upload flow) gets paid; unassigned legacy pairs fall back
+          to the header selection. Same coral accent as the customer
+          total because both are bottom-line numbers; an assigned row
+          carries the partner's name so ownership reads per row. */}
+      <CollaboratorTotalCell
+        breakdown={breakdown}
+        collaborator={pair.collaborator ?? collaborator}
+        assigned={!!pair.collaborator}
+      />
 
       {/* Remove */}
       <button
@@ -564,13 +571,17 @@ function CityTotalCell({
 /** Collaborator payout cell — single number, mirrors the customer-total
  *  cell's coral accent so both bottom-line numbers read at the same
  *  visual weight. Renders "—" when no collaborator is configured for
- *  the city (Constanța) so the column still aligns. */
+ *  the city (Constanța) so the column still aligns. `assigned` marks a
+ *  pair with its OWN upload-time collaborator: the partner's short name
+ *  renders under the amount so row ownership is visible at a glance. */
 function CollaboratorTotalCell({
   breakdown,
   collaborator,
+  assigned,
 }: {
   breakdown: PricingBreakdown | null;
   collaborator: CollaboratorKey | null;
+  assigned?: boolean;
 }) {
   // Macara runs pay no collaborator bonus (EMV Macara = preț întreg / Macara
   // Ploiești = scădem lunar) — the per-row payout column does not apply.
@@ -604,14 +615,22 @@ function CollaboratorTotalCell({
   const row = breakdown.collaboratorPrices[collaborator];
   return (
     <div
-      className="flex items-center justify-end border-r border-ink-100 bg-coral-50/60 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
+      className="flex flex-col items-end justify-center border-r border-ink-100 bg-coral-50/60 px-3 py-2 text-right"
       title={
-        row
+        (row
           ? `${COLLABORATOR_LABEL[collaborator]} · bonus ${ron(row.bonus)} (${(row.pct * 100).toFixed(1)} %)`
-          : COLLABORATOR_LABEL[collaborator]
+          : COLLABORATOR_LABEL[collaborator]) +
+        (assigned ? " · alocat la încărcare" : "")
       }
     >
-      {row ? ron(row.total) : <Dash />}
+      <span className="text-base font-bold tabular-nums text-coral-700">
+        {row ? ron(row.total) : <Dash />}
+      </span>
+      {assigned && (
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-coral-600/70">
+          {COLLABORATOR_SHORT_LABEL[collaborator]}
+        </span>
+      )}
     </div>
   );
 }

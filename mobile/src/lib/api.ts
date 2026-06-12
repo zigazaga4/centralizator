@@ -15,8 +15,11 @@ const cfg: ApiConfig = {
   apiKey: import.meta.env.VITE_CENTRALIZATOR_API_KEY,
 };
 
-export function scanBatch(files: File[]): Promise<ScanBatchResponse> {
-  return sharedScanBatch(files, cfg);
+export function scanBatch(
+  files: File[],
+  collaborator?: string | null,
+): Promise<ScanBatchResponse> {
+  return sharedScanBatch(files, cfg, { collaborator });
 }
 
 export function health(): Promise<boolean> {

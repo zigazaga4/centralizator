@@ -44,7 +44,7 @@ import { publishPairEvent } from "./events.js";
 import type { Extracted, Verification, Routing, StoreKey } from "./schema.js";
 import type { LmProduct } from "./leroymerlin.js";
 import type { PricingBreakdown } from "./pricing.js";
-import type { Service } from "./tariffs.js";
+import type { Collaborator, Service } from "./tariffs.js";
 
 /* ──────────────────────────────────────────────────────────────────────
  * File location
@@ -158,6 +158,20 @@ const MIGRATIONS: { version: number; up: string }[] = [
       CREATE INDEX IF NOT EXISTS pairs_store_idx ON pairs(store);
     `,
   },
+  {
+    // v4 — per-pair collaborator assignment.
+    //   The collaborator is now chosen IN THE UPLOAD FLOW (phone scanner
+    //   modal / desktop add-card modal) and stamped on every pair the
+    //   batch produces, instead of being a display-only dropdown the
+    //   desktop flips after the fact. One of the five Collaborator keys,
+    //   or NULL = direct / legacy pair from before this column existed
+    //   (legacy pairs show under every collaborator until re-filed).
+    version: 4,
+    up: `
+      ALTER TABLE pairs ADD COLUMN collaborator TEXT;
+      CREATE INDEX IF NOT EXISTS pairs_collaborator_idx ON pairs(collaborator);
+    `,
+  },
 ];
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -239,6 +253,9 @@ export interface PairWire {
   day: string;
   createdAt: number;
   updatedAt: number;
+  /** Collaborator this pair was filed to AT UPLOAD TIME (the courier picks
+   *  one in the scan flow). `null` = direct / legacy pair. */
+  collaborator: Collaborator | null;
   status: PairStatus;
   images: PairImageWire[];
 }
@@ -261,6 +278,8 @@ export interface PairLightWire {
   day: string;
   createdAt: number;
   updatedAt: number;
+  /** Same upload-time collaborator assignment as PairWire. */
+  collaborator: Collaborator | null;
   status: PairStatus;
   images: PairImageMetaWire[];
 }
@@ -279,6 +298,7 @@ interface PairRow {
   verification_json: string | null;
   store: StoreKey | null;
   routing_json: string | null;
+  collaborator: Collaborator | null;
 }
 
 interface ImageRow {
@@ -302,7 +322,7 @@ const stmt = {
   selectAllPairs: db.prepare<[], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
             service, service_fallback, edits_json, breakdown_json,
-            verification_json, store, routing_json
+            verification_json, store, routing_json, collaborator
        FROM pairs
        ORDER BY created_at ASC`,
   ),
@@ -333,16 +353,16 @@ const stmt = {
   selectPair: db.prepare<[string], PairRow>(
     `SELECT id, day, created_at, updated_at, status_kind, status_message,
             service, service_fallback, edits_json, breakdown_json,
-            verification_json, store, routing_json
+            verification_json, store, routing_json, collaborator
        FROM pairs
        WHERE id = ?`,
   ),
   insertPair: db.prepare(
     `INSERT INTO pairs
        (id, day, created_at, updated_at, status_kind, status_message,
-        service, service_fallback, edits_json, breakdown_json)
+        collaborator, service, service_fallback, edits_json, breakdown_json)
      VALUES (@id, @day, @created_at, @updated_at, @status_kind, @status_message,
-             NULL, NULL, NULL, NULL)`,
+             @collaborator, NULL, NULL, NULL, NULL)`,
   ),
   insertImage: db.prepare(
     `INSERT INTO pair_images (pair_id, slot, name, mime_type, size, bytes)
@@ -509,6 +529,7 @@ export function listAllPairs(): PairWire[] {
     day: r.day,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    collaborator: r.collaborator ?? null,
     status: rowToStatus(r),
     images: (byPair.get(r.id) ?? [])
       .sort((a, b) => a.slot - b.slot)
@@ -540,6 +561,7 @@ export function listAllPairsLight(): PairLightWire[] {
     day: r.day,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    collaborator: r.collaborator ?? null,
     status: rowToStatus(r),
     images: (byPair.get(r.id) ?? []).sort((a, b) => a.slot - b.slot),
   }));
@@ -559,6 +581,9 @@ export function getPairImage(
 export interface InsertPairInput {
   id: string;
   day: string;
+  /** Collaborator picked in the upload flow — stamped once at insert,
+   *  never changed by a status transition. Omit/null = direct. */
+  collaborator?: Collaborator | null;
   /** Optional initial status — defaults to "pending". "extracting" is
    *  silently coerced to "pending" because we don't persist that state. */
   status?: PairStatus;
@@ -594,6 +619,7 @@ export function insertPair(input: InsertPairInput): PairWire {
       updated_at: now,
       status_kind: statusKind,
       status_message: statusMessage,
+      collaborator: p.collaborator ?? null,
     });
     for (let i = 0; i < p.images.length; i++) {
       const img = p.images[i]!;
@@ -630,6 +656,7 @@ export function getPair(id: string): PairWire | null {
     day: r.day,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    collaborator: r.collaborator ?? null,
     status: rowToStatus(r),
     images: imageRows.map(imageRowToWire),
   };
