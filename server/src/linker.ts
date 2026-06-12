@@ -361,45 +361,48 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   const droppedJunk: number[] = [];
   const droppedIncomplete: number[] = [...noAnchorOrphans];
   const keyToGroup = new Map<string, DocumentGroup>();
+  const groupOfAnchor = new Map<number, DocumentGroup>();
   const registerGroup = (g: DocumentGroup) => {
     groups.push(g);
+    if (g.awbIndex !== null) groupOfAnchor.set(g.awbIndex, g);
     for (const i of [g.awbIndex!, ...g.invoiceIndices])
       for (const k of invoiceKeysOf(docByIndex.get(i))) if (!keyToGroup.has(k)) keyToGroup.set(k, g);
   };
-  const rescuable: DocInfo[] = [];
 
+  // Pass A — sort the lone anchors by what they actually are:
+  //   • combined with a real AWB identity → a complete pair in one photo;
+  //   • a real label (name or confident number) with no invoice YET →
+  //     pending: an invoice-bearing photo may still marry it below;
+  //   • invoice content without AWB identity → it IS an invoice the model
+  //     mistook for a label — goes to the rescue/demotion passes;
+  //   • identifies nothing → junk.
+  const pendingLabels: DocInfo[] = [];
+  const rescuable: DocInfo[] = [];
   for (const a of anchors) {
     const invoices = [...new Set(assigned.get(a.index)!)].sort((x, y) => x - y);
     if (invoices.length > 0) {
       registerGroup({ awbIndex: a.index, invoiceIndices: invoices });
       continue;
     }
-    // Lone anchor, four fates:
-    //   • a combined photo with a real AWB identity → a complete pair in
-    //     one photo (label + invoice together);
-    //   • invoice content but no AWB identity → maybe a second photo of
-    //     an invoice that already lives in a pair — try the rescue pass;
-    //   • a real label whose invoice never matched → cannot form a valid
-    //     pair → dropped (logged), per command: only valid pairs show;
-    //   • identifies nothing → junk.
     const hasAwbIdentity =
       nameTokenSet(a.recipientName).size > 0 ||
       ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident);
     if (a.type === "combined" && hasAwbIdentity) {
       registerGroup({ awbIndex: a.index, invoiceIndices: [a.index] });
-    } else if (invoiceKeysOf(a).length > 0) {
+    } else if (a.invoiceRaw !== null || invoiceKeysOf(a).length > 0) {
       rescuable.push(a);
     } else if (hasAwbIdentity) {
-      droppedIncomplete.push(a.index);
+      pendingLabels.push(a);
     } else {
       droppedJunk.push(a.index);
     }
   }
 
-  // Rescue pass: an orphan whose invoice number/comandă matches an
-  // invoice already inside a pair is a SECOND PHOTO of that invoice —
-  // fold the image into its pair. No match → it cannot form a valid
-  // pair → dropped (logged).
+  // Pass B — exact rescue: an orphan whose invoice number/comandă matches
+  // an invoice already inside a pair is a SECOND PHOTO of that invoice —
+  // fold the image into its pair (the operator's rule: exact same
+  // invoice → dedupe).
+  const unrescued: DocInfo[] = [];
   for (const p of rescuable) {
     const g = invoiceKeysOf(p)
       .map((k) => keyToGroup.get(k))
@@ -412,8 +415,47 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
         reason: "same invoice content — folded into its pair",
       });
     } else {
-      droppedIncomplete.push(p.index);
+      unrescued.push(p);
     }
+  }
+
+  // Pass C — demotion: what's left is an INVOICE photo. Give it one more
+  // binding chance, against existing groups AND the pending lone labels
+  // (marrying a label completes a pair): by name when it has one, by
+  // IMMEDIATE adjacency (±2 — one shipment's photos are consecutive)
+  // when nameless. A doc naming a person with no matching anchor must
+  // NOT bind by adjacency — that would put someone's invoice in the
+  // wrong pair.
+  const marriedLabels = new Set<number>();
+  for (const p of unrescued) {
+    const pNames = nameTokenSet(p.recipientName);
+    const candidates = [...groupOfAnchor.keys(), ...pendingLabels.map((l) => l.index)]
+      .map((i) => docByIndex.get(i)!)
+      .filter((a) =>
+        pNames.size > 0
+          ? Math.abs(a.index - p.index) <= ASSIGN_WINDOW &&
+            overlapScore(pNames, nameTokenSet(a.recipientName)) >= NAME_MATCH
+          : Math.abs(a.index - p.index) <= 2,
+      )
+      .sort((x, y) => Math.abs(x.index - p.index) - Math.abs(y.index - p.index));
+    const target = candidates[0];
+    if (!target) {
+      droppedIncomplete.push(p.index);
+      continue;
+    }
+    const existing = groupOfAnchor.get(target.index);
+    if (existing) {
+      if (!existing.invoiceIndices.includes(p.index)) existing.invoiceIndices.push(p.index);
+    } else {
+      registerGroup({ awbIndex: target.index, invoiceIndices: [p.index] });
+      marriedLabels.add(target.index);
+    }
+  }
+
+  // Pass D — pending labels that never got an invoice cannot form a valid
+  // pair → dropped (logged), per command: only valid pairs are shown.
+  for (const l of pendingLabels) {
+    if (!marriedLabels.has(l.index)) droppedIncomplete.push(l.index);
   }
 
   for (const g of groups) g.invoiceIndices.sort((x, y) => x - y);

@@ -302,6 +302,52 @@ describe("linkDocuments — degenerate stacks", () => {
     expect(droppedIncomplete.sort()).toEqual([0, 1, 5]);
   });
 
+  it("a lone label MARRIES an adjacent nameless invoice photo into a valid pair", () => {
+    // The live Pulia case: the label photo and its invoice photo (stray
+    // flipped label on it, buyer unreadable) must form ONE pair instead
+    // of both being dropped separately.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211290", recipientName: "PULIA VITALIY" }),
+      doc(1, "combined", { awbConfident: false, invoiceRaw: { order_number: "480831" } }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+  });
+
+  it("a named invoice-bearing label photo with NO matching anchor is dropped, never adjacency-bound", () => {
+    // A document naming a different person next to Iuliana's pair:
+    // binding by adjacency would put their invoice inside the wrong
+    // shipment — it must be dropped instead.
+    const { groups, droppedIncomplete } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211281", recipientName: "Iuliana-Ioana" }),
+      doc(1, "invoice", { recipientName: "Iuliana-Ioana" }),
+      doc(2, "awb", {
+        awbConfident: false,
+        recipientName: "Liliana Radu",
+        invoiceRaw: { supplier_name: "Leroy Merlin" },
+      }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(droppedIncomplete).toEqual([2]);
+  });
+
+  it("a combined photo with a readable name forms its own valid pair", () => {
+    // Liliana's real photo: label + invoice in ONE image — a complete
+    // shipment on its own, shown as a pair.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211281", recipientName: "Iuliana-Ioana" }),
+      doc(1, "invoice", { recipientName: "Iuliana-Ioana" }),
+      doc(2, "combined", {
+        awbConfident: false,
+        recipientName: "Liliana Radu",
+        invoiceRaw: { order_number: "480700" },
+      }),
+    ]);
+    expect(groups).toEqual([
+      { awbIndex: 0, invoiceIndices: [1] },
+      { awbIndex: 2, invoiceIndices: [2] },
+    ]);
+  });
+
   it("an orphan photo of an ALREADY-PAIRED invoice folds into that pair (same comandă)", () => {
     // The live Pereche #26 case: Tihan's invoice photographed twice, the
     // second copy with an unreadable stray label. Same comandă → same
