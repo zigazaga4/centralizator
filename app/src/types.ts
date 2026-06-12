@@ -150,14 +150,20 @@ export type CityKey = "Ploiesti" | "Iasi" | "Iasi2" | "Constanta";
  *  from the dispatch-site identifier the server emits. */
 export type CityCommissionKey = "Ploiesti" | "IasiTudor" | "IasiERA" | "Constanta";
 
-/** The five courier-collaborator partners. Each runs their own bonus
- *  schedule on top of the carrier subtotal. */
+/** The courier-collaborator partners. Each runs their own bonus
+ *  schedule on top of the carrier subtotal (the Constanța five are a
+ *  flat 10% each). */
 export type CollaboratorKey =
   | "Stalexone"
   | "EMV"
   | "Bitlo"
   | "VicDinamicExpert"
-  | "Tiberiu";
+  | "Tiberiu"
+  | "BerneanuAdrian"
+  | "RotaruIulian"
+  | "SauleaConstantin"
+  | "SauleaLiliana"
+  | "TudorofTiberiu";
 
 /** Romanian display label for each dropdown city.
  *  "Iași (Tudor)" / "Iași (ERA)" carry the dispatch-site identity so
@@ -191,6 +197,12 @@ export const COLLABORATOR_LABEL: Record<CollaboratorKey, string> = {
   Bitlo: "Bitlo (George)",
   VicDinamicExpert: "Vic Dinamic Expert (Bogdan)",
   Tiberiu: "Tiberiu (Dube)",
+  // Constanța roster — person names ARE the company-side identity here.
+  BerneanuAdrian: "Berneanu Adrian",
+  RotaruIulian: "Rotaru Iulian",
+  SauleaConstantin: "Saulea Constantin",
+  SauleaLiliana: "Saulea Liliana",
+  TudorofTiberiu: "Tudorof Tiberiu",
 };
 
 /** Compact label used in tight spaces (PairsTable column header,
@@ -203,6 +215,12 @@ export const COLLABORATOR_SHORT_LABEL: Record<CollaboratorKey, string> = {
   Bitlo: "Bitlo",
   VicDinamicExpert: "Vic Dinamic",
   Tiberiu: "Tiberiu",
+  // The two Saulea entries keep the initial so the headers stay distinct.
+  BerneanuAdrian: "Berneanu",
+  RotaruIulian: "Rotaru",
+  SauleaConstantin: "Saulea C.",
+  SauleaLiliana: "Saulea L.",
+  TudorofTiberiu: "Tudorof",
 };
 
 /**
@@ -219,20 +237,28 @@ export const COLLABORATOR_SHORT_LABEL: Record<CollaboratorKey, string> = {
  *                        no-bonus crane variant — excluded.)
  *   col 4  Iași 2      →  Bitlo (George) 12 %.
  *                        (Same "EMV Macara · PREȚ ÎNTREG" exclusion.)
- *   col 5  Constanța   →  none.  Dropdown shows "Direct (fără
- *                        colaborator)" and the Plată-colab. column
- *                        drops to "—".
+ *   col 5  Constanța   →  Berneanu Adrian, Rotaru Iulian, Saulea
+ *                        Constantin, Saulea Liliana, Tudorof Tiberiu —
+ *                        all at a flat 10 % (operator's roster, added
+ *                        after the ODS).
  */
 export const COLLABORATORS_BY_CITY: Record<CityKey, readonly CollaboratorKey[]> = {
   Ploiesti: ["Stalexone", "VicDinamicExpert", "Tiberiu"],
   Iasi: ["EMV"],
   Iasi2: ["Bitlo"],
-  Constanta: [],
+  Constanta: [
+    "BerneanuAdrian",
+    "RotaruIulian",
+    "SauleaConstantin",
+    "SauleaLiliana",
+    "TudorofTiberiu",
+  ],
 };
 
 /**
  * First collaborator for a city — the default selection when the
- * user changes city. Returns `null` for Constanța (no roster), in
+ * user changes city. Returns `null` only for a city with an empty
+ * roster (none today, since Constanța got its own five partners), in
  * which case the UI surfaces "direct, no collaborator" everywhere.
  */
 export function defaultCollaboratorFor(city: CityKey): CollaboratorKey | null {
@@ -272,6 +298,11 @@ export const COLLABORATOR_KEYS: readonly CollaboratorKey[] = [
   "Bitlo",
   "VicDinamicExpert",
   "Tiberiu",
+  "BerneanuAdrian",
+  "RotaruIulian",
+  "SauleaConstantin",
+  "SauleaLiliana",
+  "TudorofTiberiu",
 ];
 
 /**

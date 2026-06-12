@@ -408,20 +408,27 @@ export const COMPANY_COMMISSION_BY_CITY: Readonly<Record<City, number>> = Object
  * the city commission, using the same formula:
  *   collaboratorTotal[c] = carrierTotal + round2(carrierTotal × bonusPct[c]).
  *
- * Source: PRETURI COLABORATORI.ods, "BONUS" rows. Macara-side
- * collaborators (EMV MACARA, MACARA PLOIESTI) are deliberately
- * excluded — those run on a different (crane) tariff that this engine
- * does not price.
+ * Source: PRETURI COLABORATORI.ods, "BONUS" rows, plus the Constanța
+ * roster (Berneanu/Rotaru/Saulea×2/Tudorof) added later by the
+ * operator at a flat 10% each. Macara-side collaborators (EMV MACARA,
+ * MACARA PLOIESTI) are deliberately excluded — those run on a
+ * different (crane) tariff that this engine does not price.
  */
 export type Collaborator =
   | "Stalexone"
   | "EMV"
   | "Bitlo"
   | "VicDinamicExpert"
-  | "Tiberiu";
+  | "Tiberiu"
+  | "BerneanuAdrian"
+  | "RotaruIulian"
+  | "SauleaConstantin"
+  | "SauleaLiliana"
+  | "TudorofTiberiu";
 
 export const COLLABORATORS: readonly Collaborator[] = [
   "Stalexone", "EMV", "Bitlo", "VicDinamicExpert", "Tiberiu",
+  "BerneanuAdrian", "RotaruIulian", "SauleaConstantin", "SauleaLiliana", "TudorofTiberiu",
 ] as const;
 
 export const COLLABORATOR_BONUS_BY_NAME: Readonly<Record<Collaborator, number>> = Object.freeze({
@@ -430,4 +437,10 @@ export const COLLABORATOR_BONUS_BY_NAME: Readonly<Record<Collaborator, number>> 
   Bitlo:            0.12,
   VicDinamicExpert: 0.25,
   Tiberiu:          0.29,
+  // Constanța roster — flat 10% commission each.
+  BerneanuAdrian:   0.10,
+  RotaruIulian:     0.10,
+  SauleaConstantin: 0.10,
+  SauleaLiliana:    0.10,
+  TudorofTiberiu:   0.10,
 });

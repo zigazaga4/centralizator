@@ -433,7 +433,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   // City-side company commission (what the END customer in that city pays)
   // and collaborator-side bonus (collaborator-facing price). Both gross up
   // commissionBase by their percentage, then add the flat km cost on top.
-  // We materialise all four cities and all five collaborators so the UI
+  // We materialise all four cities and every collaborator so the UI
   // can switch dropdowns client-side without another round-trip.
   const cityCommissions = Object.fromEntries(
     CITIES.map((city) => {

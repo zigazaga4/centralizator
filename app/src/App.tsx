@@ -1350,10 +1350,10 @@ function HeaderSelect<T extends string>({
  * collaborator picker.
  *
  * The roster is read from `COLLABORATORS_BY_CITY` per the user's ODS
- * source. When the picked city has no collaborators (Constanța), the
- * select renders a disabled "Direct (fără colaborator)" placeholder
- * instead of an empty list — clearer than a phantom dropdown that
- * does nothing on click. The labels show the full "<Company>
+ * source (+ the Constanța five at 10 %). If a city ever has an empty
+ * roster again, the select renders a disabled "Direct (fără
+ * colaborator)" placeholder instead of an empty list — clearer than a
+ * phantom dropdown that does nothing on click. The labels show the full "<Company>
  * (<person>)" string so the user recognises the partner; the data key
  * stays the machine-friendly company name.
  * ────────────────────────────────────────────────────────────────────── */
@@ -1373,7 +1373,7 @@ function CollaboratorSelect({
       className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-ink-500"
       title={
         empty
-          ? "Constanța — fără colaborator (plată directă)"
+          ? "Oraș fără colaborator (plată directă)"
           : "Colaborator — filtrează perechile alocate acestui colaborator (alocarea se face la încărcare); perechile vechi, fără alocare, apar peste tot"
       }
     >
