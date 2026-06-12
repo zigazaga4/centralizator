@@ -951,6 +951,7 @@ export default function App() {
     let macara = 0;
     for (const p of pairs) {
       if (p.day !== selectedDay || !inActiveStore(p)) continue;
+      if (p.status.kind === "unpaired") continue; // orphans are not pairs — they have their own pill
       if (inView(p, "macara")) macara += 1;
       if (inView(p, "standard")) standard += 1;
     }
@@ -966,8 +967,12 @@ export default function App() {
     for (const p of pairs) {
       if (!inActiveStore(p) || !inActiveView(p)) continue;
       const c = m.get(p.day) ?? { count: 0, readyCount: 0 };
-      c.count += 1;
-      if (p.status.kind === "ready") c.readyCount += 1;
+      // Unpaired orphans keep the day's tab alive (so they stay reachable)
+      // but are NOT counted — the warning pill is their counter.
+      if (p.status.kind !== "unpaired") {
+        c.count += 1;
+        if (p.status.kind === "ready") c.readyCount += 1;
+      }
       m.set(p.day, c);
     }
     return Array.from(m.entries()).map(([day, v]) => ({ day, ...v }));
