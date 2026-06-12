@@ -13,6 +13,8 @@ function doc(index: number, type: DocInfo["type"], fields: Partial<DocInfo> = {}
     recipientAddress: null,
     invoiceNumber: null,
     orderNumber: null,
+    awbRaw: null,
+    invoiceRaw: null,
     ...fields,
   };
 }
@@ -65,7 +67,7 @@ describe("linkDocuments — assignment", () => {
       doc(4, "awb", { awbNumber: "007211002", recipientName: "ELENA DINCU" }),
     ]);
     expect(groups).toEqual([
-      { awbIndex: 1, invoiceIndices: [1] }, // lone anchor reuses itself
+      { awbIndex: 1, invoiceIndices: [] }, // real label, invoice missing → incomplete
       { awbIndex: 4, invoiceIndices: [2] },
     ]);
   });
@@ -79,7 +81,7 @@ describe("linkDocuments — assignment", () => {
     ]);
     expect(groups).toEqual([
       { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 11, invoiceIndices: [11] },
+      { awbIndex: 11, invoiceIndices: [] },
     ]);
   });
 
@@ -91,7 +93,7 @@ describe("linkDocuments — assignment", () => {
     ]);
     expect(groups).toEqual([
       { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 2, invoiceIndices: [2] },
+      { awbIndex: 2, invoiceIndices: [] },
     ]);
   });
 
@@ -117,7 +119,7 @@ describe("linkDocuments — assignment", () => {
     ]);
     expect(groups).toEqual([
       { awbIndex: 0, invoiceIndices: [4] },
-      { awbIndex: 3, invoiceIndices: [3] },
+      { awbIndex: 3, invoiceIndices: [] },
     ]);
   });
 });
@@ -161,7 +163,7 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
       doc(0, "awb", { awbNumber: "0900", recipientName: "CRISTIAN CIUREA" }),
       doc(1, "awb", { awbNumber: "007210900", recipientName: "CRISTIAN CIUREA" }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 1, invoiceIndices: [1] }]);
+    expect(groups).toEqual([{ awbIndex: 1, invoiceIndices: [] }]);
   });
 
   it("unreadable-number anchor folds into a nearby same-name anchor", () => {
@@ -227,7 +229,7 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
       doc(4, "combined", { awbNumber: "0072", awbConfident: false }),
     ]);
     expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [0] },
+      { awbIndex: 0, invoiceIndices: [] },
       { awbIndex: 3, invoiceIndices: [4] },
     ]);
   });
@@ -256,14 +258,29 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
 
   it("digit-only and supplier-word 'names' carry no identity", () => {
     // "0000000" (a CNP read as a name) and "Leroy Merlin Romania" (the
-    // store) must never make two documents the same shipment.
-    const { groups } = linkDocuments([
+    // store) must never make two documents the same shipment. The two
+    // confident-numbered labels stay as real (incomplete) shipments;
+    // the two identity-free readings are JUNK and never become pairs.
+    const { groups, droppedJunk } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211290", recipientName: "0000000" }),
       doc(1, "awb", { awbNumber: "007211074", recipientName: "0000000" }),
       doc(5, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
       doc(6, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
     ]);
-    expect(groups.length).toBe(4);
+    expect(groups.length).toBe(2);
+    expect(droppedJunk.sort()).toEqual([5, 6]);
+  });
+
+  it("a stray-sheet reading that identifies nothing never becomes a pair", () => {
+    // The live junk pairs: a pile photo read as a label with garbage
+    // digits, no name, no confidence — dropped, not shown.
+    const { groups, droppedJunk } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211290", recipientName: "PULIA VITALIY" }),
+      doc(1, "invoice", { recipientName: "PULIA VITALIY" }),
+      doc(2, "awb", { awbNumber: "22006569", awbConfident: false }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(droppedJunk).toEqual([2]);
   });
 
   it("stray labels in extra_awb_numbers never create or break anchors", () => {

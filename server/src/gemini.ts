@@ -121,7 +121,7 @@ const invoiceItemSchema = {
   required: ["name", "quantity", "unit_price_net", "value_net"],
 } as const;
 
-const invoiceSchema = {
+export const invoiceSchema = {
   type: "object",
   description: "One invoice (factură) attached to this AWB.",
   properties: {
@@ -162,7 +162,7 @@ const invoiceSchema = {
   required: ["invoice_number", "invoice_date"],
 } as const;
 
-const awbSchema = {
+export const awbSchema = {
   type: "object",
   description: "The single AWB (waybill) for this pair.",
   properties: {
@@ -205,9 +205,10 @@ const extractTool = {
         awb: awbSchema,
         invoices: {
           type: "array",
-          description: "One entry per invoice image. Always at least one. Order matches the non-AWB image order from the request.",
+          description:
+            "One entry per invoice VISIBLE in the images, in image order. Return an EMPTY array when no " +
+            "invoice page is visible — NEVER invent a dummy invoice to satisfy the schema.",
           items: invoiceSchema,
-          minItems: 1,
         },
       },
       required: ["awb", "invoices"],
@@ -269,9 +270,10 @@ const SYSTEM_INSTRUCTION =
   "    legible, use null for the rest, and call extract_shipment_data EXACTLY ONCE.\n" +
   "After identifying the AWB, extract every visible field from it into `awb`. For EACH invoice image, " +
   "extract every visible field into its own entry in `invoices` (one array element per invoice image, " +
-  "in the same order the invoice images appeared in the request). Then call extract_shipment_data ONCE " +
-  "with the combined data. Never reply in prose. Always call the tool. If a field is illegible or not " +
-  "present, omit it (or use null).\n" +
+  "in the same order the invoice images appeared in the request). If NO invoice page is visible in any " +
+  "image, return invoices: [] — NEVER fabricate an invoice entry just to fill the array. Then call " +
+  "extract_shipment_data ONCE with the combined data. Never reply in prose. Always call the tool. If a " +
+  "field is illegible or not present, omit it (or use null).\n" +
   "Important rules:\n" +
   "• If the user accidentally sends two AWBs, treat the clearer one as the AWB and ignore the duplicate; " +
   "still emit at least one invoice entry (use nulls if no invoice is readable).\n" +

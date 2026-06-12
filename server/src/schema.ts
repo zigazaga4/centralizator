@@ -132,8 +132,9 @@ export type Awb = z.infer<typeof AwbSchema>;
  */
 export const ExtractedSchema = z.object({
   awb: AwbSchema,
-  invoices: z.array(InvoiceSchema).min(1).describe(
-    "At least one invoice. Order matches the non-AWB image order from the request.",
+  invoices: z.array(InvoiceSchema).describe(
+    "One entry per invoice VISIBLE in the images, in image order. EMPTY when no " +
+      "invoice page is visible — never fabricated to satisfy the schema.",
   ),
 });
 export type Extracted = z.infer<typeof ExtractedSchema>;

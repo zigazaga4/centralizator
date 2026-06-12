@@ -22,9 +22,9 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 import type { ImageInput } from "../gemini.js";
 import { classifyImages } from "../classify.js";
-import { linkDocuments, type DocumentGroup } from "../linker.js";
+import { linkDocuments, type DocInfo, type DocumentGroup } from "../linker.js";
 import { dedupeByDhash } from "../dhash.js";
-import { extractAndPrice } from "../pipeline.js";
+import { assembleExtracted, priceExtracted } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
 import { insertPair, persistPairStatus, signalExtracting } from "../db.js";
@@ -85,7 +85,13 @@ async function runPool<T>(items: T[], limit: number, fn: (t: T, i: number) => Pr
  * a failure on one becomes that pair's "error" status and never touches
  * the others.
  */
-async function processGroup(group: DocumentGroup, all: BatchImage[], day: string, log: FastifyBaseLogger): Promise<void> {
+async function processGroup(
+  group: DocumentGroup,
+  all: BatchImage[],
+  docs: DocInfo[],
+  day: string,
+  log: FastifyBaseLogger,
+): Promise<void> {
   const id = randomUUID();
 
   // Order the stored images AWB-first, then invoices in scan order — the
@@ -115,14 +121,19 @@ async function processGroup(group: DocumentGroup, all: BatchImage[], day: string
     return;
   }
 
-  const aiImages: ImageInput[] = ordered.map((img) => ({ data: img.bytes, mimeType: img.mimeType }));
-
   // Live: flip the desktop row to its "se procesează" spinner while the
-  // vision call is in flight. Emit-only (never persisted) — see db.ts.
+  // routing/pricing run. Emit-only (never persisted) — see db.ts.
   signalExtracting(id);
 
   try {
-    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await extractAndPrice(aiImages, day);
+    // No second vision pass: the per-image readings already carry every
+    // field. Assemble them into the pair's data and price it.
+    const anchorDoc = group.awbIndex !== null ? docs[group.awbIndex] : undefined;
+    const invoiceRaws = group.invoiceIndices
+      .map((i) => docs[i]?.invoiceRaw)
+      .filter((r): r is Record<string, unknown> => r != null);
+    const assembled = assembleExtracted(anchorDoc?.awbRaw ?? null, invoiceRaws, day);
+    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await priceExtracted(assembled, day);
     persistPairStatus(id, {
       kind: "ready",
       service: resolvedService,
@@ -201,7 +212,13 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
       },
       "scan-batch: classified",
     );
-    const { groups, droppedAnchors } = linkDocuments(docs);
+    const { groups, droppedAnchors, droppedJunk } = linkDocuments(docs);
+    if (droppedJunk.length > 0) {
+      log.info(
+        { batchId, junk: droppedJunk.map((i) => images[i]!.name) },
+        "scan-batch: dropped junk images (identify nothing — stray pile sheets)",
+      );
+    }
     if (droppedAnchors.length > 0) {
       log.info(
         {
@@ -221,7 +238,7 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
       log.warn({ batchId }, "scan-batch: grouping produced no groups");
       return;
     }
-    await runPool(groups, BATCH_CONCURRENCY, (g) => processGroup(g, images, day, log));
+    await runPool(groups, BATCH_CONCURRENCY, (g) => processGroup(g, images, docs, day, log));
     log.info({ batchId }, "scan-batch: done");
   } catch (err) {
     log.error({ err, batchId }, "scan-batch: grouping failed — no pairs created");

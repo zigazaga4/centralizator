@@ -19,7 +19,7 @@ import { extractFromImages, type ImageInput } from "./gemini.js";
 import { calculatePrice, type PricingBreakdown, type PricingInput } from "./pricing.js";
 import { SERVICE_TEXT_MAP, MACARA_PALLETS_PER_RUN, type Service } from "./tariffs.js";
 import { resolveRouting, type Routing } from "./routing.js";
-import type { Extracted } from "./schema.js";
+import { ExtractedSchema, type Extracted } from "./schema.js";
 
 export type { ImageInput } from "./gemini.js";
 
@@ -253,7 +253,63 @@ export async function extractAndPrice(
   } catch (err) {
     throw new PipelineError("vision", (err as Error).message);
   }
+  return priceExtracted(extracted, filingDay);
+}
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Assemble an `Extracted` from the per-image readings (the raw arguments
+ * of the report_awb / report_invoice function calls).
+ *
+ * The model is never forced to produce fields it cannot see — code fills
+ * the schema's required slots with NEUTRAL defaults instead (empty
+ * strings, zeros, the filing day), which the UI shows as missing values
+ * the operator can correct. Unknown keys are stripped by the Zod schema.
+ */
+export function assembleExtracted(
+  awbRaw: Record<string, unknown> | null,
+  invoiceRaws: Array<Record<string, unknown>>,
+  filingDay?: string,
+): Extracted {
+  const day = filingDay ?? todayFilingDay();
+  const a = awbRaw ?? {};
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const date = (v: unknown): string => (typeof v === "string" && ISO_DATE.test(v) ? v : day);
+
+  const awb = {
+    ...a,
+    awb_number: typeof a.awb_number === "string" ? a.awb_number : "",
+    delivery_date: date(a.delivery_date),
+    service_text: typeof a.service_text === "string" ? a.service_text : "",
+    weight_kg: num(a.weight_kg) ?? 0,
+    distance_extra_km: num(a.distance_extra_km) ?? 0,
+    num_deliveries: num(a.num_deliveries) ?? 1,
+  };
+  const invoices = invoiceRaws.map((inv) => ({
+    ...inv,
+    invoice_number: typeof inv.invoice_number === "string" ? inv.invoice_number : "",
+    invoice_date: date(inv.invoice_date),
+    items: Array.isArray(inv.items) ? inv.items : [],
+  }));
+
+  const parsed = ExtractedSchema.safeParse({ awb, invoices });
+  if (!parsed.success) {
+    throw new PipelineError("vision", `Assembled readings failed schema validation:\n${parsed.error.toString()}`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Price + route ALREADY-extracted data. The scan-batch path assembles
+ * `Extracted` in code from the per-image readings (no second vision
+ * pass), then runs the rest of the pipeline through here — identical to
+ * what the desktop flow gets after its extraction call.
+ */
+export async function priceExtracted(
+  extracted: Extracted,
+  filingDay?: string,
+): Promise<ExtractAndPriceResult> {
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
 
   // Resolve the origin store + the routed delivery distance. This OVERWRITES

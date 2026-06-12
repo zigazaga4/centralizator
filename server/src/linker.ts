@@ -58,6 +58,11 @@ export interface DocInfo {
   recipientAddress: string | null;
   invoiceNumber: string | null;
   orderNumber: string | null;
+  /** The raw report_awb arguments (the full waybill fields) — assembled
+   *  into the pair's data by pipeline.assembleExtracted. */
+  awbRaw: Record<string, unknown> | null;
+  /** The raw report_invoice arguments (the full invoice fields). */
+  invoiceRaw: Record<string, unknown> | null;
 }
 
 /** One shipment, expressed as 0-based indices into the uploaded stack.
@@ -78,6 +83,10 @@ export interface DroppedAnchor {
 export interface LinkResult {
   groups: DocumentGroup[];
   droppedAnchors: DroppedAnchor[];
+  /** Images that identify NOTHING — no invoice content, no recipient
+   *  name, no confident AWB number (stray pile sheets, hopeless blurs).
+   *  They never become pairs; the app must not show junk. */
+  droppedJunk: number[];
 }
 
 /** Two readings of the same recipient share at least this fraction of the
@@ -332,16 +341,30 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   if (orphanRun.length > 0) orphanRuns.push(orphanRun);
 
   // ── Assemble groups in scan order ───────────────────────────────────
-  const groups: DocumentGroup[] = anchors.map((a) => {
+  const groups: DocumentGroup[] = [];
+  const droppedJunk: number[] = [];
+  for (const a of anchors) {
     const invoices = [...new Set(assigned.get(a.index)!)].sort((x, y) => x - y);
-    return {
-      awbIndex: a.index,
-      // Lone anchor: the photo itself carries the invoice (combined-photo
-      // convention; for a label-only photo the pair still forms and the
-      // extractor reports what it can read).
-      invoiceIndices: invoices.length > 0 ? invoices : [a.index],
-    };
-  });
+    if (invoices.length > 0) {
+      groups.push({ awbIndex: a.index, invoiceIndices: invoices });
+      continue;
+    }
+    // Lone anchor, three fates:
+    //   • a combined photo carries its own invoice → a complete self-pair;
+    //   • a real label (readable name or a confident number) whose invoice
+    //     never arrived → an INCOMPLETE pair the operator must see;
+    //   • a reading that identifies NOTHING → junk, never shown.
+    if (a.type === "combined") {
+      groups.push({ awbIndex: a.index, invoiceIndices: [a.index] });
+    } else if (
+      nameTokenSet(a.recipientName).size > 0 ||
+      ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident)
+    ) {
+      groups.push({ awbIndex: a.index, invoiceIndices: [] });
+    } else {
+      droppedJunk.push(a.index);
+    }
+  }
   for (const run of orphanRuns) groups.push({ awbIndex: null, invoiceIndices: run });
   groups.sort(
     (a, b) =>
@@ -349,5 +372,5 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       Math.min(b.awbIndex ?? Infinity, ...b.invoiceIndices),
   );
 
-  return { groups, droppedAnchors };
+  return { groups, droppedAnchors, droppedJunk };
 }

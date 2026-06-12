@@ -1,28 +1,32 @@
 /**
- * Per-image document reading — stage one of the scan-batch flow.
+ * Per-image document reading — THE single AI stage of the scan-batch flow.
  *
- * One model, one image per call, every call independent, all in
- * parallel. The model does NO classification judgement — it simply
- * reports the facts it can see through two function tools:
+ * One model, one image per call, every call independent, all in parallel.
+ * The model is given exactly TWO reporting tools and NO forced schema:
  *
- *   • report_awb     — once PER courier label visible in the photo
- *                      (a stray label from the pile is marked stray);
- *   • report_invoice — once when an invoice (FACTURĂ) page is visible.
+ *   • report_awb     — the full waybill fields; called once per courier
+ *                      label visible (stray pile-neighbours marked);
+ *   • report_invoice — the full invoice fields; called when an invoice
+ *                      page is visible.
  *
- * A photo of a label calls report_awb. A photo of an invoice calls
- * report_invoice. A photo of a label clipped onto its invoice calls
- * BOTH. The deterministic linker (linker.ts) then joins one AWB to its
- * N invoices using what is printed on the paper: the recipient name
- * (the label's Destinatar equals the invoice's Cumpărător) and scan
- * adjacency for anything unreadable.
+ * A label photo calls report_awb. An invoice photo calls report_invoice.
+ * A label clipped onto its invoice calls BOTH. Nothing is required — the
+ * model reports only what it actually sees, and code fills any schema
+ * gaps with neutral defaults later (pipeline.assembleExtracted).
+ *
+ * There is NO second extraction pass: these readings carry every field
+ * the pricing pipeline needs. linker.ts pairs one AWB with its N
+ * invoices using what is printed on the paper (Destinatar = Cumpărător,
+ * scan adjacency as the fallback), and the raw readings ride along to be
+ * assembled into the pair's data.
  *
  * A single failed read NEVER fails the batch: it degrades to "unknown"
  * and the linker files the photo by adjacency.
  */
 
 import OpenAI from "openai";
-import { z } from "zod";
 import type { ImageInput } from "./gemini.js";
+import { awbSchema, invoiceSchema } from "./gemini.js";
 import type { DocInfo, DocType } from "./linker.js";
 
 const MODEL = process.env.OPENROUTER_GROUPING_MODEL ?? process.env.OPENROUTER_MODEL ?? "google/gemini-3.5-flash";
@@ -61,74 +65,52 @@ const client = new OpenAI({
   },
 });
 
+/** report_awb = the full AWB field set + the two photo-context flags.
+ *  NOTHING is required except the flags — the model reports what it sees. */
 const awbTool = {
   type: "function" as const,
   function: {
     name: "report_awb",
     description:
-      "Report ONE courier waybill label visible in the photo. Call once per label you can see.",
+      "Report ONE courier waybill label visible in the photo, with every field you can read. Call once per label.",
     parameters: {
       type: "object",
       properties: {
-        awb_number: {
-          type: ["string", "null"],
-          description:
-            "The label's number (printed large with the barcode, 9 digits, e.g. 007211172). EXACTLY the digits you can see — a partial read like '0900' is valuable, but NEVER guess rotated/blurred/hidden digits: a wrong digit is far worse than null.",
-        },
+        ...awbSchema.properties,
         confident: {
           type: "boolean",
           description:
-            "true ONLY if the digits are upright, sharp and fully visible. false if rotated, upside down, blurred, partially hidden, or you are unsure of any digit.",
+            "true ONLY if the awb_number digits are upright, sharp and fully visible. false if rotated, upside down, blurred, partially hidden, or you are unsure of any digit.",
         },
         stray: {
           type: "boolean",
           description:
             "true when this label does NOT belong to the photo's main document: it peeks in at the frame edge, sits upside down relative to the main page, or lies on a different sheet in the pile. A label clipped/stapled/laid squarely ON the main invoice is NOT stray.",
         },
-        recipient_name: {
-          type: ["string", "null"],
-          description: "The label's 'Destinatar' name, as printed. null if unreadable.",
-        },
-        recipient_address: {
-          type: ["string", "null"],
-          description: "The label's Destinatar street + locality. null if unreadable.",
-        },
       },
-      required: ["awb_number", "confident", "stray"],
-      additionalProperties: false,
+      required: ["confident", "stray"],
     },
   },
 };
 
+/** report_invoice = the full invoice field set (+ buyer_address for the
+ *  linker). Nothing required — report what is printed, skip the rest. */
 const invoiceTool = {
   type: "function" as const,
   function: {
     name: "report_invoice",
     description:
-      "Report the invoice (FACTURĂ) page visible in the photo. Call once when an invoice is the photo's main document (possibly with a label clipped on it).",
+      "Report the invoice (FACTURĂ) page visible in the photo, with every field you can read. Call once when an invoice is the photo's main document (possibly with a label clipped on it).",
     parameters: {
       type: "object",
       properties: {
-        invoice_number: {
-          type: ["string", "null"],
-          description: "The number in the FACTURĂ header (13 digits, e.g. 0072600055360). null if unreadable.",
-        },
-        order_number: {
-          type: ["string", "null"],
-          description: "The 'Comandă' number (e.g. 480746). null if unreadable.",
-        },
-        buyer_name: {
-          type: ["string", "null"],
-          description:
-            "The 'Cumparator' name — the BUYER person or company ONLY. NEVER the Furnizor (the store, e.g. Leroy Merlin), NEVER the courier company, NEVER a numeric code (a CNP of zeros is not a name). null if unreadable.",
-        },
+        ...invoiceSchema.properties,
         buyer_address: {
-          type: ["string", "null"],
-          description: "The buyer's 'Sediul' address. null when unreadable or printed as N/A.",
+          type: "string",
+          description: "The buyer's 'Sediul' address, as printed. Omit when unreadable or printed as N/A.",
         },
       },
-      required: ["invoice_number", "order_number", "buyer_name"],
-      additionalProperties: false,
+      required: [],
     },
   },
 };
@@ -138,7 +120,7 @@ const unreadableTool = {
   function: {
     name: "report_unreadable",
     description: "Call ONLY when the photo shows neither a readable courier label nor a readable invoice.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    parameters: { type: "object", properties: {} },
   },
 };
 
@@ -154,35 +136,18 @@ const SYSTEM_INSTRUCTION =
   "blocks, a 'Comandă' number, a 13-digit header number, line items and totals.\n" +
   "Documents may be ROTATED or UPSIDE DOWN — orient each one mentally before reading it.\n" +
   "Report the facts with the tools:\n" +
-  "  • call report_awb once for EACH courier label you can see (mark stray=true for labels that do not belong " +
-  "to the main document);\n" +
-  "  • call report_invoice once when an invoice page is the photo's main document;\n" +
+  "  • call report_awb once for EACH courier label you can see, filling every field you can read (mark " +
+  "stray=true for labels that do not belong to the main document);\n" +
+  "  • call report_invoice once when an invoice page is the photo's main document, filling every field and " +
+  "line item you can read;\n" +
   "  • a label clipped on its invoice → call BOTH report_awb (stray=false) AND report_invoice;\n" +
   "  • nothing readable → call report_unreadable.\n" +
-  "Read ONLY what is printed. NEVER guess digits you cannot clearly see — a wrong digit creates a phantom " +
-  "shipment downstream; return null or only the certain digits, with confident=false. The 13-digit FACTURĂ " +
-  "header number is never an awb_number. Names: only the actual person/company, never the store or the courier.\n" +
+  "Report ONLY what is printed — no field is mandatory, never fill a field you cannot see. NEVER guess digits: " +
+  "a wrong digit creates a phantom shipment downstream; report only the certain digits with confident=false, " +
+  "or omit the number. The 13-digit FACTURĂ header number is never an awb_number. recipient_name/buyer_name is " +
+  "the actual person or company receiving/buying — never the Furnizor store, never the courier, never numeric " +
+  "codes. Dates ISO YYYY-MM-DD (Romanian DD.MM.YYYY converts). Amounts in RON without thousand separators.\n" +
   "Reply ONLY with tool calls, never in prose.";
-
-const nullableStr = z.preprocess(
-  (v) => (v === undefined || v === null || v === "" ? null : String(v)),
-  z.string().nullable(),
-);
-
-const AwbArgsSchema = z.object({
-  awb_number: nullableStr.default(null),
-  confident: z.coerce.boolean().default(false),
-  stray: z.coerce.boolean().default(false),
-  recipient_name: nullableStr.default(null),
-  recipient_address: nullableStr.default(null),
-});
-
-const InvoiceArgsSchema = z.object({
-  invoice_number: nullableStr.default(null),
-  order_number: nullableStr.default(null),
-  buyer_name: nullableStr.default(null),
-  buyer_address: nullableStr.default(null),
-});
 
 const UNKNOWN: Omit<DocInfo, "index"> = {
   type: "unknown",
@@ -193,17 +158,21 @@ const UNKNOWN: Omit<DocInfo, "index"> = {
   recipientAddress: null,
   invoiceNumber: null,
   orderNumber: null,
+  awbRaw: null,
+  invoiceRaw: null,
 };
 
-/** Fold one response's tool calls into a DocInfo. Returns null when the
+const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+
+/** Fold one response's tool calls into a reading. Returns null when the
  *  response carried no valid tool call (the retry loop continues). */
 function readingFromToolCalls(
   toolCalls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[] | undefined,
 ): Omit<DocInfo, "index"> | null {
   if (!toolCalls || toolCalls.length === 0) return null;
 
-  const awbs: z.infer<typeof AwbArgsSchema>[] = [];
-  let invoice: z.infer<typeof InvoiceArgsSchema> | null = null;
+  const awbs: Array<Record<string, unknown>> = [];
+  let invoice: Record<string, unknown> | null = null;
   let sawValidCall = false;
 
   for (const call of toolCalls) {
@@ -213,18 +182,13 @@ function readingFromToolCalls(
     } catch {
       continue; // truncated JSON on one call — others may still be good
     }
+    if (typeof args !== "object" || args === null) continue;
     if (call.function.name === "report_awb") {
-      const parsed = AwbArgsSchema.safeParse(args);
-      if (parsed.success) {
-        awbs.push(parsed.data);
-        sawValidCall = true;
-      }
+      awbs.push(args as Record<string, unknown>);
+      sawValidCall = true;
     } else if (call.function.name === "report_invoice") {
-      const parsed = InvoiceArgsSchema.safeParse(args);
-      if (parsed.success) {
-        invoice = parsed.data;
-        sawValidCall = true;
-      }
+      invoice = args as Record<string, unknown>;
+      sawValidCall = true;
     } else if (call.function.name === "report_unreadable") {
       sawValidCall = true;
     }
@@ -232,26 +196,29 @@ function readingFromToolCalls(
   if (!sawValidCall) return null;
 
   // The photo's own label: prefer a confident non-stray read, then any
-  // non-stray. Stray labels (and surplus non-stray reads) are diagnostics.
-  const own = awbs.filter((a) => !a.stray);
-  own.sort((a, b) => Number(b.confident) - Number(a.confident));
+  // non-stray. Stray labels are diagnostics only — never an identity.
+  const own = awbs.filter((a) => a.stray !== true);
+  own.sort((a, b) => Number(b.confident === true) - Number(a.confident === true));
   const main = own[0] ?? null;
   const extras = awbs
-    .filter((a) => a !== main && a.awb_number !== null)
-    .map((a) => a.awb_number!);
+    .filter((a) => a !== main)
+    .map((a) => str(a.awb_number))
+    .filter((n): n is string => n !== null);
 
   const type: DocType =
     main !== null && invoice !== null ? "combined" : main !== null ? "awb" : invoice !== null ? "invoice" : "unknown";
 
   return {
     type,
-    awbNumber: main?.awb_number ?? null,
-    awbConfident: main?.confident ?? false,
+    awbNumber: main ? str(main.awb_number) : null,
+    awbConfident: main?.confident === true,
     extraAwbNumbers: extras,
-    recipientName: main?.recipient_name ?? invoice?.buyer_name ?? null,
-    recipientAddress: main?.recipient_address ?? invoice?.buyer_address ?? null,
-    invoiceNumber: invoice?.invoice_number ?? null,
-    orderNumber: invoice?.order_number ?? null,
+    recipientName: (main ? str(main.recipient_name) : null) ?? (invoice ? str(invoice.buyer_name) : null),
+    recipientAddress: (main ? str(main.recipient_address) : null) ?? (invoice ? str(invoice.buyer_address) : null),
+    invoiceNumber: invoice ? str(invoice.invoice_number) : null,
+    orderNumber: invoice ? str(invoice.order_number) : null,
+    awbRaw: main,
+    invoiceRaw: invoice,
   };
 }
 
@@ -269,9 +236,7 @@ export async function classifyImage(image: ImageInput): Promise<Omit<DocInfo, "i
       const completion = await client.chat.completions.create(
         {
           // No temperature or other sampling overrides: the model runs at
-          // its provider-tuned defaults (OpenRouter passes absent params
-          // through). Forcing temperature down on Gemini thinking models
-          // degrades output quality.
+          // its provider-tuned defaults.
           model: MODEL,
           messages: [
             { role: "system", content: SYSTEM_INSTRUCTION },
