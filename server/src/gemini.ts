@@ -389,8 +389,11 @@ export async function extractFromImages(
     try {
       completion = await client.chat.completions.create(
         {
+          // No temperature or other sampling overrides: the model runs at
+          // its provider-tuned defaults. Forcing temperature down on Gemini
+          // thinking models degrades output (garbage characters observed
+          // live in invoice fields).
           model: MODEL,
-          temperature: 0.05,
           messages,
           tools: forceExtract ? [extractTool] : [extractTool, zoomTool],
           tool_choice: forceExtract

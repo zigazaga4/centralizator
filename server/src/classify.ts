@@ -1,24 +1,23 @@
 /**
  * Per-image document reading — stage one of the scan-batch flow.
  *
- * One AI call per image, every call independent, all of them in parallel.
- * This is the volume-proof replacement for the grouping agent: a model
- * reading ONE photo cannot drop the tail of a stack, cannot confuse two
- * shipments, and needs no thinking budget to compare images it never
- * sees. The cross-image work (which photos form a shipment, which are
- * duplicates) moves into deterministic code — see linker.ts.
+ * One model, one image per call, every call independent, all in
+ * parallel. The model does NO classification judgement — it simply
+ * reports the facts it can see through two function tools:
  *
- * Each call answers two things about its single photo:
- *   • WHAT it is: a courier label (awb), an invoice page, a combined
- *     label-on-invoice photo, or unreadable;
- *   • the LINK FIELDS printed on it: AWB number, recipient (Destinatar /
- *     Cumparator), address, invoice and order numbers — exactly the keys
- *     the linker joins on.
+ *   • report_awb     — once PER courier label visible in the photo
+ *                      (a stray label from the pile is marked stray);
+ *   • report_invoice — once when an invoice (FACTURĂ) page is visible.
  *
- * A single failed read NEVER fails the batch: after the retries it
- * degrades to type "unknown" and the linker files the photo by scan
- * adjacency, which is what the old system effectively did for unreadable
- * images anyway.
+ * A photo of a label calls report_awb. A photo of an invoice calls
+ * report_invoice. A photo of a label clipped onto its invoice calls
+ * BOTH. The deterministic linker (linker.ts) then joins one AWB to its
+ * N invoices using what is printed on the paper: the recipient name
+ * (the label's Destinatar equals the invoice's Cumpărător) and scan
+ * adjacency for anything unreadable.
+ *
+ * A single failed read NEVER fails the batch: it degrades to "unknown"
+ * and the linker files the photo by adjacency.
  */
 
 import OpenAI from "openai";
@@ -62,101 +61,127 @@ const client = new OpenAI({
   },
 });
 
-const classifyTool = {
+const awbTool = {
   type: "function" as const,
   function: {
-    name: "classify_document",
+    name: "report_awb",
     description:
-      "Report what this single photo shows and the identifying fields printed on it.",
+      "Report ONE courier waybill label visible in the photo. Call once per label you can see.",
     parameters: {
       type: "object",
       properties: {
-        doc_type: {
-          type: "string",
-          enum: ["awb", "invoice", "combined", "unknown"],
-          description:
-            "awb = courier label is the MAIN subject; invoice = FACTURĂ page; combined = a courier label clipped/stapled/laid ON the invoice page, both belonging together; unknown = neither/unreadable.",
-        },
         awb_number: {
           type: ["string", "null"],
           description:
-            "The number of THIS document's courier label only: the label that is the photo's subject (awb) or is clipped onto the invoice (combined). NEVER the FACTURĂ header number, and NEVER a stray label from another document peeking into the frame — those go in extra_awb_numbers. Return EXACTLY the digits you can see; a partial read like '0900' is valuable, but NEVER guess rotated/blurred/hidden digits: a wrong digit is far worse than null.",
+            "The label's number (printed large with the barcode, 9 digits, e.g. 007211172). EXACTLY the digits you can see — a partial read like '0900' is valuable, but NEVER guess rotated/blurred/hidden digits: a wrong digit is far worse than null.",
         },
-        awb_number_confident: {
+        confident: {
           type: "boolean",
           description:
-            "true ONLY if the AWB digits are upright, sharp and fully visible. false if the label is upside down, rotated, blurred, partially hidden, or you are unsure of any digit.",
+            "true ONLY if the digits are upright, sharp and fully visible. false if rotated, upside down, blurred, partially hidden, or you are unsure of any digit.",
         },
-        extra_awb_numbers: {
-          type: "array",
-          items: { type: "string" },
+        stray: {
+          type: "boolean",
           description:
-            "Numbers of OTHER courier labels visible in the frame that do NOT belong to this document: a label at the frame's edge, upside down relative to the main document, or on a different sheet in the pile beneath. Empty array when none. Only digits you can actually read.",
+            "true when this label does NOT belong to the photo's main document: it peeks in at the frame edge, sits upside down relative to the main page, or lies on a different sheet in the pile. A label clipped/stapled/laid squarely ON the main invoice is NOT stray.",
         },
         recipient_name: {
           type: ["string", "null"],
-          description:
-            "AWB label: the 'Destinatar' name. Invoice: the 'Cumparator' name. As printed. NEVER the Furnizor (the store, e.g. Leroy Merlin), NEVER the courier company, NEVER a numeric code (a CNP/CUI of zeros is not a name). null when the buyer/recipient is not readable.",
+          description: "The label's 'Destinatar' name, as printed. null if unreadable.",
         },
         recipient_address: {
           type: ["string", "null"],
-          description:
-            "AWB label: the Destinatar street + locality. Invoice: the 'Sediul' under Cumparator (null when it reads N/A).",
-        },
-        invoice_number: {
-          type: ["string", "null"],
-          description: "The number in the FACTURĂ header (e.g. 0072600055360). null on labels.",
-        },
-        order_number: {
-          type: ["string", "null"],
-          description: "The invoice's 'Comandă' number (e.g. 480746). null on labels.",
+          description: "The label's Destinatar street + locality. null if unreadable.",
         },
       },
-      required: ["doc_type"],
+      required: ["awb_number", "confident", "stray"],
       additionalProperties: false,
     },
   },
 };
 
+const invoiceTool = {
+  type: "function" as const,
+  function: {
+    name: "report_invoice",
+    description:
+      "Report the invoice (FACTURĂ) page visible in the photo. Call once when an invoice is the photo's main document (possibly with a label clipped on it).",
+    parameters: {
+      type: "object",
+      properties: {
+        invoice_number: {
+          type: ["string", "null"],
+          description: "The number in the FACTURĂ header (13 digits, e.g. 0072600055360). null if unreadable.",
+        },
+        order_number: {
+          type: ["string", "null"],
+          description: "The 'Comandă' number (e.g. 480746). null if unreadable.",
+        },
+        buyer_name: {
+          type: ["string", "null"],
+          description:
+            "The 'Cumparator' name — the BUYER person or company ONLY. NEVER the Furnizor (the store, e.g. Leroy Merlin), NEVER the courier company, NEVER a numeric code (a CNP of zeros is not a name). null if unreadable.",
+        },
+        buyer_address: {
+          type: ["string", "null"],
+          description: "The buyer's 'Sediul' address. null when unreadable or printed as N/A.",
+        },
+      },
+      required: ["invoice_number", "order_number", "buyer_name"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const unreadableTool = {
+  type: "function" as const,
+  function: {
+    name: "report_unreadable",
+    description: "Call ONLY when the photo shows neither a readable courier label nor a readable invoice.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+};
+
 const SYSTEM_INSTRUCTION =
-  "You are a document reader for a Romanian courier back office. You receive exactly ONE photo. " +
-  "It shows either a courier waybill label (AWB), a fiscal invoice (FACTURĂ), or both together.\n" +
-  "What each looks like:\n" +
-  "  • AWB label: a printed shipping label with a barcode, a large number under or near it, and fields like " +
-  "'Expeditor', 'Destinatar', 'Serviciu', 'Greutate (kg)', 'Hub destinatie', often branded 'couriermanager'.\n" +
-  "  • Invoice: an A4 page headed 'FACTURĂ' / 'FACTURA' (sometimes 'DUPLICAT'), with Furnizor + Cumparator " +
-  "blocks, a 'Comandă' number, a line-items table and totals.\n" +
-  "  • combined: a small AWB label clipped, stapled or laid ON the invoice page — the label BELONGS to that invoice.\n" +
-  "The photos are shot over a PILE of documents, so a frame often catches MORE than the main document: a stray " +
-  "label or sheet from the next shipment peeking in at the edge, usually upside down relative to the main " +
-  "document. A stray label is NOT this document's AWB — report its digits (if readable) in extra_awb_numbers, " +
-  "never in awb_number. The clipped label of a combined photo IS this document's AWB.\n" +
-  "Photos are taken in a hurry: documents may be ROTATED or UPSIDE DOWN — orient the page mentally before " +
-  "reading anything.\n" +
-  "Read ONLY what is printed — never invent or complete fields. If part of the AWB number is covered or cut " +
-  "off, return exactly the digits you can see (a partial number is useful). NEVER guess at digits you cannot " +
-  "clearly see — reading rotated digits wrong creates phantom shipments downstream; return null or the certain " +
-  "digits only, and set awb_number_confident=false. Courier label numbers here are 9 digits (007…); the FACTURĂ " +
-  "header number is 13 digits and is the invoice_number — it must NEVER be reported as awb_number, whole or in " +
-  "part. recipient_name is the BUYER/RECIPIENT person or company only — never the Furnizor store, never the " +
-  "courier, never numeric codes. Use null for anything you cannot read. For a combined photo fill BOTH " +
-  "the label fields and the invoice fields.\n" +
-  "Call classify_document EXACTLY ONCE. Never reply in prose.";
+  "You are a document reader for a Romanian courier back office. You receive exactly ONE photo of paperwork " +
+  "from a courier's van — usually a courier waybill label (AWB), a fiscal invoice (FACTURĂ), or a label clipped " +
+  "onto its invoice. The photo is shot over a PILE of documents, so stray sheets and labels from OTHER " +
+  "shipments often peek into the frame, usually upside down relative to the main document.\n" +
+  "What things look like:\n" +
+  "  • AWB label: barcode + a 9-digit number (007…), 'Expeditor', 'Destinatar', 'Serviciu', 'Greutate (kg)', " +
+  "often branded 'couriermanager'.\n" +
+  "  • Invoice: an A4 page headed 'FACTURĂ' / 'FACTURA' (sometimes 'DUPLICAT') with Furnizor + Cumparator " +
+  "blocks, a 'Comandă' number, a 13-digit header number, line items and totals.\n" +
+  "Documents may be ROTATED or UPSIDE DOWN — orient each one mentally before reading it.\n" +
+  "Report the facts with the tools:\n" +
+  "  • call report_awb once for EACH courier label you can see (mark stray=true for labels that do not belong " +
+  "to the main document);\n" +
+  "  • call report_invoice once when an invoice page is the photo's main document;\n" +
+  "  • a label clipped on its invoice → call BOTH report_awb (stray=false) AND report_invoice;\n" +
+  "  • nothing readable → call report_unreadable.\n" +
+  "Read ONLY what is printed. NEVER guess digits you cannot clearly see — a wrong digit creates a phantom " +
+  "shipment downstream; return null or only the certain digits, with confident=false. The 13-digit FACTURĂ " +
+  "header number is never an awb_number. Names: only the actual person/company, never the store or the courier.\n" +
+  "Reply ONLY with tool calls, never in prose.";
 
 const nullableStr = z.preprocess(
   (v) => (v === undefined || v === null || v === "" ? null : String(v)),
   z.string().nullable(),
 );
 
-const ClassifyArgsSchema = z.object({
-  doc_type: z.enum(["awb", "invoice", "combined", "unknown"]),
+const AwbArgsSchema = z.object({
   awb_number: nullableStr.default(null),
-  awb_number_confident: z.coerce.boolean().default(false),
-  extra_awb_numbers: z.array(z.coerce.string()).default([]),
+  confident: z.coerce.boolean().default(false),
+  stray: z.coerce.boolean().default(false),
   recipient_name: nullableStr.default(null),
   recipient_address: nullableStr.default(null),
+});
+
+const InvoiceArgsSchema = z.object({
   invoice_number: nullableStr.default(null),
   order_number: nullableStr.default(null),
+  buyer_name: nullableStr.default(null),
+  buyer_address: nullableStr.default(null),
 });
 
 const UNKNOWN: Omit<DocInfo, "index"> = {
@@ -170,10 +195,69 @@ const UNKNOWN: Omit<DocInfo, "index"> = {
   orderNumber: null,
 };
 
+/** Fold one response's tool calls into a DocInfo. Returns null when the
+ *  response carried no valid tool call (the retry loop continues). */
+function readingFromToolCalls(
+  toolCalls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[] | undefined,
+): Omit<DocInfo, "index"> | null {
+  if (!toolCalls || toolCalls.length === 0) return null;
+
+  const awbs: z.infer<typeof AwbArgsSchema>[] = [];
+  let invoice: z.infer<typeof InvoiceArgsSchema> | null = null;
+  let sawValidCall = false;
+
+  for (const call of toolCalls) {
+    let args: unknown;
+    try {
+      args = JSON.parse(call.function.arguments);
+    } catch {
+      continue; // truncated JSON on one call — others may still be good
+    }
+    if (call.function.name === "report_awb") {
+      const parsed = AwbArgsSchema.safeParse(args);
+      if (parsed.success) {
+        awbs.push(parsed.data);
+        sawValidCall = true;
+      }
+    } else if (call.function.name === "report_invoice") {
+      const parsed = InvoiceArgsSchema.safeParse(args);
+      if (parsed.success) {
+        invoice = parsed.data;
+        sawValidCall = true;
+      }
+    } else if (call.function.name === "report_unreadable") {
+      sawValidCall = true;
+    }
+  }
+  if (!sawValidCall) return null;
+
+  // The photo's own label: prefer a confident non-stray read, then any
+  // non-stray. Stray labels (and surplus non-stray reads) are diagnostics.
+  const own = awbs.filter((a) => !a.stray);
+  own.sort((a, b) => Number(b.confident) - Number(a.confident));
+  const main = own[0] ?? null;
+  const extras = awbs
+    .filter((a) => a !== main && a.awb_number !== null)
+    .map((a) => a.awb_number!);
+
+  const type: DocType =
+    main !== null && invoice !== null ? "combined" : main !== null ? "awb" : invoice !== null ? "invoice" : "unknown";
+
+  return {
+    type,
+    awbNumber: main?.awb_number ?? null,
+    awbConfident: main?.confident ?? false,
+    extraAwbNumbers: extras,
+    recipientName: main?.recipient_name ?? invoice?.buyer_name ?? null,
+    recipientAddress: main?.recipient_address ?? invoice?.buyer_address ?? null,
+    invoiceNumber: invoice?.invoice_number ?? null,
+    orderNumber: invoice?.order_number ?? null,
+  };
+}
+
 /**
  * Read one image. Returns the reading, or the "unknown" fallback after the
- * retries are exhausted — a single stubborn photo must never sink a batch
- * (the linker files unknowns by scan adjacency).
+ * retries are exhausted — a single stubborn photo must never sink a batch.
  */
 export async function classifyImage(image: ImageInput): Promise<Omit<DocInfo, "index">> {
   if (!API_KEY) throw new Error("OPENROUTER_API_KEY is not configured on the server.");
@@ -184,46 +268,37 @@ export async function classifyImage(image: ImageInput): Promise<Omit<DocInfo, "i
     try {
       const completion = await client.chat.completions.create(
         {
+          // No temperature or other sampling overrides: the model runs at
+          // its provider-tuned defaults (OpenRouter passes absent params
+          // through). Forcing temperature down on Gemini thinking models
+          // degrades output quality.
           model: MODEL,
-          temperature: 0,
           messages: [
             { role: "system", content: SYSTEM_INSTRUCTION },
             {
               role: "user",
               content: [
                 { type: "image_url", image_url: { url } },
-                { type: "text", text: "Classify this photo and read its fields, then call classify_document once." },
+                {
+                  type: "text",
+                  text: "Report this photo's documents: report_awb per visible label, report_invoice if an invoice page is present, report_unreadable if neither.",
+                },
               ],
             },
           ],
-          tools: [classifyTool],
-          tool_choice: { type: "function", function: { name: "classify_document" } },
+          tools: [awbTool, invoiceTool, unreadableTool],
+          tool_choice: "required",
           ...REASONING,
         } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
         { signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS) },
       );
 
-      // Bad RESPONSES (no tool call, truncated JSON, absent choices on an
+      // Bad RESPONSES (no tool calls, truncated JSON, absent choices on an
       // error-shaped 200) retry exactly like bad connections.
-      const toolCall = completion.choices?.[0]?.message?.tool_calls?.[0];
-      if (toolCall && toolCall.function.name === "classify_document") {
-        const parsed = ClassifyArgsSchema.safeParse(JSON.parse(toolCall.function.arguments));
-        if (parsed.success) {
-          const d = parsed.data;
-          return {
-            type: d.doc_type as DocType,
-            awbNumber: d.awb_number,
-            awbConfident: d.awb_number_confident,
-            extraAwbNumbers: d.extra_awb_numbers,
-            recipientName: d.recipient_name,
-            recipientAddress: d.recipient_address,
-            invoiceNumber: d.invoice_number,
-            orderNumber: d.order_number,
-          };
-        }
-      }
+      const reading = readingFromToolCalls(completion.choices?.[0]?.message?.tool_calls);
+      if (reading !== null) return reading;
     } catch {
-      // connection error / timeout / invalid JSON — fall through to retry
+      // connection error / timeout — fall through to retry
     }
     if (attempt < MAX_TRIES) await new Promise((r) => setTimeout(r, 1500 * attempt));
   }
