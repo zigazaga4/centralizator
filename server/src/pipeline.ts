@@ -286,12 +286,26 @@ export function assembleExtracted(
     distance_extra_km: num(a.distance_extra_km) ?? 0,
     num_deliveries: num(a.num_deliveries) ?? 1,
   };
-  const invoices = invoiceRaws.map((inv) => ({
-    ...inv,
-    invoice_number: typeof inv.invoice_number === "string" ? inv.invoice_number : "",
-    invoice_date: date(inv.invoice_date),
-    items: Array.isArray(inv.items) ? inv.items : [],
-  }));
+  // Dedupe by printed identity: two readings sharing an invoice number or
+  // comandă are the SAME invoice photographed twice — keeping both would
+  // double-count unloading/macara/bulky and the totals.
+  const seenKeys = new Set<string>();
+  const invoices: Array<Record<string, unknown>> = [];
+  for (const inv of invoiceRaws) {
+    const keys: string[] = [];
+    const invNum = String(inv.invoice_number ?? "").replace(/\D/g, "");
+    if (invNum.length >= 6) keys.push(`i${invNum}`);
+    const ord = String(inv.order_number ?? "").replace(/\D/g, "");
+    if (ord.length >= 4) keys.push(`o${ord}`);
+    if (keys.some((k) => seenKeys.has(k))) continue;
+    for (const k of keys) seenKeys.add(k);
+    invoices.push({
+      ...inv,
+      invoice_number: typeof inv.invoice_number === "string" ? inv.invoice_number : "",
+      invoice_date: date(inv.invoice_date),
+      items: Array.isArray(inv.items) ? inv.items : [],
+    });
+  }
 
   const parsed = ExtractedSchema.safeParse({ awb, invoices });
   if (!parsed.success) {

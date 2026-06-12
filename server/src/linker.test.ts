@@ -66,10 +66,9 @@ describe("linkDocuments — assignment", () => {
       doc(2, "invoice", { recipientName: "Elena Dincu" }),
       doc(4, "awb", { awbNumber: "007211002", recipientName: "ELENA DINCU" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 1, invoiceIndices: [] }, // real label, invoice missing → incomplete
-      { awbIndex: 4, invoiceIndices: [2] },
-    ]);
+    // Anchor 1's invoice never matched → it cannot form a valid pair and
+    // is dropped (only valid pairs are shown).
+    expect(groups).toEqual([{ awbIndex: 4, invoiceIndices: [2] }]);
   });
 
   it("a name match BEYOND the assignment window loses to adjacency", () => {
@@ -79,10 +78,7 @@ describe("linkDocuments — assignment", () => {
       doc(1, "invoice", { recipientName: "VOICU CONSTANTIN" }), // misread or shuffled paper
       doc(11, "awb", { awbNumber: "007211193", recipientName: "VOICU CONSTANTIN" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 11, invoiceIndices: [] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
   });
 
   it("falls back to nearest anchor for unreadable photos, preferring the preceding one on ties", () => {
@@ -91,10 +87,7 @@ describe("linkDocuments — assignment", () => {
       doc(1, "unknown"),
       doc(2, "awb", { awbNumber: "007211002", recipientName: "C D" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 2, invoiceIndices: [] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
   });
 
   it("same recipient with two shipments: adjacency splits the invoices", () => {
@@ -117,10 +110,7 @@ describe("linkDocuments — assignment", () => {
       // Adjacent to anchor 3 but its address belongs to anchor 0.
       doc(4, "invoice", { recipientAddress: "STR ZORILOR 51, OVIDIU" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [4] },
-      { awbIndex: 3, invoiceIndices: [] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [4] }]);
   });
 });
 
@@ -142,28 +132,29 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
   });
 
   it("never merges two anchors with different full numbers, even same name and adjacent", () => {
-    const { groups } = linkDocuments([
+    const { droppedAnchors } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "NICU VULPE" }),
       doc(1, "awb", { awbNumber: "007211009", recipientName: "NICU VULPE" }),
     ]);
-    expect(groups.length).toBe(2);
+    expect(droppedAnchors).toHaveLength(0); // two distinct shipments, no fold
   });
 
   it("identical full numbers merge no matter the distance", () => {
-    const { groups, droppedAnchors } = linkDocuments([
+    const { droppedAnchors } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "A B" }),
       doc(40, "awb", { awbNumber: "007211001", recipientName: "A B" }),
     ]);
-    expect(groups.length).toBe(1);
-    expect(droppedAnchors).toHaveLength(1);
+    expect(droppedAnchors).toHaveLength(1); // folded into one shipment
   });
 
   it("keeps the photo with the LONGER number read as the anchor", () => {
-    const { groups } = linkDocuments([
+    const { droppedAnchors } = linkDocuments([
       doc(0, "awb", { awbNumber: "0900", recipientName: "CRISTIAN CIUREA" }),
       doc(1, "awb", { awbNumber: "007210900", recipientName: "CRISTIAN CIUREA" }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 1, invoiceIndices: [] }]);
+    expect(droppedAnchors).toEqual([
+      expect.objectContaining({ index: 0, ofIndex: 1 }),
+    ]);
   });
 
   it("unreadable-number anchor folds into a nearby same-name anchor", () => {
@@ -176,11 +167,12 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
   });
 
   it("an unreadable-number anchor FAR from its name twin stays its own shipment", () => {
-    const { groups } = linkDocuments([
+    const { droppedAnchors, droppedIncomplete } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "MARIAN PAIU" }),
       doc(20, "awb", { recipientName: "MARIAN PAIU" }),
     ]);
-    expect(groups.length).toBe(2);
+    expect(droppedAnchors).toHaveLength(0); // not folded — two shipments
+    expect(droppedIncomplete).toHaveLength(2);
   });
 
   it("a WEAK (rotated/blurred) full-number read folds by name+adjacency despite differing digits", () => {
@@ -200,11 +192,12 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
   });
 
   it("two CONFIDENT different numbers never merge even with matching name nearby", () => {
-    const { groups } = linkDocuments([
+    const { droppedAnchors, droppedIncomplete } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "NICU VULPE" }),
       doc(1, "awb", { awbNumber: "007211009", recipientName: "NICU VULPE" }),
     ]);
-    expect(groups.length).toBe(2);
+    expect(droppedAnchors).toHaveLength(0); // no fold = two distinct shipments
+    expect(droppedIncomplete.sort()).toEqual([0, 1]); // both lack invoices → not shown
   });
 
   it("a 13-digit invoice-header number never acts as an AWB identity", () => {
@@ -228,10 +221,7 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
       doc(3, "awb", { awbNumber: "007211161", recipientName: "anghelescu claudiu" }),
       doc(4, "combined", { awbNumber: "0072", awbConfident: false }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [] },
-      { awbIndex: 3, invoiceIndices: [4] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 3, invoiceIndices: [4] }]);
   });
 
   it("the CONFIDENT read wins the anchor role over a weak one", () => {
@@ -261,14 +251,15 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
     // store) must never make two documents the same shipment. The two
     // confident-numbered labels stay as real (incomplete) shipments;
     // the two identity-free readings are JUNK and never become pairs.
-    const { groups, droppedJunk } = linkDocuments([
+    const { groups, droppedJunk, droppedIncomplete } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211290", recipientName: "0000000" }),
       doc(1, "awb", { awbNumber: "007211074", recipientName: "0000000" }),
       doc(5, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
       doc(6, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
     ]);
-    expect(groups.length).toBe(2);
+    expect(groups).toHaveLength(0); // none has an invoice → nothing shown
     expect(droppedJunk.sort()).toEqual([5, 6]);
+    expect(droppedIncomplete.sort()).toEqual([0, 1]);
   });
 
   it("a stray-sheet reading that identifies nothing never becomes a pair", () => {
@@ -301,15 +292,29 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
 });
 
 describe("linkDocuments — degenerate stacks", () => {
-  it("no anchors: contiguous invoice runs become visible awb-less groups", () => {
-    const { groups } = linkDocuments([
+  it("no anchors: invoices without any AWB never become pairs", () => {
+    const { groups, droppedIncomplete } = linkDocuments([
       doc(0, "invoice", { recipientName: "A B" }),
       doc(1, "invoice", { recipientName: "A B" }),
       doc(5, "invoice", { recipientName: "C D" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: null, invoiceIndices: [0, 1] },
-      { awbIndex: null, invoiceIndices: [5] },
+    expect(groups).toEqual([]);
+    expect(droppedIncomplete.sort()).toEqual([0, 1, 5]);
+  });
+
+  it("an orphan photo of an ALREADY-PAIRED invoice folds into that pair (same comandă)", () => {
+    // The live Pereche #26 case: Tihan's invoice photographed twice, the
+    // second copy with an unreadable stray label. Same comandă → same
+    // invoice → the photo joins its pair instead of becoming an AWB-less
+    // row in the app.
+    const { groups, droppedAnchors } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211074", recipientName: "ADRIAN TIHAN" }),
+      doc(1, "invoice", { recipientName: "ADRIAN TIHAN", orderNumber: "480654" }),
+      doc(2, "combined", { awbConfident: false, orderNumber: "480654" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1, 2] }]);
+    expect(droppedAnchors).toEqual([
+      expect.objectContaining({ index: 2, ofIndex: 0 }),
     ]);
   });
 

@@ -81,12 +81,19 @@ export interface DroppedAnchor {
 }
 
 export interface LinkResult {
+  /** Only VALID pairs: every group has an AWB anchor and ≥1 invoice
+   *  image. Nothing else ever reaches the app. */
   groups: DocumentGroup[];
   droppedAnchors: DroppedAnchor[];
   /** Images that identify NOTHING — no invoice content, no recipient
    *  name, no confident AWB number (stray pile sheets, hopeless blurs).
    *  They never become pairs; the app must not show junk. */
   droppedJunk: number[];
+  /** Real-looking documents that could not complete a pair (a label
+   *  whose invoice never matched, an invoice with no AWB anywhere).
+   *  Dropped by command — only valid pairs are shown — but logged so
+   *  nothing disappears silently. */
+  droppedIncomplete: number[];
 }
 
 /** Two readings of the same recipient share at least this fraction of the
@@ -293,17 +300,13 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   const assigned = new Map<number, number[]>(); // anchor index → invoice images
   for (const a of anchors) assigned.set(a.index, [...(extraInvoices.get(a.index) ?? [])]);
 
-  const orphanRuns: number[][] = [];
-  let orphanRun: number[] = [];
+  const noAnchorOrphans: number[] = [];
 
   for (const item of items) {
     if (anchors.length === 0) {
-      // No anchors anywhere: contiguous invoices form awb-less groups.
-      if (orphanRun.length > 0 && item.index !== orphanRun[orphanRun.length - 1]! + 1) {
-        orphanRuns.push(orphanRun);
-        orphanRun = [];
-      }
-      orphanRun.push(item.index);
+      // No anchors anywhere: an invoice with no AWB can never become a
+      // valid pair — dropped (and logged), never shown.
+      noAnchorOrphans.push(item.index);
       continue;
     }
 
@@ -338,39 +341,87 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     const chosen = pick(tier1.length > 0 ? tier1 : tier2.length > 0 ? tier2 : anchors);
     assigned.get(chosen.index)!.push(item.index);
   }
-  if (orphanRun.length > 0) orphanRuns.push(orphanRun);
 
-  // ── Assemble groups in scan order ───────────────────────────────────
+  // ── Assemble groups in scan order — ONLY valid pairs survive ────────
+  const docByIndex = new Map(docs.map((d) => [d.index, d]));
+  /** Invoice identity keys: the printed invoice number and/or comandă.
+   *  Two readings sharing a key are the SAME invoice — the operator's
+   *  rule: "any invoice or AWB which is the exact same, we dedupe". */
+  const invoiceKeysOf = (d: DocInfo | undefined): string[] => {
+    if (!d) return [];
+    const keys: string[] = [];
+    const inv = (d.invoiceNumber ?? "").replace(/\D/g, "");
+    if (inv.length >= 6) keys.push(`i${inv}`);
+    const ord = (d.orderNumber ?? "").replace(/\D/g, "");
+    if (ord.length >= 4) keys.push(`o${ord}`);
+    return keys;
+  };
+
   const groups: DocumentGroup[] = [];
   const droppedJunk: number[] = [];
+  const droppedIncomplete: number[] = [...noAnchorOrphans];
+  const keyToGroup = new Map<string, DocumentGroup>();
+  const registerGroup = (g: DocumentGroup) => {
+    groups.push(g);
+    for (const i of [g.awbIndex!, ...g.invoiceIndices])
+      for (const k of invoiceKeysOf(docByIndex.get(i))) if (!keyToGroup.has(k)) keyToGroup.set(k, g);
+  };
+  const rescuable: DocInfo[] = [];
+
   for (const a of anchors) {
     const invoices = [...new Set(assigned.get(a.index)!)].sort((x, y) => x - y);
     if (invoices.length > 0) {
-      groups.push({ awbIndex: a.index, invoiceIndices: invoices });
+      registerGroup({ awbIndex: a.index, invoiceIndices: invoices });
       continue;
     }
-    // Lone anchor, three fates:
-    //   • a combined photo carries its own invoice → a complete self-pair;
-    //   • a real label (readable name or a confident number) whose invoice
-    //     never arrived → an INCOMPLETE pair the operator must see;
-    //   • a reading that identifies NOTHING → junk, never shown.
-    if (a.type === "combined") {
-      groups.push({ awbIndex: a.index, invoiceIndices: [a.index] });
-    } else if (
+    // Lone anchor, four fates:
+    //   • a combined photo with a real AWB identity → a complete pair in
+    //     one photo (label + invoice together);
+    //   • invoice content but no AWB identity → maybe a second photo of
+    //     an invoice that already lives in a pair — try the rescue pass;
+    //   • a real label whose invoice never matched → cannot form a valid
+    //     pair → dropped (logged), per command: only valid pairs show;
+    //   • identifies nothing → junk.
+    const hasAwbIdentity =
       nameTokenSet(a.recipientName).size > 0 ||
-      ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident)
-    ) {
-      groups.push({ awbIndex: a.index, invoiceIndices: [] });
+      ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident);
+    if (a.type === "combined" && hasAwbIdentity) {
+      registerGroup({ awbIndex: a.index, invoiceIndices: [a.index] });
+    } else if (invoiceKeysOf(a).length > 0) {
+      rescuable.push(a);
+    } else if (hasAwbIdentity) {
+      droppedIncomplete.push(a.index);
     } else {
       droppedJunk.push(a.index);
     }
   }
-  for (const run of orphanRuns) groups.push({ awbIndex: null, invoiceIndices: run });
+
+  // Rescue pass: an orphan whose invoice number/comandă matches an
+  // invoice already inside a pair is a SECOND PHOTO of that invoice —
+  // fold the image into its pair. No match → it cannot form a valid
+  // pair → dropped (logged).
+  for (const p of rescuable) {
+    const g = invoiceKeysOf(p)
+      .map((k) => keyToGroup.get(k))
+      .find((x): x is DocumentGroup => x !== undefined);
+    if (g) {
+      if (!g.invoiceIndices.includes(p.index)) g.invoiceIndices.push(p.index);
+      droppedAnchors.push({
+        index: p.index,
+        ofIndex: g.awbIndex ?? g.invoiceIndices[0]!,
+        reason: "same invoice content — folded into its pair",
+      });
+    } else {
+      droppedIncomplete.push(p.index);
+    }
+  }
+
+  for (const g of groups) g.invoiceIndices.sort((x, y) => x - y);
   groups.sort(
     (a, b) =>
       Math.min(a.awbIndex ?? Infinity, ...a.invoiceIndices) -
       Math.min(b.awbIndex ?? Infinity, ...b.invoiceIndices),
   );
 
-  return { groups, droppedAnchors, droppedJunk };
+  return { groups, droppedAnchors, droppedJunk, droppedIncomplete };
 }

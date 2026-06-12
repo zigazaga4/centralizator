@@ -100,6 +100,13 @@ async function processGroup(
   const invoices = group.invoiceIndices.map((i) => all[i]!).filter(Boolean);
   const ordered: BatchImage[] = [...(awb ? [awb] : []), ...invoices];
 
+  // The linker guarantees only VALID pairs (AWB + ≥1 invoice). If that
+  // contract ever breaks, skip — the app shows pairs, never fragments.
+  if (!awb || invoices.length === 0) {
+    log.warn({ group }, "scan-batch: linker emitted a non-pair — skipped (contract violation)");
+    return;
+  }
+
   insertPair({
     id,
     day,
@@ -110,16 +117,6 @@ async function processGroup(
       bytes: img.bytes,
     })),
   });
-
-  // A pair needs one AWB + at least one invoice to extract. Anything less
-  // is a grouping gap — record it as an error pair the operator can see.
-  if (!awb || invoices.length === 0) {
-    persistPairStatus(id, {
-      kind: "error",
-      message: "Grupare incompletă: lipsește AWB-ul sau factura. Verifică pozele.",
-    });
-    return;
-  }
 
   // Live: flip the desktop row to its "se procesează" spinner while the
   // routing/pricing run. Emit-only (never persisted) — see db.ts.
@@ -212,11 +209,17 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
       },
       "scan-batch: classified",
     );
-    const { groups, droppedAnchors, droppedJunk } = linkDocuments(docs);
+    const { groups, droppedAnchors, droppedJunk, droppedIncomplete } = linkDocuments(docs);
     if (droppedJunk.length > 0) {
       log.info(
         { batchId, junk: droppedJunk.map((i) => images[i]!.name) },
         "scan-batch: dropped junk images (identify nothing — stray pile sheets)",
+      );
+    }
+    if (droppedIncomplete.length > 0) {
+      log.info(
+        { batchId, incomplete: droppedIncomplete.map((i) => images[i]!.name) },
+        "scan-batch: dropped images that could not complete a valid pair",
       );
     }
     if (droppedAnchors.length > 0) {
