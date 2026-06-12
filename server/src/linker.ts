@@ -452,7 +452,35 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     }
   }
 
-  // Pass D — pending labels that never got an invoice cannot form a valid
+  // Pass D — repair: a still-pending label RECLAIMS an adjacent invoice
+  // (≤2 photos away) from a group that has invoices to spare (≥2), when
+  // the photo sits strictly closer to the label than to its current
+  // anchor. Photo order is the strongest structural truth — one stop,
+  // consecutive shots — and it beats a "name match" farther away: company
+  // buyers (e.g. PRO CLIENT) legitimately appear on invoices whose
+  // Destinatar is someone else, so names CAN lie across shipments while
+  // adjacency does not.
+  for (const l of pendingLabels) {
+    if (marriedLabels.has(l.index)) continue;
+    let best: { g: DocumentGroup; i: number } | null = null;
+    for (const g of groups) {
+      if (g.awbIndex === null || g.invoiceIndices.length < 2) continue;
+      for (const i of g.invoiceIndices) {
+        if (i === g.awbIndex) continue;
+        const dL = Math.abs(i - l.index);
+        if (dL <= 2 && dL < Math.abs(i - g.awbIndex) && (!best || dL < Math.abs(best.i - l.index))) {
+          best = { g, i };
+        }
+      }
+    }
+    if (best) {
+      best.g.invoiceIndices = best.g.invoiceIndices.filter((x) => x !== best.i);
+      registerGroup({ awbIndex: l.index, invoiceIndices: [best.i] });
+      marriedLabels.add(l.index);
+    }
+  }
+
+  // Pass E — pending labels that never got an invoice cannot form a valid
   // pair → dropped (logged), per command: only valid pairs are shown.
   for (const l of pendingLabels) {
     if (!marriedLabels.has(l.index)) droppedIncomplete.push(l.index);

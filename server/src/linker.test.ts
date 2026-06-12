@@ -348,6 +348,22 @@ describe("linkDocuments — degenerate stacks", () => {
     ]);
   });
 
+  it("a widowed label reclaims its ADJACENT invoice from a name-thief with invoices to spare", () => {
+    // The live Necmin/PRO CLIENT case: the invoice next to Necmin's label
+    // prints a company buyer that name-matches a DIFFERENT anchor 4 photos
+    // away. The label next door wins the photo back.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211240", recipientName: "NECMIN COLTUSA" }),
+      doc(1, "invoice", { recipientName: "PRO CLIENT CONSTANTA" }),
+      doc(4, "awb", { awbNumber: "007211113", recipientName: "PRO CLIENT CONSTANTA" }),
+      doc(5, "invoice", { recipientName: "PRO CLIENT CONSTANTA" }),
+    ]);
+    expect(groups).toEqual([
+      { awbIndex: 0, invoiceIndices: [1] },
+      { awbIndex: 4, invoiceIndices: [5] },
+    ]);
+  });
+
   it("an orphan photo of an ALREADY-PAIRED invoice folds into that pair (same comandă)", () => {
     // The live Pereche #26 case: Tihan's invoice photographed twice, the
     // second copy with an unreadable stray label. Same comandă → same
