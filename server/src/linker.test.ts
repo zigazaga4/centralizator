@@ -7,6 +7,8 @@ function doc(index: number, type: DocInfo["type"], fields: Partial<DocInfo> = {}
     index,
     type,
     awbNumber: null,
+    awbConfident: true, // tests assume clean reads unless stated otherwise
+    extraAwbNumbers: [],
     recipientName: null,
     recipientAddress: null,
     invoiceNumber: null,
@@ -65,6 +67,19 @@ describe("linkDocuments — assignment", () => {
     expect(groups).toEqual([
       { awbIndex: 1, invoiceIndices: [1] }, // lone anchor reuses itself
       { awbIndex: 4, invoiceIndices: [2] },
+    ]);
+  });
+
+  it("a name match BEYOND the assignment window loses to adjacency", () => {
+    // The live VOICU case: a far anchor must not steal a stop's invoice.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211261", recipientName: "Mihai Bercea" }),
+      doc(1, "invoice", { recipientName: "VOICU CONSTANTIN" }), // misread or shuffled paper
+      doc(11, "awb", { awbNumber: "007211193", recipientName: "VOICU CONSTANTIN" }),
+    ]);
+    expect(groups).toEqual([
+      { awbIndex: 0, invoiceIndices: [1] },
+      { awbIndex: 11, invoiceIndices: [11] },
     ]);
   });
 
@@ -164,6 +179,85 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
       doc(20, "awb", { recipientName: "MARIAN PAIU" }),
     ]);
     expect(groups.length).toBe(2);
+  });
+
+  it("a WEAK (rotated/blurred) full-number read folds by name+adjacency despite differing digits", () => {
+    // The live failure: an upside-down label hallucinated as a full number
+    // that differed from the true sibling anchor — the FAIR IMPEX split.
+    const { groups } = linkDocuments([
+      doc(0, "combined", { awbNumber: "007211227", recipientName: "FAIR IMPEX 3 SRL" }),
+      doc(1, "combined", {
+        awbNumber: "007209914",
+        awbConfident: false,
+        recipientName: "FAIR IMPEX 3 SRL",
+      }),
+    ]);
+    // The folded combined duplicate becomes the invoice view; the anchor
+    // itself rides in the AWB slot, so the extractor sees both photos.
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+  });
+
+  it("two CONFIDENT different numbers never merge even with matching name nearby", () => {
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211001", recipientName: "NICU VULPE" }),
+      doc(1, "awb", { awbNumber: "007211009", recipientName: "NICU VULPE" }),
+    ]);
+    expect(groups.length).toBe(2);
+  });
+
+  it("a 13-digit invoice-header number never acts as an AWB identity", () => {
+    // Header contamination: awb_number = the FACTURĂ number. Identity must
+    // be void, letting the photo fold into its name twin next door.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211253", recipientName: "Cerasela Ionescu" }),
+      doc(1, "combined", {
+        awbNumber: "0072600052396",
+        invoiceNumber: "0072600052396",
+        recipientName: "CERASELA IONESCU",
+      }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+  });
+
+  it("a short ambiguous partial folds into the NEAREST containing anchor", () => {
+    // "0072" is a substring of every AWB in the system — adjacency decides.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211265", recipientName: "PINDICI VALENTIN" }),
+      doc(3, "awb", { awbNumber: "007211161", recipientName: "anghelescu claudiu" }),
+      doc(4, "combined", { awbNumber: "0072", awbConfident: false }),
+    ]);
+    expect(groups).toEqual([
+      { awbIndex: 0, invoiceIndices: [0] },
+      { awbIndex: 3, invoiceIndices: [4] },
+    ]);
+  });
+
+  it("the CONFIDENT read wins the anchor role over a weak one", () => {
+    const { groups } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "007299999",
+        awbConfident: false,
+        recipientName: "ADRIAN TIHAN",
+      }),
+      doc(1, "awb", { awbNumber: "007211074", recipientName: "ADRIAN TIHAN" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 1, invoiceIndices: [0] }]);
+  });
+
+  it("stray labels in extra_awb_numbers never create or break anchors", () => {
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211074", recipientName: "ADRIAN TIHAN" }),
+      doc(1, "invoice", {
+        recipientName: "ADRIAN TIHAN",
+        extraAwbNumbers: ["007211187"], // neighbour's label peeking in
+      }),
+      doc(2, "awb", { awbNumber: "007211187", recipientName: "Liliana Radu" }),
+      doc(3, "invoice", { recipientName: "Liliana Radu" }),
+    ]);
+    expect(groups).toEqual([
+      { awbIndex: 0, invoiceIndices: [1] },
+      { awbIndex: 2, invoiceIndices: [3] },
+    ]);
   });
 });
 

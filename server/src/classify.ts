@@ -75,12 +75,23 @@ const classifyTool = {
           type: "string",
           enum: ["awb", "invoice", "combined", "unknown"],
           description:
-            "awb = courier label; invoice = FACTURĂ page; combined = courier label laid ON an invoice page (both visible); unknown = neither/unreadable.",
+            "awb = courier label is the MAIN subject; invoice = FACTURĂ page; combined = a courier label clipped/stapled/laid ON the invoice page, both belonging together; unknown = neither/unreadable.",
         },
         awb_number: {
           type: ["string", "null"],
           description:
-            "The large number printed with the barcode on the courier label (e.g. 007211172). Return EXACTLY the digits you can see — a partial read like '0900' is valuable, do not guess hidden digits. null on plain invoices or when no digits are legible.",
+            "The number of THIS document's courier label only: the label that is the photo's subject (awb) or is clipped onto the invoice (combined). NEVER the FACTURĂ header number, and NEVER a stray label from another document peeking into the frame — those go in extra_awb_numbers. Return EXACTLY the digits you can see; a partial read like '0900' is valuable, but NEVER guess rotated/blurred/hidden digits: a wrong digit is far worse than null.",
+        },
+        awb_number_confident: {
+          type: "boolean",
+          description:
+            "true ONLY if the AWB digits are upright, sharp and fully visible. false if the label is upside down, rotated, blurred, partially hidden, or you are unsure of any digit.",
+        },
+        extra_awb_numbers: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Numbers of OTHER courier labels visible in the frame that do NOT belong to this document: a label at the frame's edge, upside down relative to the main document, or on a different sheet in the pile beneath. Empty array when none. Only digits you can actually read.",
         },
         recipient_name: {
           type: ["string", "null"],
@@ -115,10 +126,19 @@ const SYSTEM_INSTRUCTION =
   "'Expeditor', 'Destinatar', 'Serviciu', 'Greutate (kg)', 'Hub destinatie', often branded 'couriermanager'.\n" +
   "  • Invoice: an A4 page headed 'FACTURĂ' / 'FACTURA' (sometimes 'DUPLICAT'), with Furnizor + Cumparator " +
   "blocks, a 'Comandă' number, a line-items table and totals.\n" +
-  "  • combined: a small AWB label physically laid ON TOP of an invoice page, both visible in the same photo.\n" +
+  "  • combined: a small AWB label clipped, stapled or laid ON the invoice page — the label BELONGS to that invoice.\n" +
+  "The photos are shot over a PILE of documents, so a frame often catches MORE than the main document: a stray " +
+  "label or sheet from the next shipment peeking in at the edge, usually upside down relative to the main " +
+  "document. A stray label is NOT this document's AWB — report its digits (if readable) in extra_awb_numbers, " +
+  "never in awb_number. The clipped label of a combined photo IS this document's AWB.\n" +
+  "Photos are taken in a hurry: documents may be ROTATED or UPSIDE DOWN — orient the page mentally before " +
+  "reading anything.\n" +
   "Read ONLY what is printed — never invent or complete fields. If part of the AWB number is covered or cut " +
-  "off, return exactly the digits you can see (a partial number is useful). Use null for anything you cannot " +
-  "read. For a combined photo fill BOTH the label fields and the invoice fields.\n" +
+  "off, return exactly the digits you can see (a partial number is useful). NEVER guess at digits you cannot " +
+  "clearly see — reading rotated digits wrong creates phantom shipments downstream; return null or the certain " +
+  "digits only, and set awb_number_confident=false. The number in the FACTURĂ header is the invoice_number and " +
+  "must NEVER be reported as awb_number. Use null for anything you cannot read. For a combined photo fill BOTH " +
+  "the label fields and the invoice fields.\n" +
   "Call classify_document EXACTLY ONCE. Never reply in prose.";
 
 const nullableStr = z.preprocess(
@@ -129,6 +149,8 @@ const nullableStr = z.preprocess(
 const ClassifyArgsSchema = z.object({
   doc_type: z.enum(["awb", "invoice", "combined", "unknown"]),
   awb_number: nullableStr.default(null),
+  awb_number_confident: z.coerce.boolean().default(false),
+  extra_awb_numbers: z.array(z.coerce.string()).default([]),
   recipient_name: nullableStr.default(null),
   recipient_address: nullableStr.default(null),
   invoice_number: nullableStr.default(null),
@@ -138,6 +160,8 @@ const ClassifyArgsSchema = z.object({
 const UNKNOWN: Omit<DocInfo, "index"> = {
   type: "unknown",
   awbNumber: null,
+  awbConfident: false,
+  extraAwbNumbers: [],
   recipientName: null,
   recipientAddress: null,
   invoiceNumber: null,
@@ -187,6 +211,8 @@ export async function classifyImage(image: ImageInput): Promise<Omit<DocInfo, "i
           return {
             type: d.doc_type as DocType,
             awbNumber: d.awb_number,
+            awbConfident: d.awb_number_confident,
+            extraAwbNumbers: d.extra_awb_numbers,
             recipientName: d.recipient_name,
             recipientAddress: d.recipient_address,
             invoiceNumber: d.invoice_number,

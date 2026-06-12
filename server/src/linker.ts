@@ -45,6 +45,15 @@ export interface DocInfo {
   index: number;
   type: DocType;
   awbNumber: string | null;
+  /** True only when the classifier saw the digits upright, sharp and whole.
+   *  Rotated/blurred labels produce plausible-but-WRONG digit strings
+   *  (observed live: an upside-down label read as another shipment's real
+   *  AWB), so an unconfident number is never treated as proof of identity. */
+  awbConfident: boolean;
+  /** Stray courier labels from OTHER documents caught in the frame (the
+   *  pile beneath, a sheet peeking in at the edge). Never anchor identity —
+   *  recorded for diagnostics only. */
+  extraAwbNumbers: string[];
   recipientName: string | null;
   recipientAddress: string | null;
   invoiceNumber: string | null;
@@ -80,10 +89,17 @@ const ADDRESS_MATCH = 0.5;
 /** How far apart (in scan positions) two photos can be and still count as
  *  re-shoots of the same document when the number alone can't prove it. */
 const DUPLICATE_WINDOW = 4;
-/** Digit-string lengths: below MIN_PARTIAL the read is noise; at or above
- *  FULL the number is a complete AWB identity (real AWBs are 9 digits). */
-const MIN_PARTIAL_DIGITS = 3;
-const FULL_AWB_DIGITS = 6;
+/** How far (in scan positions) an invoice may look for a name/address
+ *  match. A shipment's photos are taken together at one stop, so a match
+ *  farther than this is a misread, not a discovery. */
+const ASSIGN_WINDOW = 6;
+/** Digit-string lengths: below MIN_PARTIAL the read is noise; within
+ *  [FULL_MIN, FULL_MAX] the number is shaped like a complete AWB (real
+ *  AWBs are 9 digits); ABOVE FULL_MAX it is something else entirely —
+ *  invoice header numbers are 13 digits and must never act as an AWB. */
+const MIN_PARTIAL_DIGITS = 4;
+const FULL_MIN_DIGITS = 6;
+const FULL_MAX_DIGITS = 10;
 
 /** Loose-comparison token set of a name/address: normalised, split on
  *  non-alphanumerics, short fragments dropped, duplicates collapsed. */
@@ -105,10 +121,15 @@ export function overlapScore(a: Set<string>, b: Set<string>): number {
   return shared / Math.min(a.size, b.size);
 }
 
-/** Digits of an AWB read, or null when too short to mean anything. */
-function awbDigits(s: string | null): string | null {
-  const d = (s ?? "").replace(/\D/g, "");
-  return d.length >= MIN_PARTIAL_DIGITS ? d : null;
+/** Usable digits of a doc's AWB read, or null when the read is noise:
+ *  too short, longer than any real AWB (a leaked invoice-header number),
+ *  or equal to the doc's own invoice number (header contamination). */
+function awbDigits(d: Pick<DocInfo, "awbNumber" | "invoiceNumber">): string | null {
+  const n = (d.awbNumber ?? "").replace(/\D/g, "");
+  if (n.length < MIN_PARTIAL_DIGITS || n.length > FULL_MAX_DIGITS) return null;
+  const inv = (d.invoiceNumber ?? "").replace(/\D/g, "");
+  if (inv.length > 0 && (n === inv || inv.endsWith(n))) return null;
+  return n;
 }
 
 function nameScore(a: DocInfo, b: DocInfo): number {
@@ -150,8 +171,9 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   const extraInvoices = new Map<number, number[]>();
 
   for (const a of anchorsIn) {
-    const aNum = awbDigits(a.awbNumber);
-    const aFull = aNum !== null && aNum.length >= FULL_AWB_DIGITS ? aNum : null;
+    const aNum = awbDigits(a);
+    const aFull = aNum !== null && aNum.length >= FULL_MIN_DIGITS ? aNum : null;
+    const aStrong = aFull !== null && a.awbConfident;
 
     // Compare against kept anchors, nearest in scan order first.
     const byDistance = [...kept].sort(
@@ -160,14 +182,16 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     let dupOf: DocInfo | null = null;
     let reason = "";
     for (const b of byDistance) {
-      const bNum = awbDigits(b.awbNumber);
-      const bFull = bNum !== null && bNum.length >= FULL_AWB_DIGITS ? bNum : null;
+      const bNum = awbDigits(b);
+      const bFull = bNum !== null && bNum.length >= FULL_MIN_DIGITS ? bNum : null;
+      const bStrong = bFull !== null && b.awbConfident;
       const near = Math.abs(a.index - b.index) <= DUPLICATE_WINDOW;
       const names = nameScore(a, b) >= NAME_MATCH;
 
-      if (aFull !== null && bFull !== null) {
-        // Two complete identities: equal → same shipment; different →
-        // PROVABLY distinct, no other signal may merge them.
+      if (aStrong && bStrong) {
+        // Two CONFIDENT complete identities: equal → the same physical
+        // label, merge at any distance; different → provably distinct, no
+        // softer signal may override two clear reads.
         if (aFull === bFull) {
           dupOf = b;
           reason = `same AWB number ${aFull}`;
@@ -175,19 +199,27 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
         }
         continue;
       }
-      if (aNum !== null && bFull !== null && bFull.endsWith(aNum) && (names || near)) {
+      // At least one side is a weak read (rotated/blurred labels produce
+      // plausible-but-wrong digits — observed live), so digits alone prove
+      // nothing here; identity falls back to softer signals.
+      if (aFull !== null && aFull === bFull && (names || near)) {
         dupOf = b;
-        reason = `partial "${aNum}" suffixes ${bFull}`;
+        reason = `same AWB number ${aFull} (weak read)`;
         break;
       }
-      if (bNum !== null && aFull !== null && aFull.endsWith(bNum) && (names || near)) {
+      if (names && near) {
         dupOf = b;
-        reason = `partial "${bNum}" suffixes ${aFull}`;
+        reason = "same recipient nearby";
         break;
       }
-      if (aNum === null && names && near) {
+      if (near && aNum !== null && bFull !== null && bFull.includes(aNum)) {
         dupOf = b;
-        reason = "unreadable number, same recipient nearby";
+        reason = `partial "${aNum}" within ${bFull}`;
+        break;
+      }
+      if (near && bNum !== null && aFull !== null && aFull.includes(bNum)) {
+        dupOf = b;
+        reason = `partial "${bNum}" within ${aFull}`;
         break;
       }
     }
@@ -197,11 +229,13 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       continue;
     }
 
-    // Of the duplicate pair, the longer number read is the better anchor.
-    const dupNum = awbDigits(dupOf.awbNumber) ?? "";
+    // Of the duplicate pair the better identity wins the anchor role:
+    // confident read first, then the longer digit string.
+    const dupNum = awbDigits(dupOf) ?? "";
+    const dupStrong = dupNum.length >= FULL_MIN_DIGITS && dupOf.awbConfident;
     let winner = dupOf;
     let loser = a;
-    if ((aNum ?? "").length > dupNum.length) {
+    if (aStrong && !dupStrong ? true : aStrong === dupStrong && (aNum ?? "").length > dupNum.length) {
       kept[kept.indexOf(dupOf)] = a;
       // Re-home any extras already attached to the replaced anchor.
       const moved = extraInvoices.get(dupOf.index);
@@ -255,14 +289,18 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
         return c.index < item.index ? c : best;
       });
 
-    const tier1 = anchors.filter(
+    // A shipment's photos are taken together at one stop, so name/address
+    // matches only count among NEARBY anchors — a "match" across half the
+    // stack is a misread capturing someone else's invoice, not a discovery.
+    const nearAnchors = anchors.filter((a) => Math.abs(a.index - item.index) <= ASSIGN_WINDOW);
+    const tier1 = nearAnchors.filter(
       (a) => overlapScore(itemNames, tokenSet(a.recipientName)) >= NAME_MATCH,
     );
     // Addresses share boilerplate tokens ("str", the town), so within the
     // address tier the HIGHEST overlap wins and distance only breaks ties.
     let tier2: DocInfo[] = [];
     if (tier1.length === 0) {
-      const scored = anchors
+      const scored = nearAnchors
         .map((a) => ({ a, s: overlapScore(itemAddr, tokenSet(a.recipientAddress)) }))
         .filter(({ s }) => s >= ADDRESS_MATCH);
       const best = Math.max(0, ...scored.map(({ s }) => s));

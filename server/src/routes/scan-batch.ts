@@ -185,6 +185,22 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
     // volume-proof, no mega-call to overflow, no filenames to trust),
     // then deterministic code links the readings into shipments.
     const docs = await classifyImages(aiImages);
+    // One compact line per image — the linker's entire input, so any
+    // mis-grouping can be diagnosed from the log without re-running.
+    log.info(
+      {
+        batchId,
+        readings: docs.map((d) => ({
+          name: images[d.index]!.name,
+          type: d.type,
+          awb: d.awbNumber,
+          sure: d.awbConfident,
+          extra: d.extraAwbNumbers.length > 0 ? d.extraAwbNumbers : undefined,
+          who: d.recipientName,
+        })),
+      },
+      "scan-batch: classified",
+    );
     const { groups, droppedAnchors } = linkDocuments(docs);
     if (droppedAnchors.length > 0) {
       log.info(
