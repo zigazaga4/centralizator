@@ -293,3 +293,194 @@ export async function classifyImages(images: ImageInput[]): Promise<DocInfo[]> {
   const readings = await mapPool(images, CLASSIFY_CONCURRENCY, (img) => classifyImage(img));
   return readings.map((r, index) => ({ index, ...r }));
 }
+
+/* ──────────────────────────────────────────────────────────────────────
+ * AI pair SUGGESTIONS — the human-override companion to the linker.
+ *
+ * The deterministic linker refuses to guess; what it could not pair sits
+ * in the "documente fără pereche" modal. There the operator can press a
+ * button that sends ALL the orphan photos in ONE call to the model and
+ * asks it to PROPOSE pairings from what it can actually see (shared
+ * recipient/buyer name, address, order/AWB numbers printed across the
+ * documents). These are SUGGESTIONS only: the human reviews, rearranges
+ * them by drag-and-drop, and only then sends the groups to OCR — nothing
+ * here touches the database or the pricing pipeline.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** One AI-suggested shipment: pool indices (0-based, validated) of the
+ *  AWB photo and its invoice photo(s), plus the printed evidence the
+ *  model cited — shown to the operator under the group. */
+export interface PairSuggestionIdx {
+  awbIndex: number;
+  invoiceIndices: number[];
+  evidence: string | null;
+}
+
+/** Hard ceiling on photos per suggestion call — one request carries every
+ *  image, so the cap keeps the payload sane. Route-level validation reuses
+ *  it so the limit lives in exactly one place. */
+export const SUGGEST_MAX_IMAGES = Number(process.env.SUGGEST_MAX_IMAGES ?? 40);
+
+/** All-images-in-one-call ceiling — wider than the per-image read. */
+const SUGGEST_TIMEOUT_MS = Number(process.env.SUGGEST_TIMEOUT_MS ?? 180_000);
+
+const suggestPairTool = {
+  type: "function" as const,
+  function: {
+    name: "suggest_pair",
+    description:
+      "Propose ONE shipment: the photo number of its AWB label plus the photo number(s) of its invoice page(s). " +
+      "Call once per shipment you can match. Only pair photos linked by PRINTED evidence visible in both.",
+    parameters: {
+      type: "object",
+      properties: {
+        awb_image: {
+          type: "integer",
+          description: "Photo number (1-based, as captioned) of the AWB courier label.",
+        },
+        invoice_images: {
+          type: "array",
+          items: { type: "integer" },
+          description: "Photo numbers (1-based) of the invoice page(s) belonging to the same shipment.",
+        },
+        evidence: {
+          type: "string",
+          description:
+            "The printed evidence that links them — e.g. the shared recipient/buyer name, the shared address, or a matching order/AWB number. Short, in Romanian.",
+        },
+      },
+      required: ["awb_image", "invoice_images"],
+    },
+  },
+};
+
+const noPairsTool = {
+  type: "function" as const,
+  function: {
+    name: "no_pairs",
+    description: "Call ONLY when no two photos share enough printed evidence to propose any pairing.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
+const SUGGEST_SYSTEM_INSTRUCTION =
+  "You see N numbered photos of courier paperwork from a Romanian back office. An automatic matcher already " +
+  "FAILED to pair them, so a human will review whatever you propose — your job is to suggest which photos " +
+  "belong to the same shipment.\n" +
+  "Each photo is one document: a courier waybill label (AWB: barcode, 9-digit 007… number, Destinatar block), " +
+  "a fiscal invoice (FACTURĂ: Furnizor + Cumparator blocks, Comandă number, line items), or something unreadable. " +
+  "Documents may be ROTATED or UPSIDE DOWN — orient each one mentally before reading it.\n" +
+  "Pair an AWB label with its invoice(s) using PRINTED evidence only:\n" +
+  "  • the AWB's Destinatar matches the invoice's Cumparator (name or company);\n" +
+  "  • the delivery address matches the buyer address;\n" +
+  "  • an order/AWB number printed on one document appears on the other.\n" +
+  "Rules: call suggest_pair once per matched shipment; one AWB may take several invoices; each photo may appear " +
+  "in AT MOST one suggestion; never pair photos that share no visible evidence — leave them out; if nothing " +
+  "matches, call no_pairs. NEVER pair by photo order or by guessing. Reply ONLY with tool calls, never in prose.";
+
+const toIdx = (v: unknown): number | null => {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isInteger(n) ? n - 1 : null; // model speaks 1-based, code 0-based
+};
+
+/** Fold one response's suggest_pair calls into validated suggestions.
+ *  Returns null when no valid tool call arrived (the retry loop continues).
+ *  Validation is pure set math: every index in range, every photo used at
+ *  most once across ALL suggestions (first claim wins), AWB ∉ invoices. */
+function suggestionsFromToolCalls(
+  toolCalls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[] | undefined,
+  count: number,
+): PairSuggestionIdx[] | null {
+  if (!toolCalls || toolCalls.length === 0) return null;
+
+  const used = new Set<number>();
+  const out: PairSuggestionIdx[] = [];
+  let sawValidCall = false;
+
+  for (const call of toolCalls) {
+    if (call.function.name === "no_pairs") {
+      sawValidCall = true;
+      continue;
+    }
+    if (call.function.name !== "suggest_pair") continue;
+    let args: unknown;
+    try {
+      args = JSON.parse(call.function.arguments);
+    } catch {
+      continue; // truncated JSON on one call — others may still be good
+    }
+    if (typeof args !== "object" || args === null) continue;
+    sawValidCall = true;
+
+    const a = args as Record<string, unknown>;
+    const awb = toIdx(a.awb_image);
+    if (awb === null || awb < 0 || awb >= count || used.has(awb)) continue;
+    const invoices = (Array.isArray(a.invoice_images) ? a.invoice_images : [])
+      .map(toIdx)
+      .filter((i): i is number => i !== null && i >= 0 && i < count && i !== awb && !used.has(i))
+      .filter((i, pos, arr) => arr.indexOf(i) === pos);
+    if (invoices.length === 0) continue;
+
+    used.add(awb);
+    for (const i of invoices) used.add(i);
+    out.push({ awbIndex: awb, invoiceIndices: invoices, evidence: str(a.evidence) });
+  }
+  return sawValidCall ? out : null;
+}
+
+/**
+ * Send the whole orphan pool to the model in ONE call and collect its
+ * pairing proposals. Throws after the retries are exhausted — the caller
+ * surfaces the failure to the operator (unlike classifyImage, there is no
+ * sane "unknown" fallback for a whole-pool suggestion).
+ */
+export async function suggestPairs(images: ImageInput[]): Promise<PairSuggestionIdx[]> {
+  if (!API_KEY) throw new Error("OPENROUTER_API_KEY is not configured on the server.");
+  if (images.length < 2) return [];
+
+  // Interleave "Photo k:" captions with the images — the captions are the
+  // coordinate system the tool calls answer in.
+  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = images.flatMap((img, i) => [
+    { type: "text" as const, text: `Photo ${i + 1}:` },
+    {
+      type: "image_url" as const,
+      image_url: { url: `data:${img.mimeType};base64,${img.data.toString("base64")}` },
+    },
+  ]);
+  content.push({
+    type: "text" as const,
+    text: `These are the ${images.length} unpaired photos. Propose pairings with suggest_pair (or no_pairs).`,
+  });
+
+  const MAX_TRIES = 3;
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+    try {
+      const completion = await client.chat.completions.create(
+        {
+          // No temperature or other sampling overrides: the model runs at
+          // its provider-tuned defaults.
+          model: MODEL,
+          messages: [
+            { role: "system", content: SUGGEST_SYSTEM_INSTRUCTION },
+            { role: "user", content },
+          ],
+          tools: [suggestPairTool, noPairsTool],
+          tool_choice: "required",
+          ...REASONING,
+        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+        { signal: AbortSignal.timeout(SUGGEST_TIMEOUT_MS) },
+      );
+      const suggestions = suggestionsFromToolCalls(
+        completion.choices?.[0]?.message?.tool_calls,
+        images.length,
+      );
+      if (suggestions !== null) return suggestions;
+      lastError = new Error("model returned no valid tool calls");
+    } catch (err) {
+      lastError = err as Error;
+    }
+    if (attempt < MAX_TRIES) await new Promise((r) => setTimeout(r, 2000 * attempt));
+  }
+  throw new Error(`AI pair suggestion failed: ${lastError?.message ?? "unknown error"}`);
+}

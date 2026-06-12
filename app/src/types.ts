@@ -511,6 +511,16 @@ export interface PricingRequest {
 /** What kind of document an unpaired row holds — drives its badge. */
 export type UnpairedDocType = "awb" | "invoice" | "unknown";
 
+/** One AI-suggested pairing over the unpaired pool (POST /pairs/suggest):
+ *  the orphan-row ids of the AWB photo and its invoice photo(s), plus the
+ *  printed evidence the model cited. Suggestions only — the operator
+ *  rearranges them by drag-and-drop and sends them to OCR explicitly. */
+export interface PairSuggestion {
+  awbId: string;
+  invoiceIds: string[];
+  evidence: string | null;
+}
+
 export type PairStatus =
   | { kind: "pending" }
   | { kind: "extracting" }

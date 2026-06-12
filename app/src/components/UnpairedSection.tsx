@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Pair, UnpairedDocType } from "../types";
 import { usePairImages } from "../lib/images";
+import { suggestPairs } from "../lib/api";
 import { Spinner } from "./Spinner";
 
 /**
@@ -20,6 +21,12 @@ import { Spinner } from "./Spinner";
  *     extraction + pricing the desktop flow already uses — the vision
  *     model decides which image is the AWB, so even a misclassified
  *     orphan pairs correctly.
+ *   • AI suggestions — the "Împerechere AI" button ships ALL the orphan
+ *     photos to the model in one call (POST /pairs/suggest) and shows
+ *     its pairing PROPOSALS under the grid. The operator rearranges them
+ *     by drag-and-drop (photo ↔ group ↔ pool) and only the explicit
+ *     "Trimite perechile la OCR" button turns the groups into real pairs
+ *     through the same manual flow — nothing reaches the queue before.
  *
  * Each orphan is a single-image row in the same pairs store (status
  * "unpaired"), so hydration, live SSE updates, and deletion all reuse
@@ -75,15 +82,44 @@ interface ModalProps {
   onPair: (ids: string[]) => Promise<boolean>;
 }
 
+/** One AI-suggested (then human-rearranged) group of orphan-row ids.
+ *  Lives only in the modal — becomes a real pair on "Trimite la OCR". */
+interface SuggestedGroup {
+  ids: string[];
+  evidence: string | null;
+}
+
 export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [zoomed, setZoomed] = useState<string | null>(null);
   const [pairing, setPairing] = useState(false);
+  /** AI proposals: null = not requested yet; [] = asked, none found. */
+  const [groups, setGroups] = useState<SuggestedGroup[] | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  /** The "send to OCR" pass is in flight (pairs being created). */
+  const [sending, setSending] = useState(false);
 
-  // Drop selections whose rows disappeared (deleted / just paired).
+  // Drop selections + suggestion members whose rows disappeared
+  // (deleted / just paired); empty groups dissolve.
   useEffect(() => {
     setSelected((cur) => cur.filter((id) => items.some((p) => p.id === id)));
+    setGroups((cur) =>
+      cur === null
+        ? cur
+        : cur
+            .map((g) => ({ ...g, ids: g.ids.filter((id) => items.some((p) => p.id === id)) }))
+            .filter((g) => g.ids.length > 0),
+    );
   }, [items]);
+
+  // A document inside a suggested group leaves the manual selection —
+  // the two mechanisms never claim the same photo at once.
+  useEffect(() => {
+    if (groups === null) return;
+    const inGroup = new Set(groups.flatMap((g) => g.ids));
+    setSelected((cur) => cur.filter((id) => !inGroup.has(id)));
+  }, [groups]);
 
   // Esc closes the zoom first, then the modal — never both at once.
   useEffect(() => {
@@ -113,6 +149,61 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
       setPairing(false);
     }
   };
+
+  /** "Împerechere AI" — ship every orphan's photo to the model in one
+   *  call and lay its proposals out under the grid. Pure read. */
+  const suggest = async () => {
+    if (items.length < 2 || suggesting || sending) return;
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const sugg = await suggestPairs(items.map((p) => p.id));
+      setGroups(sugg.map((s) => ({ ids: [s.awbId, ...s.invoiceIds], evidence: s.evidence })));
+    } catch (err) {
+      setGroups(null);
+      setSuggestError((err as Error).message);
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  /** Drag-and-drop move: pull `id` out of every group, then drop it into
+   *  group `target` (`null` = back to the unassigned pool). */
+  const moveTo = (id: string, target: number | null) =>
+    setGroups((cur) => {
+      if (cur === null) return cur;
+      const next = cur.map((g) => ({ ...g, ids: g.ids.filter((x) => x !== id) }));
+      if (target !== null && next[target]) {
+        next[target] = { ...next[target], ids: [...next[target].ids, id] };
+      }
+      return next.filter((g) => g.ids.length > 0);
+    });
+
+  /** Undo one whole suggestion — its documents return to the pool. */
+  const dissolve = (gi: number) =>
+    setGroups((cur) => (cur === null ? cur : cur.filter((_, i) => i !== gi)));
+
+  // Only complete groups (AWB + at least one more document) ride to OCR.
+  const readyGroups = (groups ?? []).filter((g) => g.ids.length >= 2);
+
+  /** "Trimite perechile la OCR" — every approved group becomes a real
+   *  pair through the same manual flow (insert + extract + price), all
+   *  in parallel. Only NOW do they appear in the queue/excel view; a
+   *  failed group keeps its rows and stays listed for a retry. */
+  const sendToOcr = async () => {
+    if (readyGroups.length === 0 || sending || pairing) return;
+    setSending(true);
+    try {
+      await Promise.all(readyGroups.map((g) => onPair(g.ids)));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Pool = orphans not claimed by any suggestion (all of them pre-AI).
+  const grouped = new Set((groups ?? []).flatMap((g) => g.ids));
+  const pool = items.filter((p) => !grouped.has(p.id));
+  const byId = new Map(items.map((p) => [p.id, p] as const));
 
   return (
     <div
@@ -146,20 +237,109 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
           </button>
         </header>
 
-        <div className="grid flex-1 gap-4 overflow-y-auto p-5 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
-          {items.map((p) => (
-            <OrphanCard
-              key={p.id}
-              pair={p}
-              order={selected.indexOf(p.id)}
-              onToggle={() => toggle(p.id)}
-              onZoom={setZoomed}
-              onRemove={() => onRemove(p.id)}
-            />
-          ))}
+        <div
+          className="flex-1 overflow-y-auto"
+          /* Dropping anywhere outside a suggestion card returns the
+             dragged document to the unassigned pool. */
+          onDragOver={(e) => {
+            if (groups !== null) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            const id = e.dataTransfer.getData("text/plain");
+            if (id) moveTo(id, null);
+          }}
+        >
+          {pool.length > 0 && (
+            <div className="grid gap-4 p-5 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
+              {pool.map((p) => (
+                <OrphanCard
+                  key={p.id}
+                  pair={p}
+                  order={selected.indexOf(p.id)}
+                  draggable={groups !== null}
+                  onToggle={() => toggle(p.id)}
+                  onZoom={setZoomed}
+                  onRemove={() => onRemove(p.id)}
+                />
+              ))}
+            </div>
+          )}
+          {pool.length === 0 && items.length > 0 && (
+            <p className="px-5 pt-4 text-center text-xs text-ink-500">
+              Toate documentele sunt în perechile sugerate — trage o imagine aici pentru a o scoate.
+            </p>
+          )}
+
+          {/* AI suggestions — proposals only, until "Trimite la OCR". */}
+          {(groups !== null || suggesting || suggestError !== null) && (
+            <section className="border-t border-ink-200 p-5">
+              <header className="mb-3 flex items-center gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-900">
+                  Perechi sugerate de AI{groups !== null ? ` · ${groups.length}` : ""}
+                </h3>
+                <span className="text-[11px] text-ink-500">
+                  Trage imaginile între perechi pentru a corecta sugestiile.
+                </span>
+                {groups !== null && groups.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void sendToOcr()}
+                    disabled={readyGroups.length === 0 || sending || pairing}
+                    title="Creează perechile aprobate și trimite-le la citire + calcul — abia atunci apar în tabel"
+                    className="ml-auto inline-flex shrink-0 items-center gap-2 rounded-md bg-coral-500 px-4 py-1.5 text-sm font-medium text-canvas-50 shadow-sm transition hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400"
+                  >
+                    {sending ? (
+                      <Spinner label="Trimit la OCR…" />
+                    ) : (
+                      <span>Trimite perechile la OCR ({readyGroups.length})</span>
+                    )}
+                  </button>
+                )}
+              </header>
+              {suggestError !== null && (
+                <p className="mb-3 rounded-md border border-coral-300 bg-coral-50 px-3 py-2 text-xs text-coral-700">
+                  {suggestError}
+                </p>
+              )}
+              {suggesting ? (
+                <div className="flex items-center gap-2 py-4 text-sm text-ink-600">
+                  <Spinner label="AI analizează documentele și caută perechi…" />
+                </div>
+              ) : groups !== null && groups.length === 0 ? (
+                <p className="py-2 text-sm text-ink-600">
+                  AI nu a găsit nicio pereche cu dovezi vizibile — împerechează manual mai sus.
+                </p>
+              ) : (
+                groups !== null && (
+                  <div className="flex flex-col gap-3">
+                    {groups.map((g, gi) => (
+                      <SuggestedGroupCard
+                        key={`${gi}-${g.ids.join("/")}`}
+                        group={g}
+                        index={gi}
+                        byId={byId}
+                        onDrop={(id) => moveTo(id, gi)}
+                        onDissolve={() => dissolve(gi)}
+                        onZoom={setZoomed}
+                      />
+                    ))}
+                  </div>
+                )
+              )}
+            </section>
+          )}
         </div>
 
         <footer className="flex items-center gap-3 border-t border-ink-200 bg-canvas-50 px-5 py-3">
+          <button
+            type="button"
+            onClick={() => void suggest()}
+            disabled={items.length < 2 || suggesting || sending}
+            title="Trimite toate documentele fără pereche la AI o singură dată — modelul propune perechi după ce vede pe hârtii"
+            className="inline-flex shrink-0 items-center gap-2 rounded-md border border-ink-300 px-4 py-1.5 text-sm font-medium text-ink-700 transition hover:border-coral-400 hover:text-ink-900 disabled:cursor-not-allowed disabled:text-ink-400"
+          >
+            {suggesting ? <Spinner label="AI caută perechi…" /> : <span>✨ Împerechere AI</span>}
+          </button>
           <span className="text-sm text-ink-600">
             {selected.length === 0
               ? "Nimic selectat."
@@ -210,6 +390,7 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
 function OrphanCard({
   pair,
   order,
+  draggable = false,
   onToggle,
   onZoom,
   onRemove,
@@ -217,31 +398,25 @@ function OrphanCard({
   pair: Pair;
   /** Position in the current selection (-1 = not selected). */
   order: number;
+  /** Once AI suggestions exist, pool cards can be dragged into a group. */
+  draggable?: boolean;
   onToggle: () => void;
   onZoom: (url: string) => void;
   onRemove: () => void;
 }) {
   const docType: UnpairedDocType =
     pair.status.kind === "unpaired" ? pair.status.docType : "unknown";
-  const { files, loading } = usePairImages(pair);
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    const f = files[0];
-    if (!f) return;
-    const u = URL.createObjectURL(f);
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [files]);
-
-  const name = files[0]?.name ?? pair.imageRefs?.[0]?.name ?? "";
+  const { url, loading, name } = useFirstImageUrl(pair);
   const isSelected = order >= 0;
 
   return (
     <div
+      draggable={draggable}
+      onDragStart={(e) => e.dataTransfer.setData("text/plain", pair.id)}
       className={`flex flex-col overflow-hidden rounded-lg border bg-canvas-50 shadow-sm transition ${
         isSelected ? "border-coral-500 ring-2 ring-coral-400" : "border-ink-200"
-      }`}
-      title={DOC_HINT[docType]}
+      } ${draggable ? "cursor-grab" : ""}`}
+      title={draggable ? "Trage cardul într-o pereche sugerată" : DOC_HINT[docType]}
     >
       <div className="relative">
         {loading || !url ? (
@@ -298,6 +473,129 @@ function OrphanCard({
       </div>
     </div>
   );
+}
+
+/* ─── One AI-suggested pair (drag-and-drop editable) ────────────────── */
+
+const MINI_LABEL: Record<UnpairedDocType, string> = {
+  awb: "AWB",
+  invoice: "Factură",
+  unknown: "?",
+};
+
+function SuggestedGroupCard({
+  group,
+  index,
+  byId,
+  onDrop,
+  onDissolve,
+  onZoom,
+}: {
+  group: SuggestedGroup;
+  index: number;
+  /** Live orphan rows by id — vanished members are pruned upstream. */
+  byId: Map<string, Pair>;
+  /** A document was dropped onto this group. */
+  onDrop: (id: string) => void;
+  /** Undo the whole suggestion — documents return to the pool. */
+  onDissolve: () => void;
+  onZoom: (url: string) => void;
+}) {
+  const incomplete = group.ids.length < 2;
+  return (
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation(); // the scroll container's drop = "back to pool"
+        const id = e.dataTransfer.getData("text/plain");
+        if (id) onDrop(id);
+      }}
+      className={`rounded-lg border bg-canvas-50 p-3 shadow-sm transition ${
+        incomplete ? "border-dashed border-coral-400" : "border-ink-200"
+      }`}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-800">
+          Pereche {index + 1} · {group.ids.length} document{group.ids.length === 1 ? "" : "e"}
+        </span>
+        {incomplete && (
+          <span className="text-[11px] text-coral-600">
+            incompletă — trage aici încă un document
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onDissolve}
+          title="Desfă perechea — documentele revin în listă"
+          className="ml-auto shrink-0 rounded p-1 text-ink-400 transition hover:bg-coral-100 hover:text-coral-600"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {group.ids.map((id) => {
+          const p = byId.get(id);
+          return p ? <MiniThumb key={id} pair={p} onZoom={onZoom} /> : null;
+        })}
+      </div>
+      {group.evidence && (
+        <p className="mt-2 text-[11px] italic text-ink-500" title="Dovada citită de AI pe documente">
+          Dovadă: {group.evidence}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Small draggable thumbnail of one orphan inside a suggested group. */
+function MiniThumb({ pair, onZoom }: { pair: Pair; onZoom: (url: string) => void }) {
+  const docType: UnpairedDocType =
+    pair.status.kind === "unpaired" ? pair.status.docType : "unknown";
+  const { url, name } = useFirstImageUrl(pair);
+  return (
+    <div
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData("text/plain", pair.id)}
+      title={`${name} — trage pentru a muta în altă pereche sau înapoi în listă`}
+      className="relative w-24 shrink-0 cursor-grab overflow-hidden rounded-md border border-ink-200 bg-canvas-100"
+    >
+      {url ? (
+        <img
+          src={url}
+          alt={name}
+          draggable={false}
+          onClick={() => onZoom(url)}
+          className="h-28 w-full cursor-zoom-in object-cover"
+        />
+      ) : (
+        <div className="h-28 w-full animate-pulse bg-ink-200/60" />
+      )}
+      <span className="absolute left-1 top-1 rounded bg-ink-900/70 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-canvas-50">
+        {MINI_LABEL[docType]}
+      </span>
+    </div>
+  );
+}
+
+/* ─── Shared first-image URL hook ───────────────────────────────────── */
+
+/** Object-URL (+ display name) of a pair's first photo — shared by the
+ *  big orphan cards and the small suggestion thumbs. Revoked on change. */
+function useFirstImageUrl(pair: Pair): { url: string | null; loading: boolean; name: string } {
+  const { files, loading } = usePairImages(pair);
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const f = files[0];
+    if (!f) return;
+    const u = URL.createObjectURL(f);
+    setUrl(u);
+    return () => {
+      URL.revokeObjectURL(u);
+      setUrl(null);
+    };
+  }, [files]);
+  return { url, loading, name: files[0]?.name ?? pair.imageRefs?.[0]?.name ?? "" };
 }
 
 /* ─── Shared icon ───────────────────────────────────────────────────── */

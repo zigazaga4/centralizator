@@ -1,4 +1,4 @@
-import type { CompareReport, Extracted, ExtractResponse, PricingBreakdown, PricingRequest, Verification } from "../types";
+import type { CompareReport, Extracted, ExtractResponse, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
 
 /**
  * In dev, Vite proxies /api/* to the Fastify server on localhost:3000.
@@ -75,6 +75,33 @@ export async function scanBatch(
     throw new Error(`scan-batch failed (${res.status}): ${body}`);
   }
   return res.json();
+}
+
+/**
+ * Ask the AI to propose pairings over the day's unpaired documents.
+ * Sends the orphan-row ids; the SERVER pulls the photos from its own DB
+ * (no image bytes ride this request) and ships them all to the model in
+ * one call. Pure read — nothing is created until the operator approves
+ * the groups and sends them to OCR through the manual-pairing flow.
+ */
+export async function suggestPairs(ids: string[]): Promise<PairSuggestion[]> {
+  if (ids.length < 2) throw new Error("suggestPairs needs at least two documents.");
+  const res = await fetch(`${BASE}/pairs/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    let msg: string | null = null;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* non-JSON error body — fall through to the generic message */
+    }
+    throw new Error(msg ?? `pairs/suggest failed (${res.status})`);
+  }
+  const data = (await res.json()) as { suggestions: PairSuggestion[] };
+  return data.suggestions;
 }
 
 export async function reprice(req: PricingRequest): Promise<PricingBreakdown> {

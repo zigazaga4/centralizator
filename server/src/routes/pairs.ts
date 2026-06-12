@@ -37,6 +37,7 @@ import {
   persistPairStatus,
   type PairStatus,
 } from "../db.js";
+import { suggestPairs, SUGGEST_MAX_IMAGES } from "../classify.js";
 import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
 import type { Routing } from "../schema.js";
 import { STORES } from "../stores.js";
@@ -256,6 +257,61 @@ export default async function pairRoutes(app: FastifyInstance) {
       // Short private cache: the underlying routing can be refreshed.
       .header("cache-control", "private, max-age=300")
       .send(bytes);
+  });
+
+  /* ── AI pair suggestions over the unpaired pool ───────────────── */
+  // The "Împerechere AI" button in the unpaired modal. Takes the ids of
+  // the day's orphan rows, ships ALL their photos to the model in ONE
+  // call and returns its pairing PROPOSALS — pure read, nothing is
+  // created or deleted here. The operator rearranges the groups by
+  // drag-and-drop and only the separate "send to OCR" step turns them
+  // into real pairs (through the existing manual-pairing flow).
+  app.post("/pairs/suggest", async (req, reply) => {
+    const parsed = z
+      .object({ ids: z.array(z.string().min(1)).min(2).max(SUGGEST_MAX_IMAGES) })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.toString() });
+    }
+
+    // Resolve each id to its single orphan photo. Rows that vanished or
+    // are not unpaired (raced a delete / a manual pairing) are skipped —
+    // the suggestion runs over whatever is still standing.
+    const entries: Array<{ id: string; bytes: Buffer; mimeType: string }> = [];
+    for (const id of parsed.data.ids) {
+      const pair = getPair(id);
+      if (!pair || pair.status.kind !== "unpaired") continue;
+      const img = getPairImage(id, 0);
+      if (!img) continue;
+      entries.push({ id, bytes: img.bytes, mimeType: img.mimeType });
+    }
+    if (entries.length < 2) {
+      return reply.code(422).send({
+        error: "Mai puțin de două documente fără pereche valide — nu există ce împerechea.",
+      });
+    }
+
+    try {
+      const raw = await suggestPairs(
+        entries.map((e) => ({ data: e.bytes, mimeType: e.mimeType })),
+      );
+      // Pool indices → pair ids: the wire shape the modal works with.
+      const suggestions = raw.map((s) => ({
+        awbId: entries[s.awbIndex]!.id,
+        invoiceIds: s.invoiceIndices.map((i) => entries[i]!.id),
+        evidence: s.evidence,
+      }));
+      req.log.info(
+        { poolIds: entries.map((e) => e.id), suggestions },
+        "pairs/suggest: AI proposals",
+      );
+      return reply.send({ suggestions });
+    } catch (err) {
+      req.log.error({ err }, "pairs/suggest failed");
+      return reply.code(502).send({
+        error: "AI-ul nu a putut sugera perechi acum — încearcă din nou.",
+      });
+    }
   });
 
   /* ── Create ───────────────────────────────────────────────────── */
