@@ -50,11 +50,18 @@ const LS_SETTINGS = "centralizator.exportSettings";
 
 /** Read + validate the persisted settings. Every field is checked so a
  *  stale or hand-edited blob degrades to the defaults instead of
- *  producing a malformed file. */
-function readStoredSettings(): ExportSettings {
+ *  producing a malformed file.
+ *
+ *  First run (nothing stored): the scope preselects the header's
+ *  collaborator, so combined with `statement` defaulting to ON the
+ *  modal opens ready to generate that partner's decont — the decont is
+ *  the default export, per the operator's working rule. */
+function readStoredSettings(fallbackCollaborator: CollaboratorKey | null): ExportSettings {
   try {
     const raw = localStorage.getItem(LS_SETTINGS);
-    if (!raw) return DEFAULT_EXPORT_SETTINGS;
+    if (!raw) {
+      return { ...DEFAULT_EXPORT_SETTINGS, scope: fallbackCollaborator ?? "all" };
+    }
     const p = JSON.parse(raw) as Partial<ExportSettings>;
     const bool = (v: unknown, dflt: boolean) => (typeof v === "boolean" ? v : dflt);
     const scope: ExportScope =
@@ -66,9 +73,10 @@ function readStoredSettings(): ExportSettings {
     return {
       scope,
       includeUnassigned: bool(p.includeUnassigned, true),
-      // Decont is per-partner by definition — never restore it for a
-      // non-partner scope.
-      statement: bool(p.statement, false) && scope !== "all" && scope !== "direct",
+      // The decont preference persists as-is (default ON); whether it
+      // takes effect is gated by the partner scope at render/export
+      // time, so it re-arms automatically when a partner is picked.
+      statement: bool(p.statement, true),
       colDetails: bool(p.colDetails, true),
       colCarrier: bool(p.colCarrier, true),
       colCityTotal: bool(p.colCityTotal, true),
@@ -106,7 +114,9 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Format | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [settings, setSettings] = useState<ExportSettings>(readStoredSettings);
+  const [settings, setSettings] = useState<ExportSettings>(() =>
+    readStoredSettings(collaborator),
+  );
 
   /* Persist every change so tomorrow's export reopens configured the
    * same way. Quota / private-mode failures are non-fatal. */
@@ -158,14 +168,10 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
     [scopeCount, settings.scope],
   );
 
-  const setScope = (scope: ExportScope) =>
-    setSettings((s) => ({
-      ...s,
-      scope,
-      // Decont is per-partner by definition — leaving a partner scope
-      // turns it off instead of silently keeping a stale flag.
-      statement: scope !== "all" && scope !== "direct" ? s.statement : false,
-    }));
+  // The decont preference deliberately survives scope changes: it only
+  // takes effect on a partner scope (statementOn gates it), so leaving
+  // and re-entering a partner keeps decont as the default behaviour.
+  const setScope = (scope: ExportScope) => setSettings((s) => ({ ...s, scope }));
 
   const runExport = useCallback(
     async (fmt: Format) => {

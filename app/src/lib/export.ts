@@ -78,7 +78,11 @@ export interface ExportSettings {
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   scope: "all",
   includeUnassigned: true,
-  statement: false,
+  // Decont is the DEFAULT export mode: base tariff per row, commission
+  // applied once at the end. It only takes effect when a collaborator
+  // anchors it (a partner scope, or the header pick as fallback) — the
+  // modal gates on that, but the preference itself starts on.
+  statement: true,
   colDetails: true,
   colCarrier: true,
   colCityTotal: true,
