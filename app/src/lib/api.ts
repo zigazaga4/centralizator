@@ -28,8 +28,8 @@ function authHeaders(): Record<string, string> {
  * others are invoices, in the order they appeared in the form.
  */
 export async function extractAndPrice(images: File[]): Promise<ExtractResponse> {
-  if (images.length < 2) {
-    throw new Error("extractAndPrice needs at least two images (1 AWB + 1 invoice).");
+  if (images.length < 1) {
+    throw new Error("extractAndPrice needs at least one image.");
   }
   const form = new FormData();
   for (const img of images) form.append("images", img);
@@ -43,6 +43,36 @@ export async function extractAndPrice(images: File[]): Promise<ExtractResponse> 
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`extract-and-price failed (${res.status}): ${body}`);
+  }
+  return res.json();
+}
+
+/**
+ * THE single ingestion flow — desktop and phone alike. Uploads any
+ * number of photos to /scan-batch, where the server dedups them,
+ * classifies each one (AWB / invoice / combined / junk), links them
+ * into shipments by recipient name or address, prices every pair and
+ * surfaces the leftovers as unpaired rows. Results stream back into
+ * the app live (SSE) — this call only confirms the upload was accepted.
+ */
+export async function scanBatch(
+  images: File[],
+  day: string,
+): Promise<{ batchId: string; imageCount: number }> {
+  if (images.length < 1) throw new Error("scanBatch needs at least one image.");
+  const form = new FormData();
+  // The day tab the user is looking at — the server files the resulting
+  // pairs under it (the phone omits this and gets "today").
+  form.append("day", day);
+  for (const img of images) form.append("files", img);
+  const res = await fetch(`${BASE}/scan-batch`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`scan-batch failed (${res.status}): ${body}`);
   }
   return res.json();
 }

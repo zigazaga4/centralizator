@@ -8,7 +8,7 @@ import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { extractAndPrice, reprice, verifyProducts } from "./lib/api";
+import { extractAndPrice, reprice, scanBatch, verifyProducts } from "./lib/api";
 import {
   deletePair,
   insertPair,
@@ -443,53 +443,27 @@ export default function App() {
 
   /* ── Queue mutations ──────────────────────────────────────────────── */
 
-  const addPair = useCallback(
-    (files: File[]) => {
-      // New pairs inherit the currently-viewed day so a drop on
-      // "tomorrow's tab" files under tomorrow without an extra click.
-      // PairAddCard already clamps to MAX_IMAGES_PER_PAIR (12), so we
-      // accept whatever it hands over. A pair carries one AWB plus N-1
-      // invoices; the vision model decides which slot is which.
-      const newPair: Pair = {
-        id: uuid(),
-        day: selectedDay,
-        images: files,
-        status: { kind: "pending" },
-      };
-      // This desktop owns this pair — ignore the live echo of our own insert.
-      markLocal(newPair.id);
-      // Optimistic add — the row appears in the UI immediately so the
-      // user sees their drop without waiting for the network. We then
-      // persist with the in-house retry from lib/db.ts; if even the
-      // retried POST fails (server down for >2.5 s, or hard rejection),
-      // we flip the row to "error" so the user SEES it didn't stick.
-      // Without this, a failed insert would leave a phantom pair that
-      // calculates to "ready" and then vanishes on the next launch
-      // because the server never had its row.
-      commit([...pairsRef.current, newPair]);
-      void (async () => {
-        try {
-          await insertPair(newPair);
-        } catch (err) {
-          const msg = (err as Error).message;
-          console.error("Failed to persist new pair:", err);
-          commit(
-            pairsRef.current.map((p) =>
-              p.id === newPair.id
-                ? {
-                    ...p,
-                    status: {
-                      kind: "error",
-                      message: `Salvare eșuată — re-adaugă perechea: ${msg}`,
-                    } as PairStatus,
-                  }
-                : p,
-            ),
-          );
-        }
-      })();
+  /**
+   * THE one ingestion flow (by command) — the desktop add card sends its
+   * photos to /scan-batch, exactly like the phone scanner: the server
+   * dedups, classifies each image, pairs them by the recipient
+   * name/address printed on the paper, prices every pair and surfaces
+   * the leftovers as unpaired rows. Everything streams back into this
+   * app live over SSE — no local pair is created here, no second flow.
+   * New pairs are filed under the currently-viewed day so a drop on
+   * "tomorrow's tab" files under tomorrow without an extra click.
+   */
+  const scanImages = useCallback(
+    async (files: File[]): Promise<boolean> => {
+      try {
+        await scanBatch(files, selectedDay);
+        return true;
+      } catch (err) {
+        console.error("scan-batch upload failed:", err);
+        return false;
+      }
     },
-    [commit, selectedDay, markLocal],
+    [selectedDay],
   );
 
   const removePair = useCallback(
@@ -734,8 +708,10 @@ export default function App() {
       try {
         // Hydrated pairs hold lazy refs, not Files — resolve them first
         // (instant when the prefetch already warmed the cache).
+        // ONE image is valid — a combined photo (label clipped onto its
+        // invoice) carries both documents; the model splits the halves.
         const images = await loadPairImages(pair);
-        if (images.length < 2) {
+        if (images.length < 1) {
           throw new Error("Imaginile perechii nu au putut fi încărcate de pe server.");
         }
         const res = await extractAndPrice(images);
@@ -1126,7 +1102,7 @@ export default function App() {
               selectedDay={selectedDay}
               onSelect={setSelectedDay}
             />
-            <PairAddCard onAddPair={addPair} />
+            <PairAddCard onScan={scanImages} />
             {/* Orphan documents the server refused to guess into a pair —
                 a warning pill above the queue; the modal is the manual
                 pairing system (zoom + select + create pair). */}

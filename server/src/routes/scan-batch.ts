@@ -274,9 +274,18 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
 export default async function scanBatchRoutes(app: FastifyInstance) {
   app.post("/scan-batch", async (req, reply) => {
     const images: BatchImage[] = [];
+    // Optional `day` form field (ISO YYYY-MM-DD): the desktop app sends
+    // the day tab the user dropped onto, so a drop on "tomorrow" files
+    // under tomorrow. The phone never sends it → today's bucket.
+    let requestedDay: string | null = null;
 
     for await (const part of req.parts()) {
-      if (part.type !== "file") continue;
+      if (part.type === "field") {
+        if (part.fieldname === "day" && typeof part.value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(part.value)) {
+          requestedDay = part.value;
+        }
+        continue;
+      }
       const mimeType = part.mimetype.toLowerCase();
       if (!ACCEPTED_MIME.has(mimeType)) {
         return reply.code(415).send({ error: `Unsupported MIME type: ${mimeType}` });
@@ -288,14 +297,15 @@ export default async function scanBatchRoutes(app: FastifyInstance) {
       }
     }
 
-    if (images.length < 2) {
-      return reply.code(400).send({
-        error: "Send at least TWO images (the batch must contain at least one AWB and one invoice).",
-      });
+    // ONE image is a valid batch: a combined photo (label clipped onto
+    // its invoice) is a complete shipment by itself, and a lone label or
+    // invoice correctly surfaces as an unpaired row for manual pairing.
+    if (images.length < 1) {
+      return reply.code(400).send({ error: "Send at least one image." });
     }
 
     const batchId = randomUUID();
-    const day = todayBucket();
+    const day = requestedDay ?? todayBucket();
 
     // Fire-and-forget: kick off the background job and answer the phone
     // right away. `void` documents that we intentionally don't await it.

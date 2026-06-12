@@ -68,10 +68,12 @@ export default async function extractRoutes(app: FastifyInstance) {
       }
     }
 
-    if (images.length < 2) {
+    if (images.length < 1) {
+      // ONE image is valid: a combined photo (label clipped onto its
+      // invoice) carries both documents. The model splits the halves.
       return reply.code(400).send({
         error:
-          "Send at least TWO image parts (1 AWB + 1 invoice). " +
+          "Send at least ONE image part. " +
           "Field names and order do not matter; the model identifies the AWB.",
       });
     }
