@@ -4,6 +4,7 @@ import { ExportMenu } from "./components/ExportMenu";
 import { CompareExcelButton } from "./components/CompareExcelButton";
 import { PairAddCard } from "./components/PairAddCard";
 import { PairsTable } from "./components/PairsTable";
+import { UnpairedSection } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -843,10 +844,26 @@ export default function App() {
 
   // Pairs on the visible day AND in the active centralizator. Drives the
   // queue table, the totals, and the buttons; the export menu only sees
-  // these — so each store exports its own centralizator.
+  // these — so each store exports its own centralizator. Unpaired
+  // documents are NOT pairs — they live in their own strip below.
   const dayPairs = useMemo(
-    () => pairs.filter((p) => p.day === selectedDay && inActiveStore(p) && inActiveView(p)),
+    () =>
+      pairs.filter(
+        (p) =>
+          p.day === selectedDay &&
+          p.status.kind !== "unpaired" &&
+          inActiveStore(p) &&
+          inActiveView(p),
+      ),
     [pairs, selectedDay, inActiveStore, inActiveView],
+  );
+
+  // Documents the scanner could not pair by name/address on this day.
+  // Store- and view-independent: an orphan paper belongs to the DAY, and
+  // it must stay visible until a human resolves it.
+  const dayUnpaired = useMemo(
+    () => pairs.filter((p) => p.day === selectedDay && p.status.kind === "unpaired"),
+    [pairs, selectedDay],
   );
 
   // Counts behind the Standard/Macara switch, scoped to the selected day +
@@ -883,7 +900,10 @@ export default function App() {
   // the truth about what pressing the button will run.
   const counts = useMemo(() => {
     const c = { pending: 0, extracting: 0, ready: 0, error: 0 };
-    for (const p of dayPairs) c[p.status.kind] += 1;
+    for (const p of dayPairs) {
+      // dayPairs already excludes "unpaired"; the guard narrows the type.
+      if (p.status.kind !== "unpaired") c[p.status.kind] += 1;
+    }
     return c;
   }, [dayPairs]);
 
@@ -1034,6 +1054,9 @@ export default function App() {
               onRemovePair={removePair}
               onSelectPair={setSelectedId}
             />
+            {/* Orphan documents the server refused to guess into a pair —
+                visible until the operator re-scans or deletes them. */}
+            <UnpairedSection items={dayUnpaired} onRemove={removePair} />
             <p className="text-center text-[11px] uppercase tracking-widest text-ink-400">
               Click pe orice rând pentru detalii complete · <kbd className="rounded border border-ink-200 bg-canvas-50 px-1 font-mono text-[10px] text-ink-700">Esc</kbd> pentru a reveni · perechile sunt salvate automat
             </p>

@@ -54,6 +54,7 @@ const API_KEY = import.meta.env.VITE_CENTRALIZATOR_API_KEY as string | undefined
 export type WireStatus =
   | { kind: "pending" }
   | { kind: "extracting" }
+  | { kind: "unpaired"; docType: "awb" | "invoice" | "unknown" }
   | {
       kind: "ready";
       service: Service;

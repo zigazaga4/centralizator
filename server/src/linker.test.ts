@@ -71,23 +71,27 @@ describe("linkDocuments — assignment", () => {
     expect(groups).toEqual([{ awbIndex: 4, invoiceIndices: [2] }]);
   });
 
-  it("a name match BEYOND the assignment window loses to adjacency", () => {
-    // The live VOICU case: a far anchor must not steal a stop's invoice.
-    const { groups } = linkDocuments([
+  it("a name match BEYOND the assignment window never binds — everything goes unpaired", () => {
+    // The live VOICU case: a far anchor must not steal a stop's invoice,
+    // and (by command) the invoice is never position-guessed onto the
+    // near anchor either — the human pairs it from the app.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211261", recipientName: "Mihai Bercea" }),
       doc(1, "invoice", { recipientName: "VOICU CONSTANTIN" }), // misread or shuffled paper
       doc(11, "awb", { awbNumber: "007211193", recipientName: "VOICU CONSTANTIN" }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0, 1, 11]);
   });
 
-  it("falls back to nearest anchor for unreadable photos, preferring the preceding one on ties", () => {
-    const { groups } = linkDocuments([
+  it("unreadable photos are never position-bound — they go unpaired", () => {
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "A B" }),
       doc(1, "unknown"),
       doc(2, "awb", { awbNumber: "007211002", recipientName: "C D" }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0, 1, 2]);
   });
 
   it("same recipient with two shipments: adjacency splits the invoices", () => {
@@ -167,12 +171,12 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
   });
 
   it("an unreadable-number anchor FAR from its name twin stays its own shipment", () => {
-    const { droppedAnchors, droppedIncomplete } = linkDocuments([
+    const { droppedAnchors, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "MARIAN PAIU" }),
       doc(20, "awb", { recipientName: "MARIAN PAIU" }),
     ]);
     expect(droppedAnchors).toHaveLength(0); // not folded — two shipments
-    expect(droppedIncomplete).toHaveLength(2);
+    expect(unpaired).toHaveLength(2);
   });
 
   it("a WEAK (rotated/blurred) full-number read folds by name+adjacency despite differing digits", () => {
@@ -192,12 +196,12 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
   });
 
   it("two CONFIDENT different numbers never merge even with matching name nearby", () => {
-    const { droppedAnchors, droppedIncomplete } = linkDocuments([
+    const { droppedAnchors, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "NICU VULPE" }),
       doc(1, "awb", { awbNumber: "007211009", recipientName: "NICU VULPE" }),
     ]);
     expect(droppedAnchors).toHaveLength(0); // no fold = two distinct shipments
-    expect(droppedIncomplete.sort()).toEqual([0, 1]); // both lack invoices → not shown
+    expect(unpaired).toEqual([0, 1]); // both lack invoices → unpaired in the app
   });
 
   it("a 13-digit invoice-header number never acts as an AWB identity", () => {
@@ -251,15 +255,15 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
     // store) must never make two documents the same shipment. The two
     // confident-numbered labels stay as real (incomplete) shipments;
     // the two identity-free readings are JUNK and never become pairs.
-    const { groups, droppedJunk, droppedIncomplete } = linkDocuments([
+    const { groups, droppedJunk, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211290", recipientName: "0000000" }),
       doc(1, "awb", { awbNumber: "007211074", recipientName: "0000000" }),
       doc(5, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
       doc(6, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
     ]);
-    expect(groups).toHaveLength(0); // none has an invoice → nothing shown
+    expect(groups).toHaveLength(0); // none has an invoice → no pair
     expect(droppedJunk.sort()).toEqual([5, 6]);
-    expect(droppedIncomplete.sort()).toEqual([0, 1]);
+    expect(unpaired).toEqual([0, 1]);
   });
 
   it("a stray-sheet reading that identifies nothing never becomes a pair", () => {
@@ -292,32 +296,33 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
 });
 
 describe("linkDocuments — degenerate stacks", () => {
-  it("no anchors: invoices without any AWB never become pairs", () => {
-    const { groups, droppedIncomplete } = linkDocuments([
+  it("no anchors: invoices without any AWB go unpaired", () => {
+    const { groups, unpaired } = linkDocuments([
       doc(0, "invoice", { recipientName: "A B" }),
       doc(1, "invoice", { recipientName: "A B" }),
       doc(5, "invoice", { recipientName: "C D" }),
     ]);
     expect(groups).toEqual([]);
-    expect(droppedIncomplete.sort()).toEqual([0, 1, 5]);
+    expect(unpaired).toEqual([0, 1, 5]);
   });
 
-  it("a lone label MARRIES an adjacent nameless invoice photo into a valid pair", () => {
-    // The live Pulia case: the label photo and its invoice photo (stray
-    // flipped label on it, buyer unreadable) must form ONE pair instead
-    // of both being dropped separately.
-    const { groups } = linkDocuments([
+  it("a lone label and a nameless invoice photo are NOT married by position — both unpaired", () => {
+    // By command there is no adjacency pairing: a label next to an
+    // unreadable-buyer invoice photo is a guess, and the system never
+    // guesses. Both surface as unpaired for the human to join.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211290", recipientName: "PULIA VITALIY" }),
       doc(1, "combined", { awbConfident: false, invoiceRaw: { order_number: "480831" } }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0, 1]);
   });
 
-  it("a named invoice-bearing label photo with NO matching anchor is dropped, never adjacency-bound", () => {
+  it("a named invoice-bearing label photo with NO matching anchor goes unpaired, never adjacency-bound", () => {
     // A document naming a different person next to Iuliana's pair:
     // binding by adjacency would put their invoice inside the wrong
-    // shipment — it must be dropped instead.
-    const { groups, droppedIncomplete } = linkDocuments([
+    // shipment — it surfaces as unpaired instead.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211281", recipientName: "Iuliana-Ioana" }),
       doc(1, "invoice", { recipientName: "Iuliana-Ioana" }),
       doc(2, "awb", {
@@ -327,7 +332,7 @@ describe("linkDocuments — degenerate stacks", () => {
       }),
     ]);
     expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
-    expect(droppedIncomplete).toEqual([2]);
+    expect(unpaired).toEqual([2]);
   });
 
   it("a combined photo with a readable name forms its own valid pair", () => {
@@ -348,19 +353,18 @@ describe("linkDocuments — degenerate stacks", () => {
     ]);
   });
 
-  it("at equal distance, a nameless invoice photo marries the EMPTY label, not a full anchor", () => {
-    // The live Pulia tie: invoice photo exactly 1 away from both its own
-    // lone label and another shipment's anchor. The empty label wins.
-    const { groups } = linkDocuments([
+  it("a nameless invoice photo between two shipments is never guessed — unpaired", () => {
+    // Formerly the adjacency tie-break decided this; by command position
+    // proves nothing, so the nameless photo and the label it probably
+    // belongs to both go to the app's unpaired strip.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211290", recipientName: "PULIA VITALIY" }),
       doc(1, "combined", { awbConfident: false, invoiceRaw: { supplier_name: "LM" } }),
       doc(2, "awb", { awbNumber: "007211279", recipientName: "Catalin Chioaru" }),
       doc(3, "invoice", { recipientName: "Catalin Chioaru" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 2, invoiceIndices: [3] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 2, invoiceIndices: [3] }]);
+    expect(unpaired).toEqual([0, 1]);
   });
 
   it("a combined self-pair whose invoice already lives in another pair folds into it", () => {
@@ -386,20 +390,20 @@ describe("linkDocuments — degenerate stacks", () => {
     ]);
   });
 
-  it("a widowed label reclaims its ADJACENT invoice from a name-thief with invoices to spare", () => {
-    // The live Necmin/PRO CLIENT case: the invoice next to Necmin's label
-    // prints a company buyer that name-matches a DIFFERENT anchor 4 photos
-    // away. The label next door wins the photo back.
-    const { groups } = linkDocuments([
+  it("a company-buyer invoice follows the NAME; the label left empty goes unpaired", () => {
+    // The Necmin/PRO CLIENT shape: the invoice next to Necmin's label
+    // prints a company buyer that name-matches a different anchor. With
+    // positional repair removed (by command), the invoice follows what
+    // the paper SAYS, and the widowed label surfaces as unpaired for the
+    // human to fix.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211240", recipientName: "NECMIN COLTUSA" }),
       doc(1, "invoice", { recipientName: "PRO CLIENT CONSTANTA" }),
       doc(4, "awb", { awbNumber: "007211113", recipientName: "PRO CLIENT CONSTANTA" }),
       doc(5, "invoice", { recipientName: "PRO CLIENT CONSTANTA" }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 4, invoiceIndices: [5] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 4, invoiceIndices: [1, 5] }]);
+    expect(unpaired).toEqual([0]);
   });
 
   it("an orphan photo of an ALREADY-PAIRED invoice folds into that pair (same comandă)", () => {
@@ -431,10 +435,10 @@ describe("linkDocuments — degenerate stacks", () => {
 
   it("groups come out in scan order", () => {
     const { groups } = linkDocuments([
-      doc(0, "invoice", { recipientName: "C D" }),
-      doc(1, "awb", { awbNumber: "007211002", recipientName: "C D" }),
-      doc(2, "awb", { awbNumber: "007211001", recipientName: "A B" }),
-      doc(3, "invoice", { recipientName: "A B" }),
+      doc(0, "invoice", { recipientName: "Carmen Dinu" }),
+      doc(1, "awb", { awbNumber: "007211002", recipientName: "Carmen Dinu" }),
+      doc(2, "awb", { awbNumber: "007211001", recipientName: "Ana Banu" }),
+      doc(3, "invoice", { recipientName: "Ana Banu" }),
     ]);
     expect(groups.map((g) => g.awbIndex)).toEqual([1, 2]);
   });

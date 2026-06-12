@@ -27,7 +27,7 @@ import { dedupeByDhash } from "../dhash.js";
 import { assembleExtracted, priceExtracted } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
-import { insertPair, persistPairStatus, signalExtracting } from "../db.js";
+import { insertPair, persistPairStatus, signalExtracting, type UnpairedDocType } from "../db.js";
 
 const ACCEPTED_MIME = new Set([
   "image/jpeg",
@@ -209,18 +209,33 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
       },
       "scan-batch: classified",
     );
-    const { groups, droppedAnchors, droppedJunk, droppedIncomplete } = linkDocuments(docs);
+    const { groups, droppedAnchors, droppedJunk, unpaired } = linkDocuments(docs);
     if (droppedJunk.length > 0) {
       log.info(
         { batchId, junk: droppedJunk.map((i) => images[i]!.name) },
         "scan-batch: dropped junk images (identify nothing — stray pile sheets)",
       );
     }
-    if (droppedIncomplete.length > 0) {
+    // Documents the linker could not pair by name/address are NOT guessed
+    // and NOT hidden: each becomes a visible "unpaired" row in the day so
+    // a human resolves it (by command).
+    if (unpaired.length > 0) {
       log.info(
-        { batchId, incomplete: droppedIncomplete.map((i) => images[i]!.name) },
-        "scan-batch: dropped images that could not complete a valid pair",
+        { batchId, unpaired: unpaired.map((i) => images[i]!.name) },
+        "scan-batch: unpaired documents — shown in the app for manual pairing",
       );
+      for (const i of unpaired) {
+        const img = images[i]!;
+        const d = docs[i];
+        const docType: UnpairedDocType =
+          d?.type === "invoice" ? "invoice" : d?.type === "unknown" || !d ? "unknown" : "awb";
+        insertPair({
+          id: randomUUID(),
+          day,
+          status: { kind: "unpaired", docType },
+          images: [{ name: img.name, mimeType: img.mimeType, size: img.bytes.length, bytes: img.bytes }],
+        });
+      }
     }
     if (droppedAnchors.length > 0) {
       log.info(

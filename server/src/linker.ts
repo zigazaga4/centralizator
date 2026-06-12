@@ -21,9 +21,12 @@
  *      by shared name tokens, not exact strings.
  *   3. Recipient address — confirms when the invoice carries it
  *      ("Sediul"); often N/A, so it is a secondary signal.
- *   4. Scan adjacency — one shipment's photos are taken together, so the
- *      nearest anchor in scan order breaks every remaining tie (and is
- *      the sole signal for unreadable images).
+ *
+ * There is NO positional pairing (by command): a document that matches
+ * no anchor by name or address is never guessed onto the nearest photo —
+ * it surfaces in the app as an UNPAIRED item for the day, and a human
+ * pairs it. Scan adjacency is used ONLY to dedupe re-shoots of the same
+ * physical label, never to join two different documents.
  *
  * NOTE: the courier label's "Continut" field looked like a join key but
  * is NOT one — on current labels it is an internal load code
@@ -89,11 +92,12 @@ export interface LinkResult {
    *  name, no confident AWB number (stray pile sheets, hopeless blurs).
    *  They never become pairs; the app must not show junk. */
   droppedJunk: number[];
-  /** Real-looking documents that could not complete a pair (a label
-   *  whose invoice never matched, an invoice with no AWB anywhere).
-   *  Dropped by command — only valid pairs are shown — but logged so
-   *  nothing disappears silently. */
-  droppedIncomplete: number[];
+  /** Real documents the system could not pair by name or address (a
+   *  label whose invoice never matched, an invoice naming nobody we
+   *  know, an unreadable photo). By command these are NOT guessed onto
+   *  a neighbour — they surface in the app as UNPAIRED items for the
+   *  day so a human pairs them. */
+  unpaired: number[];
 }
 
 /** Two readings of the same recipient share at least this fraction of the
@@ -185,15 +189,14 @@ function nameScore(a: DocInfo, b: DocInfo): number {
  *
  * Invoices (and unreadable photos) then each pick an anchor:
  *   tier 1 — name-token match, nearest in scan order;
- *   tier 2 — address-token match, nearest in scan order;
- *   tier 3 — nearest anchor in scan order (ties prefer the preceding
- *            anchor, mirroring the old "invoices ride with their adjacent
- *            AWB" rule).
+ *   tier 2 — address-token match, nearest in scan order.
  *
- * An anchor that ends up with no invoice image reuses itself (the
- * combined-photo convention the extractor already understands). With no
- * anchors at all, each contiguous run of invoices becomes an awb-less
- * group, which downstream records as a visible "incomplete" pair.
+ * There is no tier 3 (by command): a photo matching no anchor by name
+ * or address is never guessed onto the nearest one — it goes to
+ * `unpaired` and the app shows it for a human to resolve.
+ *
+ * A combined photo with its own AWB identity forms a complete pair on
+ * its own (the self-pair convention the extractor already understands).
  */
 export function linkDocuments(docs: DocInfo[]): LinkResult {
   const anchorsIn = docs
@@ -300,13 +303,13 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   const assigned = new Map<number, number[]>(); // anchor index → invoice images
   for (const a of anchors) assigned.set(a.index, [...(extraInvoices.get(a.index) ?? [])]);
 
-  const noAnchorOrphans: number[] = [];
+  /** Items no anchor claimed by name/address — they get one exact
+   *  invoice-key fold chance below, then surface as unpaired. */
+  const unassignedItems: DocInfo[] = [];
 
   for (const item of items) {
     if (anchors.length === 0) {
-      // No anchors anywhere: an invoice with no AWB can never become a
-      // valid pair — dropped (and logged), never shown.
-      noAnchorOrphans.push(item.index);
+      unassignedItems.push(item);
       continue;
     }
 
@@ -338,8 +341,14 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       const best = Math.max(0, ...scored.map(({ s }) => s));
       tier2 = scored.filter(({ s }) => s === best).map(({ a }) => a);
     }
-    const chosen = pick(tier1.length > 0 ? tier1 : tier2.length > 0 ? tier2 : anchors);
-    assigned.get(chosen.index)!.push(item.index);
+    // NO tier 3: a photo neither tier claims is never position-guessed
+    // onto the nearest anchor — the human pairs it from the app instead.
+    const pool = tier1.length > 0 ? tier1 : tier2;
+    if (pool.length === 0) {
+      unassignedItems.push(item);
+      continue;
+    }
+    assigned.get(pick(pool).index)!.push(item.index);
   }
 
   // ── Assemble groups in scan order — ONLY valid pairs survive ────────
@@ -359,7 +368,7 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
 
   const groups: DocumentGroup[] = [];
   const droppedJunk: number[] = [];
-  const droppedIncomplete: number[] = [...noAnchorOrphans];
+  const unpaired: number[] = [];
   const keyToGroup = new Map<string, DocumentGroup>();
   const groupOfAnchor = new Map<number, DocumentGroup>();
   const registerGroup = (g: DocumentGroup) => {
@@ -416,9 +425,10 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   // Pass B — exact rescue: an orphan whose invoice number/comandă matches
   // an invoice already inside a pair is a SECOND PHOTO of that invoice —
   // fold the image into its pair (the operator's rule: exact same
-  // invoice → dedupe).
+  // invoice → dedupe). Unclaimed assignment items get the same chance —
+  // a second photo of an already-paired invoice may carry no name at all.
   const unrescued: DocInfo[] = [];
-  for (const p of rescuable) {
+  for (const p of [...rescuable, ...unassignedItems]) {
     const g = invoiceKeysOf(p)
       .map((k) => keyToGroup.get(k))
       .find((x): x is DocumentGroup => x !== undefined);
@@ -434,23 +444,25 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     }
   }
 
-  // Pass C — demotion: what's left is an INVOICE photo. Give it one more
-  // binding chance, against existing groups AND the pending lone labels
-  // (marrying a label completes a pair): by name when it has one, by
-  // IMMEDIATE adjacency (±2 — one shipment's photos are consecutive)
-  // when nameless. A doc naming a person with no matching anchor must
-  // NOT bind by adjacency — that would put someone's invoice in the
-  // wrong pair.
+  // Pass C — demotion by NAME ONLY: what's left is an INVOICE photo.
+  // Give it one more binding chance, against existing groups AND the
+  // pending lone labels (marrying a label completes a pair) — but only
+  // when its name matches. There is NO adjacency binding (by command):
+  // a nameless, addressless photo goes to the app as unpaired rather
+  // than being guessed into a neighbour's shipment.
   const marriedLabels = new Set<number>();
   for (const p of unrescued) {
     const pNames = nameTokenSet(p.recipientName);
+    if (pNames.size === 0) {
+      unpaired.push(p.index);
+      continue;
+    }
     const candidates = [...groupOfAnchor.keys(), ...pendingLabels.map((l) => l.index)]
       .map((i) => docByIndex.get(i)!)
-      .filter((a) =>
-        pNames.size > 0
-          ? Math.abs(a.index - p.index) <= ASSIGN_WINDOW &&
-            overlapScore(pNames, nameTokenSet(a.recipientName)) >= NAME_MATCH
-          : Math.abs(a.index - p.index) <= 2,
+      .filter(
+        (a) =>
+          Math.abs(a.index - p.index) <= ASSIGN_WINDOW &&
+          overlapScore(pNames, nameTokenSet(a.recipientName)) >= NAME_MATCH,
       )
       .sort((x, y) => {
         const d = Math.abs(x.index - p.index) - Math.abs(y.index - p.index);
@@ -461,7 +473,7 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       });
     const target = candidates[0];
     if (!target) {
-      droppedIncomplete.push(p.index);
+      unpaired.push(p.index);
       continue;
     }
     const existing = groupOfAnchor.get(target.index);
@@ -473,38 +485,10 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     }
   }
 
-  // Pass D — repair: a still-pending label RECLAIMS an adjacent invoice
-  // (≤2 photos away) from a group that has invoices to spare (≥2), when
-  // the photo sits strictly closer to the label than to its current
-  // anchor. Photo order is the strongest structural truth — one stop,
-  // consecutive shots — and it beats a "name match" farther away: company
-  // buyers (e.g. PRO CLIENT) legitimately appear on invoices whose
-  // Destinatar is someone else, so names CAN lie across shipments while
-  // adjacency does not.
+  // Pass D — pending labels that never got an invoice cannot form a
+  // valid pair → unpaired (shown in the app for a human to resolve).
   for (const l of pendingLabels) {
-    if (marriedLabels.has(l.index)) continue;
-    let best: { g: DocumentGroup; i: number } | null = null;
-    for (const g of groups) {
-      if (g.awbIndex === null || g.invoiceIndices.length < 2) continue;
-      for (const i of g.invoiceIndices) {
-        if (i === g.awbIndex) continue;
-        const dL = Math.abs(i - l.index);
-        if (dL <= 2 && dL < Math.abs(i - g.awbIndex) && (!best || dL < Math.abs(best.i - l.index))) {
-          best = { g, i };
-        }
-      }
-    }
-    if (best) {
-      best.g.invoiceIndices = best.g.invoiceIndices.filter((x) => x !== best.i);
-      registerGroup({ awbIndex: l.index, invoiceIndices: [best.i] });
-      marriedLabels.add(l.index);
-    }
-  }
-
-  // Pass E — pending labels that never got an invoice cannot form a valid
-  // pair → dropped (logged), per command: only valid pairs are shown.
-  for (const l of pendingLabels) {
-    if (!marriedLabels.has(l.index)) droppedIncomplete.push(l.index);
+    if (!marriedLabels.has(l.index)) unpaired.push(l.index);
   }
 
   for (const g of groups) g.invoiceIndices.sort((x, y) => x - y);
@@ -514,5 +498,6 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       Math.min(b.awbIndex ?? Infinity, ...b.invoiceIndices),
   );
 
-  return { groups, droppedAnchors, droppedJunk, droppedIncomplete };
+  unpaired.sort((a, b) => a - b);
+  return { groups, droppedAnchors, droppedJunk, unpaired };
 }

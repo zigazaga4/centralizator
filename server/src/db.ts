@@ -190,13 +190,21 @@ console.info(`[db] SQLite ready at ${DB_PATH}`);
  * Row shapes (DB ↔ TS) + wire model
  * ────────────────────────────────────────────────────────────────────── */
 
-export type PairStatusKind = "pending" | "extracting" | "ready" | "error";
+export type PairStatusKind = "pending" | "extracting" | "ready" | "error" | "unpaired";
+
+/** What kind of document an unpaired row holds — drives the badge the
+ *  app shows ("AWB fără factură" vs "Factură fără AWB"). */
+export type UnpairedDocType = "awb" | "invoice" | "unknown";
 
 /** What clients see in JSON responses. Discriminated union so the UI
  *  can pattern-match without runtime guesswork. */
 export type PairStatus =
   | { kind: "pending" }
   | { kind: "extracting" }
+  /** A document the scanner could NOT pair by name/address. One image,
+   *  never priced — it sits in the day's "unpaired" strip until a human
+   *  resolves (re-scans or deletes) it. */
+  | { kind: "unpaired"; docType: UnpairedDocType }
   | {
       kind: "ready";
       service: Service;
@@ -333,7 +341,7 @@ const stmt = {
     `INSERT INTO pairs
        (id, day, created_at, updated_at, status_kind, status_message,
         service, service_fallback, edits_json, breakdown_json)
-     VALUES (@id, @day, @created_at, @updated_at, @status_kind, NULL,
+     VALUES (@id, @day, @created_at, @updated_at, @status_kind, @status_message,
              NULL, NULL, NULL, NULL)`,
   ),
   insertImage: db.prepare(
@@ -411,6 +419,14 @@ interface LmProductRow {
 function rowToStatus(r: PairRow): PairStatus {
   if (r.status_kind === "extracting" || r.status_kind === "pending") {
     return { kind: "pending" };
+  }
+  if (r.status_kind === "unpaired") {
+    // The doc kind rides in status_message ("awb" / "invoice" / "unknown").
+    const t = r.status_message;
+    return {
+      kind: "unpaired",
+      docType: t === "awb" || t === "invoice" ? t : "unknown",
+    };
   }
   if (r.status_kind === "error") {
     return { kind: "error", message: r.status_message ?? "Eroare necunoscută." };
@@ -566,6 +582,9 @@ export function insertPair(input: InsertPairInput): PairWire {
     input.status?.kind === "extracting"
       ? "pending"
       : (input.status?.kind ?? "pending");
+  // Unpaired rows carry their doc kind in status_message; everything
+  // else starts with a clean message column.
+  const statusMessage = input.status?.kind === "unpaired" ? input.status.docType : null;
 
   const tx = db.transaction((p: InsertPairInput) => {
     stmt.insertPair.run({
@@ -574,6 +593,7 @@ export function insertPair(input: InsertPairInput): PairWire {
       created_at: now,
       updated_at: now,
       status_kind: statusKind,
+      status_message: statusMessage,
     });
     for (let i = 0; i < p.images.length; i++) {
       const img = p.images[i]!;
@@ -628,6 +648,7 @@ export function persistPairStatus(id: string, status: PairStatus): boolean {
   const row = stmt.selectPair.get(id);
   if (!row) return false;
   if (status.kind === "extracting") return true; // intentionally noop
+  if (status.kind === "unpaired") return true; // set at insert time only — never a transition
 
   const now = Date.now();
   if (status.kind === "ready") {

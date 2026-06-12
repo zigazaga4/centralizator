@@ -508,9 +508,16 @@ export interface PricingRequest {
  * wrong; the pricing engine re-runs server-side on debounce, per-row.
  * ────────────────────────────────────────────────────────────────────── */
 
+/** What kind of document an unpaired row holds — drives its badge. */
+export type UnpairedDocType = "awb" | "invoice" | "unknown";
+
 export type PairStatus =
   | { kind: "pending" }
   | { kind: "extracting" }
+  /** A scanned document the server could NOT pair by name/address. One
+   *  image, never priced — shown in the day's "unpaired" strip until a
+   *  human resolves (re-scans or deletes) it. */
+  | { kind: "unpaired"; docType: UnpairedDocType }
   | {
       kind: "ready";
       service: Service;

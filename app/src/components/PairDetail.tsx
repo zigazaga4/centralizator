@@ -344,6 +344,10 @@ function StatusPlaceholder({ status }: { status: Exclude<PairStatus, { kind: "re
       title: "Eroare la extracție",
       body: status.kind === "error" ? status.message : "Eroare necunoscută.",
     },
+    unpaired: {
+      title: "Document neîmperecheat",
+      body: "Sistemul nu a putut lega acest document de un transport după nume sau adresă. Refotografiază transportul (AWB + facturi împreună) sau șterge documentul.",
+    },
   };
   const m = messages[status.kind];
 

@@ -672,6 +672,17 @@ function StatusPill({ status }: { status: PairStatus }) {
           !
         </span>
       );
+    case "unpaired":
+      // Unpaired docs render in their own strip, never in the table —
+      // this case only exists so the switch stays exhaustive.
+      return (
+        <span
+          className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-coral-400 bg-coral-50 text-coral-700"
+          title="Document neîmperecheat"
+        >
+          ?
+        </span>
+      );
   }
 }
 
