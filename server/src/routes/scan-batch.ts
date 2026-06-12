@@ -21,7 +21,8 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 import type { ImageInput } from "../gemini.js";
-import { groupImagesChunked, type DocumentGroup } from "../grouping.js";
+import { classifyImages } from "../classify.js";
+import { linkDocuments, type DocumentGroup } from "../linker.js";
 import { dedupeByDhash } from "../dhash.js";
 import { extractAndPrice } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
@@ -180,11 +181,25 @@ async function processBatch(batchId: string, allImages: BatchImage[], day: strin
     const images = keptIndices.map((i) => allImages[i]!);
 
     const aiImages: ImageInput[] = images.map((img) => ({ data: img.bytes, mimeType: img.mimeType }));
-    // Session-chunked: one small parallel grouping call per photo session
-    // (filename timestamps), instead of one fragile mega-call that
-    // reproducibly dropped the tail of an 83-image day.
-    const groups = await groupImagesChunked(aiImages, images.map((img) => img.name));
-    log.info({ batchId, images: images.length, groups: groups.length }, "scan-batch: grouped");
+    // Classify-and-join: one tiny AI read per image (all in parallel —
+    // volume-proof, no mega-call to overflow, no filenames to trust),
+    // then deterministic code links the readings into shipments.
+    const docs = await classifyImages(aiImages);
+    const { groups, droppedAnchors } = linkDocuments(docs);
+    if (droppedAnchors.length > 0) {
+      log.info(
+        {
+          batchId,
+          dropped: droppedAnchors.map((d) => ({
+            name: images[d.index]!.name,
+            duplicateOf: images[d.ofIndex]!.name,
+            reason: d.reason,
+          })),
+        },
+        "scan-batch: linker folded duplicate AWB photos",
+      );
+    }
+    log.info({ batchId, images: images.length, groups: groups.length }, "scan-batch: linked");
 
     if (groups.length === 0) {
       log.warn({ batchId }, "scan-batch: grouping produced no groups");

@@ -125,8 +125,10 @@ export function formatAddress(raw: string): string {
  * closer to the truth than a street 60 km away in another town.
  * ────────────────────────────────────────────────────────────────────── */
 
-/** Comparison normal form: no diacritics, lower-case, collapsed spaces. */
-function norm(s: string): string {
+/** Comparison normal form: no diacritics, lower-case, collapsed spaces.
+ *  Exported for reuse anywhere two Romanian strings must compare loosely
+ *  (the document linker matches recipient names with it). */
+export function norm(s: string): string {
   return s
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // strip combining diacritic marks
