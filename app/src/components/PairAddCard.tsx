@@ -59,7 +59,7 @@ export function PairAddCard({ onScan, hero }: Props) {
             ok
               ? {
                   kind: "ok",
-                  text: `${imgs.length} imagine${imgs.length === 1 ? "" : "i"} trimise — AI-ul le sortează și le împerechează; perechile apar automat în tabel.`,
+                  text: `${imgs.length} imagine${imgs.length === 1 ? "" : "i"} trimise — fiecare imagine este citită separat, apoi împerecheată după destinatar; perechile apar automat în tabel.`,
                 }
               : {
                   kind: "warn",
@@ -146,8 +146,8 @@ export function PairAddCard({ onScan, hero }: Props) {
             </p>
             <p className="mt-1.5 text-sm text-ink-500">
               Drop toate pozele deodată (AWB-uri + facturi, în orice ordine) —
-              AI-ul le sortează, le împerechează după destinatar și le
-              calculează automat.
+              fiecare imagine este citită separat, apoi împerecheată după
+              destinatar și calculată automat.
             </p>
           </>
         ) : (
@@ -172,7 +172,7 @@ export function PairAddCard({ onScan, hero }: Props) {
                   {sending ? "Se trimit imaginile…" : "Adaugă documente"}
                 </p>
                 <p className="text-xs text-ink-500">
-                  oricâte poze deodată · AI-ul le împerechează automat după destinatar
+                  oricâte poze deodată · împerechere automată după destinatar
                 </p>
               </div>
             </div>
