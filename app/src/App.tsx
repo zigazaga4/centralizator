@@ -4,7 +4,7 @@ import { ExportMenu } from "./components/ExportMenu";
 import { CompareExcelButton } from "./components/CompareExcelButton";
 import { PairAddCard } from "./components/PairAddCard";
 import { PairsTable } from "./components/PairsTable";
-import { UnpairedSection } from "./components/UnpairedSection";
+import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -123,6 +123,9 @@ export default function App() {
   // `null` → show the queue table; a pair id → show that pair's full
   // page with both images and the section-by-section spreadsheet.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Whether the manual-pairing modal (unpaired documents) is open.
+  const [unpairedOpen, setUnpairedOpen] = useState(false);
 
   // Initial hydration from SQLite. Hidden behind a tiny splash so the
   // empty-hero state doesn't flash before the loaded queue paints.
@@ -764,6 +767,73 @@ export default function App() {
     [persistAndSet, verifyPairProducts],
   );
 
+  /**
+   * Manual pairing — the human resolves what the linker refused to guess.
+   *
+   * Takes the ids of ≥2 UNPAIRED rows the user selected in the modal and
+   * turns them into ONE real pair, reusing the desktop flow end to end:
+   * load the orphan images, insert a fresh pending pair (server first, so
+   * the photos are never orphaned by a crash mid-swap), delete the source
+   * rows, then run the same extract + price call the Calculează button
+   * uses — the vision model decides which image is the AWB, so even a
+   * misclassified orphan ends up in the right slot.
+   *
+   * Returns true when the pair was created (the modal clears its
+   * selection); false leaves everything untouched for a retry.
+   */
+  const pairManually = useCallback(
+    async (ids: string[]): Promise<boolean> => {
+      const docs = ids
+        .map((id) => pairsRef.current.find((p) => p.id === id))
+        .filter((p): p is Pair => !!p && p.status.kind === "unpaired");
+      if (docs.length < 2) return false;
+
+      // AWB-classified docs first — the stored-image convention every
+      // view uses (selection order is kept within each kind).
+      const rank = (p: Pair) =>
+        p.status.kind === "unpaired" && p.status.docType === "awb" ? 0 : 1;
+      const ordered = [...docs].sort((a, b) => rank(a) - rank(b));
+
+      let files: File[];
+      try {
+        files = (await Promise.all(ordered.map((d) => loadPairImages(d)))).flat();
+      } catch (err) {
+        console.error("Manual pairing: failed to load orphan images:", err);
+        return false;
+      }
+      if (files.length < 2) return false;
+
+      const newPair: Pair = {
+        id: uuid(),
+        day: docs[0]!.day,
+        images: files,
+        status: { kind: "pending" },
+      };
+      markLocal(newPair.id);
+      try {
+        // Server FIRST: only after the new pair (with its image bytes) is
+        // safely stored do we retire the orphan rows.
+        await insertPair(newPair);
+      } catch (err) {
+        console.error("Manual pairing: failed to persist the new pair:", err);
+        return false;
+      }
+      const doomed = new Set(ids);
+      commit([...pairsRef.current.filter((p) => !doomed.has(p.id)), newPair]);
+      for (const id of ids) {
+        markLocal(id);
+        void deletePair(id).catch((err) =>
+          console.error("Manual pairing: failed to delete orphan row:", err),
+        );
+      }
+      // Straight to calculation — the user paired it to get a price.
+      setStatusLocal(newPair.id, { kind: "extracting" });
+      void runOne(newPair);
+      return true;
+    },
+    [commit, markLocal, setStatusLocal, runOne],
+  );
+
   const runAll = useCallback(async () => {
     // Scoped to the visible day: pressing Calculează processes the
     // batch the user is currently looking at, not every leftover
@@ -865,6 +935,13 @@ export default function App() {
     () => pairs.filter((p) => p.day === selectedDay && p.status.kind === "unpaired"),
     [pairs, selectedDay],
   );
+
+  // The modal lives only while there is something to resolve; once the
+  // last orphan is paired or deleted the flag resets, so a FUTURE scan's
+  // orphans never pop the modal open uninvited.
+  useEffect(() => {
+    if (dayUnpaired.length === 0) setUnpairedOpen(false);
+  }, [dayUnpaired.length]);
 
   // Counts behind the Standard/Macara switch, scoped to the selected day +
   // store. An undecided (not-yet-priced) pair shows in both lists, so it is
@@ -1045,6 +1122,18 @@ export default function App() {
               onSelect={setSelectedDay}
             />
             <PairAddCard onAddPair={addPair} />
+            {/* Orphan documents the server refused to guess into a pair —
+                a warning pill above the queue; the modal is the manual
+                pairing system (zoom + select + create pair). */}
+            <UnpairedAlert count={dayUnpaired.length} onOpen={() => setUnpairedOpen(true)} />
+            {unpairedOpen && dayUnpaired.length > 0 && (
+              <UnpairedModal
+                items={dayUnpaired}
+                onClose={() => setUnpairedOpen(false)}
+                onRemove={removePair}
+                onPair={pairManually}
+              />
+            )}
             <PairsTable
               pairs={dayPairs}
               city={selectedCity}
@@ -1054,9 +1143,6 @@ export default function App() {
               onRemovePair={removePair}
               onSelectPair={setSelectedId}
             />
-            {/* Orphan documents the server refused to guess into a pair —
-                visible until the operator re-scans or deletes them. */}
-            <UnpairedSection items={dayUnpaired} onRemove={removePair} />
             <p className="text-center text-[11px] uppercase tracking-widest text-ink-400">
               Click pe orice rând pentru detalii complete · <kbd className="rounded border border-ink-200 bg-canvas-50 px-1 font-mono text-[10px] text-ink-700">Esc</kbd> pentru a reveni · perechile sunt salvate automat
             </p>
