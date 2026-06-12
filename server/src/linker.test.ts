@@ -348,6 +348,44 @@ describe("linkDocuments — degenerate stacks", () => {
     ]);
   });
 
+  it("at equal distance, a nameless invoice photo marries the EMPTY label, not a full anchor", () => {
+    // The live Pulia tie: invoice photo exactly 1 away from both its own
+    // lone label and another shipment's anchor. The empty label wins.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211290", recipientName: "PULIA VITALIY" }),
+      doc(1, "combined", { awbConfident: false, invoiceRaw: { supplier_name: "LM" } }),
+      doc(2, "awb", { awbNumber: "007211279", recipientName: "Catalin Chioaru" }),
+      doc(3, "invoice", { recipientName: "Catalin Chioaru" }),
+    ]);
+    expect(groups).toEqual([
+      { awbIndex: 0, invoiceIndices: [1] },
+      { awbIndex: 2, invoiceIndices: [3] },
+    ]);
+  });
+
+  it("a combined self-pair whose invoice already lives in another pair folds into it", () => {
+    // The recurring stray-sheet label (007209914) on a second photo of an
+    // already-paired invoice must not spawn a ghost shipment.
+    const { groups, droppedAnchors } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "007211273",
+        recipientName: "Panait Daniela",
+        invoiceRaw: { order_number: "480833" },
+        orderNumber: "480833",
+      }),
+      doc(1, "combined", {
+        awbNumber: "007209914",
+        recipientName: "Panait Daniela",
+        invoiceRaw: { order_number: "480833" },
+        orderNumber: "480833",
+      }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [0, 1] }]);
+    expect(droppedAnchors).toEqual([
+      expect.objectContaining({ index: 1, ofIndex: 0 }),
+    ]);
+  });
+
   it("a widowed label reclaims its ADJACENT invoice from a name-thief with invoices to spare", () => {
     // The live Necmin/PRO CLIENT case: the invoice next to Necmin's label
     // prints a company buyer that name-matches a DIFFERENT anchor 4 photos

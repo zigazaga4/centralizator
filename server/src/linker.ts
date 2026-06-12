@@ -388,7 +388,22 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       nameTokenSet(a.recipientName).size > 0 ||
       ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident);
     if (a.type === "combined" && hasAwbIdentity) {
-      registerGroup({ awbIndex: a.index, invoiceIndices: [a.index] });
+      // Its invoice may be a SECOND PHOTO of an invoice already inside a
+      // pair (the recurring stray-sheet label makes such photos look like
+      // their own shipment) — same invoice number/comandă proves it.
+      const dupOf = invoiceKeysOf(a)
+        .map((k) => keyToGroup.get(k))
+        .find((x): x is DocumentGroup => x !== undefined);
+      if (dupOf) {
+        if (!dupOf.invoiceIndices.includes(a.index)) dupOf.invoiceIndices.push(a.index);
+        droppedAnchors.push({
+          index: a.index,
+          ofIndex: dupOf.awbIndex ?? dupOf.invoiceIndices[0]!,
+          reason: "same invoice content — folded into its pair",
+        });
+      } else {
+        registerGroup({ awbIndex: a.index, invoiceIndices: [a.index] });
+      }
     } else if (a.invoiceRaw !== null || invoiceKeysOf(a).length > 0) {
       rescuable.push(a);
     } else if (hasAwbIdentity) {
@@ -437,7 +452,13 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
             overlapScore(pNames, nameTokenSet(a.recipientName)) >= NAME_MATCH
           : Math.abs(a.index - p.index) <= 2,
       )
-      .sort((x, y) => Math.abs(x.index - p.index) - Math.abs(y.index - p.index));
+      .sort((x, y) => {
+        const d = Math.abs(x.index - p.index) - Math.abs(y.index - p.index);
+        if (d !== 0) return d;
+        // Equal distance: the EMPTY label wins over an anchor that
+        // already has invoices — completing a pair beats padding one.
+        return Number(groupOfAnchor.has(x.index)) - Number(groupOfAnchor.has(y.index));
+      });
     const target = candidates[0];
     if (!target) {
       droppedIncomplete.push(p.index);
