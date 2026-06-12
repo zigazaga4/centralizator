@@ -112,6 +112,26 @@ export function tokenSet(s: string | null): Set<string> {
   );
 }
 
+/** Tokens that carry NO identity in a recipient name: legal-form suffixes
+ *  and the supplier/courier words the classifier sometimes mistakes for
+ *  the buyer ("Leroy Merlin Romania", carrier names). Without this,
+ *  "HOME SRL" fails to match "AVANGARDE HOME SRL" (srl dilutes the
+ *  overlap) and two garbage "Leroy Merlin" reads would match each other. */
+const NAME_STOPWORDS = new Set(["srl", "sa", "pfa", "ii", "leroy", "merlin", "romania"]);
+
+/** Token set for RECIPIENT NAMES specifically: also drops pure-digit
+ *  tokens (a CNP of zeros is not a name) and identity-free stopwords.
+ *  Addresses keep using the plain tokenSet — their numbers matter. */
+export function nameTokenSet(s: string | null): Set<string> {
+  const out = new Set<string>();
+  for (const t of tokenSet(s)) {
+    if (/^\d+$/.test(t)) continue;
+    if (NAME_STOPWORDS.has(t)) continue;
+    out.add(t);
+  }
+  return out;
+}
+
 /** |A ∩ B| / min(|A|,|B|) — 1.0 when the shorter set is contained in the
  *  longer one ("CRISTIAN CIUREA" ⊂ "CIUREA CRISTIAN CRISTIAN CIUREA"). */
 export function overlapScore(a: Set<string>, b: Set<string>): number {
@@ -133,7 +153,7 @@ function awbDigits(d: Pick<DocInfo, "awbNumber" | "invoiceNumber">): string | nu
 }
 
 function nameScore(a: DocInfo, b: DocInfo): number {
-  return overlapScore(tokenSet(a.recipientName), tokenSet(b.recipientName));
+  return overlapScore(nameTokenSet(a.recipientName), nameTokenSet(b.recipientName));
 }
 
 /**
@@ -278,7 +298,7 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       continue;
     }
 
-    const itemNames = tokenSet(item.recipientName);
+    const itemNames = nameTokenSet(item.recipientName);
     const itemAddr = tokenSet(item.recipientAddress);
     const pick = (pool: DocInfo[]): DocInfo =>
       pool.reduce((best, c) => {
@@ -294,7 +314,7 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     // stack is a misread capturing someone else's invoice, not a discovery.
     const nearAnchors = anchors.filter((a) => Math.abs(a.index - item.index) <= ASSIGN_WINDOW);
     const tier1 = nearAnchors.filter(
-      (a) => overlapScore(itemNames, tokenSet(a.recipientName)) >= NAME_MATCH,
+      (a) => overlapScore(itemNames, nameTokenSet(a.recipientName)) >= NAME_MATCH,
     );
     // Addresses share boilerplate tokens ("str", the town), so within the
     // address tier the HIGHEST overlap wins and distance only breaks ties.

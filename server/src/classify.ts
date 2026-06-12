@@ -96,7 +96,7 @@ const classifyTool = {
         recipient_name: {
           type: ["string", "null"],
           description:
-            "AWB label: the 'Destinatar' name. Invoice: the 'Cumparator' name. As printed.",
+            "AWB label: the 'Destinatar' name. Invoice: the 'Cumparator' name. As printed. NEVER the Furnizor (the store, e.g. Leroy Merlin), NEVER the courier company, NEVER a numeric code (a CNP/CUI of zeros is not a name). null when the buyer/recipient is not readable.",
         },
         recipient_address: {
           type: ["string", "null"],
@@ -136,8 +136,10 @@ const SYSTEM_INSTRUCTION =
   "Read ONLY what is printed — never invent or complete fields. If part of the AWB number is covered or cut " +
   "off, return exactly the digits you can see (a partial number is useful). NEVER guess at digits you cannot " +
   "clearly see — reading rotated digits wrong creates phantom shipments downstream; return null or the certain " +
-  "digits only, and set awb_number_confident=false. The number in the FACTURĂ header is the invoice_number and " +
-  "must NEVER be reported as awb_number. Use null for anything you cannot read. For a combined photo fill BOTH " +
+  "digits only, and set awb_number_confident=false. Courier label numbers here are 9 digits (007…); the FACTURĂ " +
+  "header number is 13 digits and is the invoice_number — it must NEVER be reported as awb_number, whole or in " +
+  "part. recipient_name is the BUYER/RECIPIENT person or company only — never the Furnizor store, never the " +
+  "courier, never numeric codes. Use null for anything you cannot read. For a combined photo fill BOTH " +
   "the label fields and the invoice fields.\n" +
   "Call classify_document EXACTLY ONCE. Never reply in prose.";
 

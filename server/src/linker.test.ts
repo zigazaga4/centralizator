@@ -244,6 +244,28 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
     expect(groups).toEqual([{ awbIndex: 1, invoiceIndices: [0] }]);
   });
 
+  it("legal-form and supplier stopwords don't dilute name identity", () => {
+    // Live case: "HOME SRL" (partial read) must still fold into
+    // "AVANGARDE HOME SRL" next door.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211306", recipientName: "AVANGARDE HOME SRL" }),
+      doc(1, "combined", { awbConfident: false, recipientName: "HOME SRL" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+  });
+
+  it("digit-only and supplier-word 'names' carry no identity", () => {
+    // "0000000" (a CNP read as a name) and "Leroy Merlin Romania" (the
+    // store) must never make two documents the same shipment.
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211290", recipientName: "0000000" }),
+      doc(1, "awb", { awbNumber: "007211074", recipientName: "0000000" }),
+      doc(5, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
+      doc(6, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
+    ]);
+    expect(groups.length).toBe(4);
+  });
+
   it("stray labels in extra_awb_numbers never create or break anchors", () => {
     const { groups } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211074", recipientName: "ADRIAN TIHAN" }),
