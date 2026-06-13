@@ -4,6 +4,7 @@ import {
   COLLABORATOR_LABEL,
   type CollaboratorKey,
 } from "../types";
+import { CollaboratorPickModal } from "./CollaboratorPickModal";
 
 interface Props {
   /** Sends the dropped photos into THE one ingestion flow (/scan-batch):
@@ -244,106 +245,16 @@ export function PairAddCard({ onScan, hero }: Props) {
       {/* Collaborator assignment — the gate every upload passes through */}
       {pending && (
         <CollaboratorPickModal
-          count={pending.length}
+          title="Pentru ce colaborator sunt documentele?"
+          subtitle={`Toate perechile din acest lot (${pending.length} imagine${
+            pending.length === 1 ? "" : "i"
+          }) se salvează pe colaboratorul ales.`}
+          confirmLabel={`Trimite (${pending.length} imagine${pending.length === 1 ? "" : "i"})`}
+          initial={readStoredCollaborator()}
           onCancel={() => setPending(null)}
           onConfirm={(c) => doSend(pending, c)}
         />
       )}
-    </div>
-  );
-}
-
-/**
- * Modal shown right after a drop/pick/paste: WHOSE documents are these?
- * The chosen collaborator is sent with the batch and stamped on every
- * pair it produces, so the queue files each pair under the right
- * partner from the start. Last choice arrives preselected.
- */
-function CollaboratorPickModal({
-  count,
-  onCancel,
-  onConfirm,
-}: {
-  count: number;
-  onCancel: () => void;
-  onConfirm: (collaborator: CollaboratorKey | null) => void;
-}) {
-  const [choice, setChoice] = useState<CollaboratorKey | null>(readStoredCollaborator);
-
-  const option = (key: CollaboratorKey | null, label: string) => {
-    const active = choice === key;
-    return (
-      <button
-        key={key ?? "direct"}
-        type="button"
-        onClick={() => setChoice(key)}
-        className={`flex w-full items-center justify-between rounded-lg border px-4 py-2.5 text-left text-sm font-medium transition ${
-          active
-            ? "border-coral-500 bg-coral-50 text-coral-800"
-            : "border-ink-200 bg-canvas-50 text-ink-700 hover:border-coral-300 hover:bg-canvas-100"
-        }`}
-      >
-        <span>{label}</span>
-        <span
-          className={`flex h-4 w-4 items-center justify-center rounded-full border ${
-            active ? "border-coral-500 bg-coral-500" : "border-ink-300"
-          }`}
-        >
-          {active && (
-            <svg className="h-2.5 w-2.5 text-canvas-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          )}
-        </span>
-      </button>
-    );
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/70 p-6"
-      onClick={onCancel}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Alege colaboratorul"
-    >
-      <div
-        className="w-full max-w-md rounded-xl border border-ink-200 bg-canvas-50 p-5 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-800">
-              Pentru ce colaborator sunt documentele?
-            </h3>
-            <p className="mt-1 text-xs text-ink-500">
-              Toate perechile din acest lot ({count} imagine{count === 1 ? "" : "i"}) se
-              salvează pe colaboratorul ales.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Renunță"
-            className="rounded-md border border-ink-300 bg-canvas-50 px-2 py-1 text-sm text-ink-700 transition hover:border-coral-400 hover:text-coral-700"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-2">
-          {COLLABORATOR_KEYS.map((k) => option(k, COLLABORATOR_LABEL[k]))}
-          {option(null, "Direct (fără colaborator)")}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => onConfirm(choice)}
-          className="mt-4 w-full rounded-lg bg-coral-500 px-4 py-2.5 text-sm font-semibold text-canvas-50 shadow-sm transition hover:bg-coral-600"
-        >
-          Trimite ({count} imagine{count === 1 ? "" : "i"})
-        </button>
-      </div>
     </div>
   );
 }

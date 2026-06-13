@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import type { Pair, UnpairedDocType } from "../types";
+import type { CollaboratorKey, Pair, UnpairedDocType } from "../types";
 import { usePairImages } from "../lib/images";
 import { suggestPairs } from "../lib/api";
 import { Spinner } from "./Spinner";
+import { CollaboratorPickModal } from "./CollaboratorPickModal";
 
 /**
  * Unpaired-document handling — the day's scans the server could not link
@@ -77,9 +78,10 @@ interface ModalProps {
   items: Pair[];
   onClose: () => void;
   onRemove: (id: string) => void;
-  /** Build a real pair from these orphan rows (≥2). Resolves true when
-   *  the pair was created (the source rows are gone by then). */
-  onPair: (ids: string[]) => Promise<boolean>;
+  /** Build a real pair from these orphan rows (≥2) under the chosen
+   *  collaborator. Resolves true when the pair was created (the source
+   *  rows are gone by then). */
+  onPair: (ids: string[], collaborator: CollaboratorKey | null) => Promise<boolean>;
 }
 
 /** One AI-suggested (then human-rearranged) group of orphan-row ids.
@@ -99,6 +101,14 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
   const [suggestError, setSuggestError] = useState<string | null>(null);
   /** The "send to OCR" pass is in flight (pairs being created). */
   const [sending, setSending] = useState(false);
+  /** Collaborator pick gate: non-null while the modal is open, holding
+   *  the id-groups queued to become pairs (one for manual, N for the AI
+   *  batch) plus the default collaborator inherited from the orphans. */
+  const [pendingSend, setPendingSend] = useState<{
+    kind: "manual" | "ocr";
+    groups: string[][];
+    initial: CollaboratorKey | null;
+  } | null>(null);
 
   // Drop selections + suggestion members whose rows disappeared
   // (deleted / just paired); empty groups dissolve.
@@ -121,11 +131,16 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
     setSelected((cur) => cur.filter((id) => !inGroup.has(id)));
   }, [groups]);
 
-  // Esc closes the zoom first, then the modal — never both at once.
+  // Esc closes, in order: the collaborator gate, then the zoom, then
+  // the modal — never two layers at once.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       e.stopPropagation();
+      if (pendingSend) {
+        setPendingSend(null);
+        return;
+      }
       setZoomed((z) => {
         if (z !== null) return null;
         onClose();
@@ -134,20 +149,27 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, pendingSend]);
 
   const toggle = (id: string) =>
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
-  const pair = async () => {
-    if (selected.length < 2 || pairing) return;
-    setPairing(true);
-    try {
-      const ok = await onPair(selected);
-      if (ok) setSelected([]);
-    } finally {
-      setPairing(false);
+  /** Collaborator inherited from a set of orphan rows: the first
+   *  non-null assignment (every orphan of a batch carries the same one,
+   *  stamped at upload). Null when none of them was assigned. */
+  const inheritedCollaborator = (ids: string[]): CollaboratorKey | null => {
+    for (const id of ids) {
+      const p = items.find((x) => x.id === id);
+      if (p?.collaborator) return p.collaborator;
     }
+    return null;
+  };
+
+  /** Manual "Creează perechea" — open the collaborator gate for the one
+   *  selected group; the pair is created on confirm. */
+  const pair = () => {
+    if (selected.length < 2 || pairing || pendingSend) return;
+    setPendingSend({ kind: "manual", groups: [selected], initial: inheritedCollaborator(selected) });
   };
 
   /** "Împerechere AI" — ship every orphan's photo to the model in one
@@ -186,17 +208,38 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
   // Only complete groups (AWB + at least one more document) ride to OCR.
   const readyGroups = (groups ?? []).filter((g) => g.ids.length >= 2);
 
-  /** "Trimite perechile la OCR" — every approved group becomes a real
-   *  pair through the same manual flow (insert + extract + price), all
-   *  in parallel. Only NOW do they appear in the queue/excel view; a
-   *  failed group keeps its rows and stays listed for a retry. */
-  const sendToOcr = async () => {
-    if (readyGroups.length === 0 || sending || pairing) return;
-    setSending(true);
-    try {
-      await Promise.all(readyGroups.map((g) => onPair(g.ids)));
-    } finally {
-      setSending(false);
+  /** "Trimite perechile la OCR" — open the collaborator gate for the
+   *  whole approved batch; the pairs are created on confirm. */
+  const sendToOcr = () => {
+    if (readyGroups.length === 0 || sending || pairing || pendingSend) return;
+    const groups = readyGroups.map((g) => g.ids);
+    setPendingSend({ kind: "ocr", groups, initial: inheritedCollaborator(groups.flat()) });
+  };
+
+  /** Confirmed the collaborator — every queued group becomes a real
+   *  pair through the same manual flow (insert + extract + price) under
+   *  the chosen collaborator, all in parallel. Only NOW do they appear
+   *  in the queue/excel view; a failed group keeps its rows and stays
+   *  listed for a retry. */
+  const confirmSend = async (collaborator: CollaboratorKey | null) => {
+    if (!pendingSend) return;
+    const { kind, groups } = pendingSend;
+    setPendingSend(null);
+    if (kind === "manual") {
+      setPairing(true);
+      try {
+        const ok = await onPair(groups[0]!, collaborator);
+        if (ok) setSelected([]);
+      } finally {
+        setPairing(false);
+      }
+    } else {
+      setSending(true);
+      try {
+        await Promise.all(groups.map((ids) => onPair(ids, collaborator)));
+      } finally {
+        setSending(false);
+      }
     }
   };
 
@@ -206,6 +249,7 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
   const byId = new Map(items.map((p) => [p.id, p] as const));
 
   return (
+    <>
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-ink-900/70 p-6"
       onClick={onClose}
@@ -382,6 +426,34 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
         </div>
       )}
     </div>
+
+      {/* Collaborator gate — the pairs are filed (and sent to OCR) under
+          the partner confirmed here, pre-filled from the upload-time
+          assignment. Rendered as a sibling so its overlay clicks don't
+          bubble into the unpaired modal's close handler. */}
+      {pendingSend && (
+        <CollaboratorPickModal
+          title={
+            pendingSend.groups.length === 1
+              ? "Pentru ce colaborator este perechea?"
+              : "Pentru ce colaborator sunt perechile?"
+          }
+          subtitle={
+            pendingSend.groups.length === 1
+              ? "Perechea se trimite la citire (OCR) și se salvează pe colaboratorul ales."
+              : `Cele ${pendingSend.groups.length} perechi se trimit la citire (OCR) și se salvează pe colaboratorul ales.`
+          }
+          confirmLabel={
+            pendingSend.groups.length === 1
+              ? "Trimite perechea la OCR"
+              : `Trimite ${pendingSend.groups.length} perechi la OCR`
+          }
+          initial={pendingSend.initial}
+          onCancel={() => setPendingSend(null)}
+          onConfirm={(c) => void confirmSend(c)}
+        />
+      )}
+    </>
   );
 }
 

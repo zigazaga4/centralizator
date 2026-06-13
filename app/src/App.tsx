@@ -777,9 +777,14 @@ export default function App() {
    *
    * Returns true when the pair was created (the modal clears its
    * selection); false leaves everything untouched for a retry.
+   *
+   * `collaborator` is chosen in the modal's pick gate right before the
+   * pair is sent to OCR (defaulting to the collaborator the orphans
+   * were uploaded under), so the operator confirms or corrects the
+   * assignment as the pair enters the queue.
    */
   const pairManually = useCallback(
-    async (ids: string[]): Promise<boolean> => {
+    async (ids: string[], collaborator: CollaboratorKey | null): Promise<boolean> => {
       const docs = ids
         .map((id) => pairsRef.current.find((p) => p.id === id))
         .filter((p): p is Pair => !!p && p.status.kind === "unpaired");
@@ -803,9 +808,9 @@ export default function App() {
       const newPair: Pair = {
         id: uuid(),
         day: docs[0]!.day,
-        // Orphans carry the collaborator their batch was uploaded for —
-        // the hand-built pair inherits it so it files correctly.
-        collaborator: docs[0]!.collaborator ?? null,
+        // The collaborator confirmed in the OCR-send modal — files the
+        // hand-built pair under the right partner from the first save.
+        collaborator,
         images: files,
         status: { kind: "pending" },
       };
