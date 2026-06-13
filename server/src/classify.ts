@@ -243,7 +243,11 @@ export async function classifyImage(image: ImageInput): Promise<Omit<DocInfo, "i
             {
               role: "user",
               content: [
-                { type: "image_url", image_url: { url } },
+                // detail:"high" makes the model inspect the photo at full
+                // resolution (tiled) instead of a downscaled thumbnail — the
+                // single cheapest win for reading a small AWB label's number,
+                // Greutate and Distanță, which a thumbnail loses.
+                { type: "image_url", image_url: { url, detail: "high" } },
                 {
                   type: "text",
                   text: "Report this photo's documents: report_awb per visible label, report_invoice if an invoice page is present, report_unreadable if neither.",
@@ -444,7 +448,9 @@ export async function suggestPairs(images: ImageInput[]): Promise<PairSuggestion
     { type: "text" as const, text: `Photo ${i + 1}:` },
     {
       type: "image_url" as const,
-      image_url: { url: `data:${img.mimeType};base64,${img.data.toString("base64")}` },
+      // Full-resolution read here too — pairing leans on the printed
+      // recipient/buyer name and order/AWB numbers, all small text.
+      image_url: { url: `data:${img.mimeType};base64,${img.data.toString("base64")}`, detail: "high" },
     },
   ]);
   content.push({
