@@ -310,7 +310,12 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
               </section>
 
               <section>
-                <SectionTitle>Decont colaborator</SectionTitle>
+                <SectionTitle>Decont colaborator (fișier de plată)</SectionTitle>
+                <p className="mt-1 text-[11px] leading-snug text-ink-500">
+                  Decontul este fișierul de plată al colaboratorului: fiecare rând arată
+                  transportul la tariful de bază, iar comisionul lui se adună o singură
+                  dată, la final, sub total.
+                </p>
                 <div className="mt-2">
                   <SettingCheck
                     label="Generează decont pentru colaborator"

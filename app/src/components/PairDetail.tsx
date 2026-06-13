@@ -18,6 +18,7 @@ import {
 } from "../types";
 import { date, ron } from "../lib/format";
 import { usePairImages } from "../lib/images";
+import { EDIT_LOOK } from "../lib/ui";
 import { ProductBadge, ProductCheckSummary, hasAnyWarning } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
@@ -245,6 +246,20 @@ function StatusBadge({ status }: { status: PairStatus }) {
 
 /* ─── Image gallery ─────────────────────────────────────────────────── */
 
+/**
+ * Best-effort label for a stored image. The pairing flow files the AWB
+ * first and each invoice after it, so image 0 is the AWB and the rest
+ * are invoice pages; a lone image is the combined label + invoice photo.
+ * The invoice count from the extraction numbers multiple facturi. This
+ * replaces the old anonymous "Imagine 1 / 2 / 3", which forced the user
+ * to recognise the paperwork by eye.
+ */
+function imageLabel(i: number, total: number, invoiceCount: number): string {
+  if (total === 1) return invoiceCount > 0 ? "AWB + Factură" : "AWB";
+  if (i === 0) return "AWB";
+  return total - 1 > 1 ? `Factură ${i}` : "Factură";
+}
+
 function ImageGallery({ pair }: { pair: Pair }) {
   // Lazy: bytes stream in per-image from the server (cached in-app
   // after the first load); local pairs resolve instantly. While
@@ -252,6 +267,8 @@ function ImageGallery({ pair }: { pair: Pair }) {
   const { files, loading } = usePairImages(pair);
   const [urls, setUrls] = useState<string[]>([]);
   const [zoomed, setZoomed] = useState<string | null>(null);
+  // The AWB is stored first, invoices after — used to label each image.
+  const invoiceCount = pair.status.kind === "ready" ? pair.status.edits.invoices.length : 0;
 
   useEffect(() => {
     const list = files.map((f) => URL.createObjectURL(f));
@@ -287,27 +304,33 @@ function ImageGallery({ pair }: { pair: Pair }) {
   return (
     <>
       <div className="space-y-4">
-        {urls.map((u, i) => (
-          <figure
-            key={u}
-            className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm"
-          >
-            <div className="flex items-center justify-between border-b border-ink-200 bg-canvas-100 px-3 py-1.5 text-[11px] uppercase tracking-widest text-ink-500">
-              <span>Imagine {i + 1}</span>
-              <span className="truncate text-ink-400 normal-case tracking-normal">
-                {files[i] ? `${(files[i]!.size / 1024).toFixed(0)} KB` : ""}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setZoomed(u)}
-              className="block w-full cursor-zoom-in focus:outline-none"
-              title="Click pentru a mări"
+        {urls.map((u, i) => {
+          const label = imageLabel(i, urls.length, invoiceCount);
+          const isAwb = i === 0;
+          return (
+            <figure
+              key={u}
+              className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm"
             >
-              <img src={u} alt={`Imagine ${i + 1}`} className="block w-full" />
-            </button>
-          </figure>
-        ))}
+              <div className="flex items-center justify-between border-b border-ink-200 bg-canvas-100 px-3 py-1.5 text-[11px] uppercase tracking-widest text-ink-500">
+                <span className={isAwb ? "font-semibold text-coral-700" : "text-ink-600"}>
+                  {label}
+                </span>
+                <span className="truncate text-ink-400 normal-case tracking-normal">
+                  {files[i] ? `${(files[i]!.size / 1024).toFixed(0)} KB` : ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setZoomed(u)}
+                className="block w-full cursor-zoom-in focus:outline-none"
+                title="Click pentru a mări"
+              >
+                <img src={u} alt={label} className="block w-full" />
+              </button>
+            </figure>
+          );
+        })}
       </div>
 
       {zoomed && (
@@ -985,7 +1008,7 @@ function NumberCell({
         if (!Number.isFinite(raw)) return;
         onChange(integer ? Math.floor(raw) : raw);
       }}
-      className="block w-full bg-coral-50/40 px-3 py-1 text-right text-sm tabular-nums text-ink-900 outline-none focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className={`${EDIT_LOOK} block w-full cursor-text px-3 py-1 text-right text-sm tabular-nums`}
     />
   );
 }
@@ -996,7 +1019,7 @@ function DateCell({ value, onChange }: { value: string; onChange: (v: string) =>
       type="date"
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="block w-full bg-coral-50/40 px-3 py-1 text-sm text-ink-900 outline-none focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className={`${EDIT_LOOK} block w-full cursor-text px-3 py-1 text-sm`}
     />
   );
 }
@@ -1014,7 +1037,7 @@ function SelectCell({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="block w-full bg-coral-50/40 px-3 py-1 text-sm text-ink-900 outline-none focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className={`${EDIT_LOOK} block w-full cursor-pointer px-3 py-1 text-sm`}
     >
       {options.map((o) => (
         <option key={o} value={o}>

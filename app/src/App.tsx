@@ -1031,67 +1031,85 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-canvas-100 text-ink-900">
-      <header className="flex items-center justify-between border-b border-ink-200 bg-canvas-50 px-8 py-4">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-xl font-semibold tracking-tight text-ink-900">Centralizator</h1>
-          <span className="text-[11px] uppercase tracking-[0.18em] text-ink-500">
-            Stalexone Trans
-          </span>
-        </div>
+      <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-ink-200 bg-canvas-50 px-6 py-3.5">
+        {/* Identity + live status — "which app, is it connected, is work
+            in flight" all sit together on the left. */}
         <div className="flex items-center gap-3">
+          <div className="flex items-baseline gap-2.5">
+            <h1 className="text-xl font-semibold tracking-tight text-ink-900">Centralizator</h1>
+            <span className="hidden text-[11px] uppercase tracking-[0.18em] text-ink-500 sm:inline">
+              Stalexone Trans
+            </span>
+          </div>
           {/* Live-feed indicator — green when the SSE stream is connected,
               so the user knows phone scans will appear in real time. */}
           <LivePill connected={liveConnected} />
-          {/* UpdateBanner self-hides when there's no update. Mounted
-              in the header so every screen surfaces the prompt. */}
+          {/* UpdateBanner self-hides when there's no update. */}
           <UpdateBanner />
           {globalExtracting > 0 && (
             <Spinner
               label={`Procesez ${globalExtracting} pereche${globalExtracting === 1 ? "" : "i"}…`}
             />
           )}
-          {/* Global selectors: which customer city to invoice for, and
-              which collaborator to pay. Both apply to the entire queue
-              (table totals, footer sums, exports). The collaborator
-              roster is city-dependent (sourced from
-              PRETURI COLABORATORI.ods): Ploiești has 3 partners, Iași
-              has 2, Constanța has none. */}
-          <HeaderSelect<CityKey>
-            label="Oraș"
-            value={selectedCity}
-            options={CITY_KEYS}
-            labelFor={(k) => CITY_LABEL[k]}
-            onChange={setSelectedCity}
-            title="Magazin / centralizator — schimbă între cele 4 magazine (fiecare cu tabelul și exportul lui); perechile se filtrează după magazinul din care au plecat"
-          />
-          <CollaboratorSelect
-            city={selectedCity}
-            value={selectedCollaborator}
-            onChange={setSelectedCollaborator}
-          />
-          {/* Cross-check the courier's master export against our data.
-              Always available — the server compares the whole pair queue
-              (joined on AWB number), independent of the selected day. */}
-          <CompareExcelButton />
-          {exportPairs.length > 0 && (
-            <ExportMenu
-              pairs={exportPairs}
-              day={selectedDay}
-              city={selectedCity}
-              collaborator={selectedCollaborator}
-              disabled={!exportPairs.some((p) => p.status.kind === "ready")}
+        </div>
+
+        {/* Scope filters + actions. Filters first (they decide WHAT the
+            screen shows), then the secondary tools, then the primary
+            Calculează. The whole cluster wraps as one block on narrow
+            windows instead of overflowing the bar. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* The two global selectors live in one tinted pill so they read
+              as the queue's scope control, not as stray captions. Both
+              apply to the entire queue (table totals, footer sums,
+              exports); the collaborator roster is city-dependent (sourced
+              from PRETURI COLABORATORI.ods): Ploiești has 3 partners,
+              Iași has 2, Constanța has none. */}
+          <div className="flex items-center gap-3 rounded-lg border border-ink-200 bg-canvas-100 px-3 py-1.5 shadow-sm">
+            <HeaderSelect<CityKey>
+              label="Oraș"
+              value={selectedCity}
+              options={CITY_KEYS}
+              labelFor={(k) => CITY_LABEL[k]}
+              onChange={setSelectedCity}
+              title="Magazin / centralizator — schimbă între cele 4 magazine (fiecare cu tabelul și exportul lui); perechile se filtrează după magazinul din care au plecat"
             />
-          )}
-          {dayPairs.length > 0 && (
-            <button
-              type="button"
-              onClick={resetDay}
-              title={`Şterge toate perechile pentru ${fmtDate(selectedDay)}`}
-              className="rounded-md border border-ink-300 bg-canvas-50 px-3 py-1.5 text-sm text-ink-700 transition hover:border-coral-400 hover:bg-canvas-200 hover:text-ink-900"
-            >
-              Goleşte ziua
-            </button>
-          )}
+            <span aria-hidden className="h-5 w-px bg-ink-200" />
+            <CollaboratorSelect
+              city={selectedCity}
+              value={selectedCollaborator}
+              onChange={setSelectedCollaborator}
+            />
+          </div>
+
+          {/* Secondary tools — compare against the courier's master file,
+              export the day, clear the day. Grouped tight so they read as
+              one toolbar, set apart from the primary action. */}
+          <div className="flex items-center gap-2">
+            {/* Cross-check the courier's master export against our data.
+                Always available — the server compares the whole pair queue
+                (joined on AWB number), independent of the selected day. */}
+            <CompareExcelButton />
+            {exportPairs.length > 0 && (
+              <ExportMenu
+                pairs={exportPairs}
+                day={selectedDay}
+                city={selectedCity}
+                collaborator={selectedCollaborator}
+                disabled={!exportPairs.some((p) => p.status.kind === "ready")}
+              />
+            )}
+            {dayPairs.length > 0 && (
+              <button
+                type="button"
+                onClick={resetDay}
+                title={`Şterge toate perechile pentru ${fmtDate(selectedDay)}`}
+                className="rounded-md border border-ink-300 bg-canvas-50 px-3 py-1.5 text-sm text-ink-700 transition hover:border-coral-400 hover:bg-canvas-200 hover:text-ink-900"
+              >
+                Goleşte ziua
+              </button>
+            )}
+          </div>
+
           <button
             type="button"
             onClick={() => void runAll()}
@@ -1147,7 +1165,10 @@ export default function App() {
               selectedDay={selectedDay}
               onSelect={setSelectedDay}
             />
-            <PairAddCard onScan={scanImages} />
+            <PairAddCard
+              onScan={scanImages}
+              hero={dayPairs.length === 0 && dayUnpaired.length === 0}
+            />
             {/* Orphan documents the server refused to guess into a pair —
                 a warning pill above the queue; the modal is the manual
                 pairing system (zoom + select + create pair). */}

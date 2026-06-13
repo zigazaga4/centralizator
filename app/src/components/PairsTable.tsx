@@ -15,6 +15,7 @@ import {
 } from "../types";
 import { date, ron, ronBare } from "../lib/format";
 import { usePairImages } from "../lib/images";
+import { EDIT_LOOK } from "../lib/ui";
 import { ProductBadge } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
@@ -50,7 +51,7 @@ const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
  * The wrapper keeps `min-w-[1080px]` so very narrow windows scroll
  * horizontally instead of crushing the editable columns. */
 const GRID =
-  "grid grid-cols-[44px_72px_minmax(0,1.4fr)_132px_72px_72px_56px_max-content_minmax(108px,max-content)_minmax(108px,max-content)_32px]";
+  "grid grid-cols-[44px_72px_minmax(0,1.4fr)_132px_72px_72px_56px_max-content_minmax(108px,max-content)_minmax(108px,max-content)_56px]";
 
 interface Props {
   pairs: Pair[];
@@ -127,9 +128,11 @@ export function PairsTable({
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
-      <div className="min-w-[1080px]">
-        <Header collaborator={collaborator} />
+    <div className="space-y-2.5">
+      {pairs.length > 0 && <StatusLegend />}
+      <div className="overflow-x-auto rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
+        <div className="min-w-[1080px]">
+          <Header collaborator={collaborator} />
         {pairs.map((p, i) => (
           <PairRow
             key={p.id}
@@ -150,6 +153,7 @@ export function PairsTable({
           readyCount={readyCount}
           totalCount={pairs.length}
         />
+        </div>
       </div>
     </div>
   );
@@ -162,17 +166,26 @@ function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
   // rendering — it's a two-line header so the collaborator's name fits
   // even when it's the longest ("Vic Dinamic") without forcing the
   // column wider than its content needs.
-  const cols = [
-    { label: "#", align: "center" },
-    { label: "Imagini", align: "center" },
-    { label: "Documente", align: "left" },
-    { label: "Data / Serviciu", align: "left" },
-    { label: "kg", align: "right" },
-    { label: "km", align: "right" },
-    { label: "Liv.", align: "right" },
-    { label: "Costuri", align: "left" },
-    { label: "Total client", align: "right" },
-  ] as const;
+  const cols: { label: string; align: "left" | "right" | "center"; title?: string }[] = [
+    { label: "#", align: "center", title: "Poziție în zi + starea perechii (vezi legenda de sus)" },
+    { label: "Imagini", align: "center", title: "Documentele scanate ale perechii" },
+    { label: "Documente", align: "left", title: "Nr. AWB, factură și destinatar" },
+    {
+      label: "Data / Serviciu",
+      align: "left",
+      title: "Data livrării și tipul de serviciu — se pot edita",
+    },
+    { label: "kg", align: "right", title: "Greutate (kg) — se poate edita" },
+    { label: "km", align: "right", title: "Distanță extra peste 50 km — se poate edita" },
+    { label: "Liv.", align: "right", title: "Număr de livrări — se poate edita" },
+    {
+      label: "Costuri",
+      align: "left",
+      title:
+        "Costuri standard de transport — Bază: tarif de bază · Km+: supliment distanță · Inc.: incremente (livrări / greutate / marfă voluminoasă) · Wkd: supliment weekend · Desc.: taxă descărcare",
+    },
+    { label: "Total client", align: "right", title: "Cât plătește clientul (cu comision inclus)" },
+  ];
 
   return (
     <div
@@ -181,6 +194,7 @@ function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
       {cols.map((c, i) => (
         <div
           key={i}
+          title={c.title}
           className={`border-r border-ink-300 px-2 py-2 ${
             c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left"
           }`}
@@ -237,9 +251,13 @@ function PairRow({
   // Macara run → no standard cost columns, no commission/collaborator.
   const isMac = !!breakdown?.macara?.isMacara;
 
+  // Error rows must be impossible to miss (they mean money didn't get a
+  // price): a solid coral fill PLUS a 4 px coral-600 left stripe, drawn
+  // with an inset shadow so the grid never shifts. Extracting/ready stay
+  // calm so the eye lands on the row that actually needs attention.
   const rowBg =
     status.kind === "error"
-      ? "bg-coral-50/60 hover:bg-coral-50"
+      ? "bg-coral-100 shadow-[inset_4px_0_0_0_var(--color-coral-600)] hover:bg-coral-100"
       : isExtracting
       ? "bg-canvas-100/60"
       : "bg-canvas-50 hover:bg-canvas-100";
@@ -265,7 +283,7 @@ function PairRow({
       {/* # + status — one narrow column, row number above the icon */}
       <div className="flex flex-col items-center justify-center gap-1 border-r border-ink-100 bg-canvas-100 px-1 py-1.5">
         <span className="text-[10px] tabular-nums text-ink-400">{index + 1}</span>
-        <StatusPill status={status} />
+        <StatusPill kind={status.kind} message={status.kind === "error" ? status.message : undefined} />
       </div>
 
       {/* Image thumbs */}
@@ -278,38 +296,55 @@ function PairRow({
           destinatar on the third. Everything truncates instead of
           widening the column, so the grid can never overflow. */}
       <div className="flex min-w-0 flex-col justify-center gap-0.5 border-r border-ink-100 px-3 py-1.5">
-        {/* flex-wrap: when macara + voluminos + product-check chips all
-            land on one narrow row, they wrap under the AWB instead of
-            spilling past the cell. */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-          <span
-            className="min-w-0 max-w-full truncate font-mono text-[12px] font-medium text-ink-800"
-            title={edits?.awb.awb_number || undefined}
-          >
-            {edits?.awb.awb_number || <Dash />}
-          </span>
-          {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
-          {(breakdown?.bulkyUnits ?? 0) > 0 && (
-            <VoluminosChip
-              units={breakdown!.bulkyUnits!}
-              transports={breakdown!.bulkyTransports ?? 0}
-            />
-          )}
-          <ProductBadge
-            verification={status.kind === "ready" ? status.verification : undefined}
-            routing={status.kind === "ready" ? status.routing : undefined}
-            verifying={verifying}
-            pairId={pair.id}
-          />
-        </div>
-        <InvoiceLine edits={edits} />
-        {edits?.awb.recipient_name && (
-          <div
-            className="truncate text-[10px] text-ink-400"
-            title={edits.awb.recipient_address ?? undefined}
-          >
-            {edits.awb.recipient_name}
+        {status.kind === "error" ? (
+          /* A failed pair states the problem right in the row instead of
+             three empty dashes, with the full reason in the tooltip and a
+             one-line hint on how to retry. */
+          <div className="min-w-0">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-coral-700">
+              ⚠ Eroare la calcul
+            </span>
+            <p className="truncate text-[11px] text-coral-600" title={status.message}>
+              {status.message}
+            </p>
+            <p className="text-[10px] text-ink-400">Apasă „Calculează” pentru a reîncerca.</p>
           </div>
+        ) : (
+          <>
+            {/* flex-wrap: when macara + voluminos + product-check chips all
+                land on one narrow row, they wrap under the AWB instead of
+                spilling past the cell. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              <span
+                className="min-w-0 max-w-full truncate font-mono text-[12px] font-medium text-ink-800"
+                title={edits?.awb.awb_number || undefined}
+              >
+                {edits?.awb.awb_number || <Dash />}
+              </span>
+              {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
+              {(breakdown?.bulkyUnits ?? 0) > 0 && (
+                <VoluminosChip
+                  units={breakdown!.bulkyUnits!}
+                  transports={breakdown!.bulkyTransports ?? 0}
+                />
+              )}
+              <ProductBadge
+                verification={status.kind === "ready" ? status.verification : undefined}
+                routing={status.kind === "ready" ? status.routing : undefined}
+                verifying={verifying}
+                pairId={pair.id}
+              />
+            </div>
+            <InvoiceLine edits={edits} />
+            {edits?.awb.recipient_name && (
+              <div
+                className="truncate text-[10px] text-ink-400"
+                title={edits.awb.recipient_address ?? undefined}
+              >
+                {edits.awb.recipient_name}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -403,30 +438,53 @@ function PairRow({
         assigned={!!pair.collaborator}
       />
 
-      {/* Remove */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        title="Șterge pereche"
-        className="flex items-center justify-center py-2 text-ink-400 opacity-0 transition hover:text-coral-600 focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        <svg
-          className="h-4 w-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
+      {/* Open + remove. The whole row opens the detail page on click; the
+          chevron is a PERSISTENT "deschide" cue so the row visibly reads
+          as clickable (it brightens on hover and, being a plain child of
+          the row, opens on click too). The X deletes and only appears on
+          hover, with stopPropagation so deleting never navigates. */}
+      <div className="flex items-center justify-end gap-0.5 pr-1.5">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          title="Șterge pereche"
+          className="flex items-center justify-center rounded p-0.5 text-ink-400 opacity-0 transition hover:text-coral-600 focus-visible:opacity-100 group-hover:opacity-100"
         >
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+          <svg
+            className="h-4 w-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+        <span
+          title="Deschide perechea pentru detalii"
+          aria-hidden
+          className="flex items-center justify-center text-ink-300 transition group-hover:text-coral-500"
+        >
+          <svg
+            className="h-4 w-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </span>
+      </div>
     </div>
   );
 }
@@ -637,8 +695,8 @@ function CollaboratorTotalCell({
 
 /* ─── Primitives ─────────────────────────────────────────────────────── */
 
-function StatusPill({ status }: { status: PairStatus }) {
-  switch (status.kind) {
+function StatusPill({ kind, message }: { kind: PairStatus["kind"]; message?: string }) {
+  switch (kind) {
     case "pending":
       return (
         <span
@@ -670,7 +728,7 @@ function StatusPill({ status }: { status: PairStatus }) {
       return (
         <span
           className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-coral-700 text-canvas-50"
-          title={status.message}
+          title={message}
         >
           !
         </span>
@@ -687,6 +745,39 @@ function StatusPill({ status }: { status: PairStatus }) {
         </span>
       );
   }
+}
+
+/* ─── Status legend ─────────────────────────────────────────────────── */
+
+/**
+ * A one-line key above the table so the status icons explain themselves —
+ * a dispatcher shouldn't have to learn what the dot, spinner, check and
+ * "!" mean by trial and error. It reuses the exact StatusPill glyphs (one
+ * source of truth) and ends with a small swatch teaching that the
+ * coral-tinted cells in the table can be typed over.
+ */
+function StatusLegend() {
+  const items: { kind: PairStatus["kind"]; label: string }[] = [
+    { kind: "pending", label: "În aşteptare" },
+    { kind: "extracting", label: "Se procesează" },
+    { kind: "ready", label: "Calculat" },
+    { kind: "error", label: "Eroare" },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-[11px] text-ink-500">
+      <span className="font-semibold uppercase tracking-wider text-ink-400">Stare</span>
+      {items.map((it) => (
+        <span key={it.kind} className="inline-flex items-center gap-1.5">
+          <StatusPill kind={it.kind} />
+          {it.label}
+        </span>
+      ))}
+      <span className="inline-flex items-center gap-1.5 text-ink-400 sm:ml-auto">
+        <span className="inline-block h-3.5 w-6 rounded-sm bg-coral-50/70 shadow-[inset_0_-2px_0_0_var(--color-coral-300)]" />
+        câmpurile colorate se pot edita
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -930,7 +1021,7 @@ function NumberCell({
         if (!Number.isFinite(raw)) return;
         onChange(integer ? Math.floor(raw) : raw);
       }}
-      className="block h-full w-full bg-coral-50/30 px-2 py-2 text-right text-[13px] tabular-nums text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className={`${EDIT_LOOK} block h-full w-full cursor-text px-2 py-2 text-right text-[13px] tabular-nums`}
     />
   );
 }
@@ -945,7 +1036,7 @@ function DateCell({ value, onChange }: { value: string; onChange: (v: string) =>
       onKeyDown={stop}
       onChange={(e) => onChange(e.target.value)}
       title={date(value)}
-      className="block min-h-0 w-full flex-1 bg-coral-50/30 px-2 py-1 text-[13px] text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className={`${EDIT_LOOK} block min-h-0 w-full flex-1 cursor-text px-2 py-1 text-[13px]`}
     />
   );
 }
@@ -969,7 +1060,7 @@ function SelectCell({
       onKeyDown={stop}
       onChange={(e) => onChange(e.target.value)}
       title={hint}
-      className="block min-h-0 w-full flex-1 bg-coral-50/30 px-2 py-1 text-[13px] text-ink-900 outline-none transition focus:bg-coral-50 focus:ring-2 focus:ring-inset focus:ring-coral-400"
+      className={`${EDIT_LOOK} block min-h-0 w-full flex-1 cursor-pointer px-2 py-1 text-[13px]`}
     >
       {options.map((o) => (
         <option key={o} value={o}>
