@@ -36,8 +36,10 @@ type LiveEvent =
 export interface LiveHandlers {
   /** A brand-new pair arrived (with images). */
   onCreated(pair: Pair): void;
-  /** A status transition for an existing pair (no images change). */
-  onUpdated(id: string, day: string, status: PairStatus): void;
+  /** A status transition for an existing pair (no images change). The
+   *  server's `updatedAt` rides along so the client can apply last-write-wins
+   *  and drop any out-of-order/stale echo. */
+  onUpdated(id: string, day: string, status: PairStatus, updatedAt: number): void;
   /** A pair was removed. */
   onDeleted(id: string): void;
   /** The whole queue was cleared remotely. */
@@ -77,7 +79,7 @@ function dispatchFrame(frame: string, h: LiveHandlers): void {
       h.onCreated(wirePairToClient(event.pair));
       break;
     case "pair-updated":
-      h.onUpdated(event.id, event.day, event.status as PairStatus);
+      h.onUpdated(event.id, event.day, event.status as PairStatus, event.updatedAt);
       break;
     case "pair-deleted":
       h.onDeleted(event.id);

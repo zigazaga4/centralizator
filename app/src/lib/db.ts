@@ -176,6 +176,7 @@ export function wirePairToClient(wp: WirePair): Pair {
     collaborator: wp.collaborator ?? null,
     images,
     ...(refs.length > 0 ? { imageRefs: refs } : {}),
+    updatedAt: wp.updatedAt,
     status: wp.status as PairStatus,
   };
 }

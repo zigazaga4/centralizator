@@ -105,6 +105,17 @@ function readEnumLS<T extends string>(key: string, allowed: readonly T[], fallba
 const PARALLEL_LIMIT = 6;
 const REPRICE_DEBOUNCE_MS = 250;
 
+/** How long a locally-written pair ignores the live echo of its OWN write
+ *  before it accepts server events again. Long enough to cover the save
+ *  round-trip + the 250 ms reprice debounce, short enough that another PC's
+ *  change to the same pair shows up within seconds. */
+const LOCAL_ECHO_TTL_MS = 8_000;
+
+/** Background re-sync cadence — the periodic safety net that guarantees
+ *  convergence to the server's latest state even if a live event is missed
+ *  (dropped frame, sleep/wake, proxy hiccup). */
+const RECONCILE_POLL_MS = 20_000;
+
 /** crypto.randomUUID is available in modern WebView2 / browsers; the
  *  fallback only kicks in on truly ancient runtimes. */
 function uuid(): string {
@@ -306,15 +317,26 @@ export default function App() {
   // Live feed (SSE) connection state — drives the header "Live" pill.
   const [liveConnected, setLiveConnected] = useState(false);
 
-  // Ids this desktop is the WRITER for — pairs it added, edited, or deleted
-  // locally. The live feed echoes every mutation (including our own); we
-  // ignore echoes for these ids so an in-flight local edit is never clobbered
-  // by the server's slightly-older snapshot. Pairs we did NOT write (phone
-  // scans) are never in this set, so all of THEIR events apply — which is the
-  // whole point: they stream in live.
-  const localIds = useRef<Set<string>>(new Set());
+  // Pairs THIS PC wrote very recently (id → epoch ms). Used ONLY to suppress
+  // the live echo of our OWN write for a short window, so a slightly-older
+  // server snapshot can't clobber a fresher local edit. CRITICAL for
+  // multi-PC: unlike a permanent "ownership" flag, these entries EXPIRE — once
+  // the window passes, every server event applies again, so another PC's later
+  // edits and deletes always flow in and every client converges to the latest
+  // state.
+  const localWrites = useRef<Map<string, number>>(new Map());
   const markLocal = useCallback((id: string) => {
-    localIds.current.add(id);
+    localWrites.current.set(id, Date.now());
+  }, []);
+  /** Did WE write this pair within the echo window? Self-expiring read. */
+  const isLocalEcho = useCallback((id: string): boolean => {
+    const t = localWrites.current.get(id);
+    if (t === undefined) return false;
+    if (Date.now() - t > LOCAL_ECHO_TTL_MS) {
+      localWrites.current.delete(id);
+      return false;
+    }
+    return true;
   }, []);
 
   // The first SSE connect coincides with mount hydration, which already
@@ -382,35 +404,55 @@ export default function App() {
   /* ── Live feed (SSE) — phone scans & other clients stream in ──────── */
 
   /**
-   * Re-pull the authoritative list and MERGE it onto the current queue
-   * (never replace — that would wipe in-flight local edits). Used to catch
-   * up after a reconnect or a remote "clear all": for each server pair we
-   * don't own locally, add it if new or adopt its status/day if it changed,
-   * keeping our already-decoded image Files. Pairs we wrote (`localIds`) are
-   * left exactly as they are.
+   * Re-pull the authoritative server list and make the local queue MIRROR it,
+   * so every PC always shows the latest state. This is the catch-up path for a
+   * reconnect, a missed live event, a sleep/wake, or a remote "clear day":
+   *   • a server pair we don't have    → add it;
+   *   • a server pair that's newer      → adopt its status/day (keep our
+   *     already-decoded image Files), by `updatedAt` last-write-wins;
+   *   • a local pair the server lost    → remove it (deleted on another PC).
+   * The ONLY things kept against the server are (a) pairs we wrote in the last
+   * few seconds (`isLocalEcho`, so an in-flight edit isn't clobbered) and (b)
+   * optimistic local-only pairs the server hasn't acknowledged yet
+   * (`updatedAt` 0/undefined), which must never be removed as "missing".
    */
   const reconcile = useCallback(async () => {
     try {
       const server = await loadAllPairs();
+      const serverIds = new Set(server.map((p) => p.id));
       const cur = pairsRef.current;
       const byId = new Map(cur.map((p) => [p.id, p] as const));
       let changed = false;
       for (const sp of server) {
-        if (localIds.current.has(sp.id)) continue; // we own it — keep local
+        if (isLocalEcho(sp.id)) continue; // our own very recent write — keep local briefly
         const ex = byId.get(sp.id);
         if (!ex) {
           byId.set(sp.id, sp);
           changed = true;
-        } else if (ex.status.kind !== sp.status.kind || ex.day !== sp.day) {
-          byId.set(sp.id, { ...ex, day: sp.day, status: sp.status });
+        } else if (
+          (sp.updatedAt ?? 0) > (ex.updatedAt ?? 0) ||
+          ex.status.kind !== sp.status.kind ||
+          ex.day !== sp.day
+        ) {
+          byId.set(sp.id, { ...ex, day: sp.day, status: sp.status, updatedAt: sp.updatedAt });
           changed = true;
         }
       }
+      const removed = new Set<string>();
+      for (const p of cur) {
+        if (serverIds.has(p.id)) continue;
+        if (isLocalEcho(p.id)) continue; // we just wrote it — the server has it momentarily
+        if ((p.updatedAt ?? 0) === 0) continue; // optimistic local-only — never seen by the server yet
+        byId.delete(p.id);
+        removed.add(p.id);
+        changed = true;
+      }
       if (changed) commit([...byId.values()]);
+      if (removed.size > 0) setSelectedId((curId) => (curId && removed.has(curId) ? null : curId));
     } catch (err) {
       console.warn("[live] reconcile failed:", err);
     }
-  }, [commit]);
+  }, [commit, isLocalEcho]);
 
   useEffect(() => {
     const stop = subscribePairLive({
@@ -424,7 +466,7 @@ export default function App() {
         }
       },
       onCreated: (pair) => {
-        if (localIds.current.has(pair.id)) return; // our own insert echo
+        if (isLocalEcho(pair.id)) return; // our own insert echo
         // A freshly server-created pair is, by definition, being processed —
         // show the spinner immediately instead of a "pending/needs-calc"
         // flash. The follow-up extracting/ready events refine it.
@@ -437,18 +479,23 @@ export default function App() {
           commit([...cur, display]);
         }
       },
-      onUpdated: (id, day, status) => {
-        if (localIds.current.has(id)) return; // our own write echo
+      onUpdated: (id, day, status, updatedAt) => {
+        if (isLocalEcho(id)) return; // our own write echo
         const cur = pairsRef.current;
-        if (!cur.some((p) => p.id === id)) {
+        const ex = cur.find((p) => p.id === id);
+        if (!ex) {
           // Update for a pair we never saw created (missed event) — catch up.
           void reconcile();
           return;
         }
-        commit(cur.map((p) => (p.id === id ? { ...p, day, status } : p)));
+        // Out-of-order safety: ignore an echo older than what we already show.
+        if ((updatedAt ?? 0) < (ex.updatedAt ?? 0)) return;
+        commit(cur.map((p) => (p.id === id ? { ...p, day, status, updatedAt } : p)));
       },
       onDeleted: (id) => {
-        if (localIds.current.has(id)) return;
+        // A delete is authoritative even for a pair we touched — another PC
+        // removing it (or clearing its day) must always win or it lingers as a
+        // ghost. Our own delete echo is just a harmless no-op here.
         commit(pairsRef.current.filter((p) => p.id !== id));
         setSelectedId((curId) => (curId === id ? null : curId));
       },
@@ -457,7 +504,28 @@ export default function App() {
       },
     });
     return stop;
-  }, [commit, reconcile]);
+  }, [commit, reconcile, isLocalEcho]);
+
+  /* ── Convergence safety net ───────────────────────────────────────── */
+
+  // "Always show the latest state across PCs": even if a live event is missed
+  // (a dropped frame, a sleep/wake, a proxy hiccup), poll the authoritative
+  // list on a timer AND whenever the window regains focus or becomes visible,
+  // so every client converges within seconds without a manual refresh.
+  useEffect(() => {
+    const iv = window.setInterval(() => void reconcile(), RECONCILE_POLL_MS);
+    const onFocus = () => void reconcile();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reconcile();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [reconcile]);
 
   /* ── Queue mutations ──────────────────────────────────────────────── */
 

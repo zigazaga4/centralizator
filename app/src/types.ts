@@ -636,6 +636,10 @@ export interface Pair {
   /** Lazy image handles for server-hydrated pairs. Absent on pairs
    *  created locally (those already hold real Files in `images`). */
   imageRefs?: PairImageRef[];
+  /** Server-assigned last-write version (epoch ms). Drives last-write-wins
+   *  reconciliation so the freshest state always wins across multiple PCs.
+   *  Absent / 0 on a pair created locally the server has not acknowledged yet. */
+  updatedAt?: number;
   status: PairStatus;
 }
 
