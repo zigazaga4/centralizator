@@ -408,11 +408,15 @@ export const COMPANY_COMMISSION_BY_CITY: Readonly<Record<City, number>> = Object
  * the city commission, using the same formula:
  *   collaboratorTotal[c] = carrierTotal + round2(carrierTotal × bonusPct[c]).
  *
- * Source: PRETURI COLABORATORI.ods, "BONUS" rows, plus the Constanța
- * roster (Berneanu/Rotaru/Saulea×2/Tudorof) added later by the
- * operator at a flat 10% each. Macara-side collaborators (EMV MACARA,
- * MACARA PLOIESTI) are deliberately excluded — those run on a
- * different (crane) tariff that this engine does not price.
+ * Source: PRETURI COLABORATORI.ods, "BONUS" rows. The Constanța roster
+ * (Berneanu/Rotaru/Saulea×2/Tudorof) carries NO collaborator commission
+ * (ops directive 2026-06-15): in Constanța the ONLY markup is the firm's
+ * own ~37,5% city commission (COMPANY_COMMISSION_BY_CITY.Constanta), which
+ * belongs to the firm, not the collaborator — so every Constanța partner
+ * is a flat 0% bonus and their collaborator-facing total equals the pure
+ * carrier total. Macara-side collaborators (EMV MACARA, MACARA PLOIESTI)
+ * are deliberately excluded — those run on a different (crane) tariff that
+ * this engine does not price.
  */
 export type Collaborator =
   | "Stalexone"
@@ -437,10 +441,12 @@ export const COLLABORATOR_BONUS_BY_NAME: Readonly<Record<Collaborator, number>> 
   Bitlo:            0.12,
   VicDinamicExpert: 0.25,
   Tiberiu:          0.29,
-  // Constanța roster — flat 10% commission each.
-  BerneanuAdrian:   0.10,
-  RotaruIulian:     0.10,
-  SauleaConstantin: 0.10,
-  SauleaLiliana:    0.10,
-  TudorofTiberiu:   0.10,
+  // Constanța roster — NO collaborator commission (ops 2026-06-15).
+  // The firm's ~37,5% city commission is the only Constanța markup; it is
+  // the firm's, not the collaborator's, so each partner bonus is 0%.
+  BerneanuAdrian:   0,
+  RotaruIulian:     0,
+  SauleaConstantin: 0,
+  SauleaLiliana:    0,
+  TudorofTiberiu:   0,
 });
