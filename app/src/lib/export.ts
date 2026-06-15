@@ -404,14 +404,24 @@ function buildColumns(proj: Projection): ExportCol[] {
       col({ key: "weekend", head: "Wkd", headXlsx: "Wkd (RON)", pdfWidth: 42, xlsxWidth: 13, money: true, blankZero: true, total: sum((r) => r.weekend), value: (r) => r.weekend }),
     );
   }
+  // Constanța centralizator only (ops 2026-06-15): the firm bills the
+  // city-commission price (+37.5%), so "Tarif transp." shows that
+  // grossed-up number instead of the bare base. Every other city, and any
+  // collaborator decont (where the firm's margin must not surface), keep
+  // the base carrier tariff. When the carrier column already carries the
+  // billed price, the separate "Total client" column would duplicate it
+  // exactly, so it is dropped.
+  const carrierBilled = proj.site === "Constanta" && proj.statement === null;
+  const carrierVal = (r: Row) => (carrierBilled ? r.cityTotal : r.carrier);
   if (s.colCarrier) {
-    // In a decont the base tariff IS the per-row bottom line, so it
-    // takes the accent the payout column would otherwise carry.
+    // In a decont the base tariff IS the per-row bottom line; in the
+    // Constanța billed case the carrier IS the customer price. Either way
+    // it carries the coral bottom-line accent.
     cols.push(
-      col({ key: "carrier", head: "Tarif transp.", headXlsx: "Tarif transp. (RON)", pdfWidth: 56, xlsxWidth: 15, money: true, accent: proj.statement !== null, total: sum((r) => r.carrier), value: (r) => r.carrier }),
+      col({ key: "carrier", head: "Tarif transp.", headXlsx: "Tarif transp. (RON)", pdfWidth: 56, xlsxWidth: 15, money: true, accent: proj.statement !== null || carrierBilled, total: sum(carrierVal), value: carrierVal }),
     );
   }
-  if (s.colCityTotal) {
+  if (s.colCityTotal && !carrierBilled) {
     cols.push(
       col({ key: "cityTotal", head: proj.cityHeader, headXlsx: `${proj.cityHeader} (RON)`, pdfWidth: 68, xlsxWidth: 18, money: true, accent: true, total: proj.cityTotal, value: (r) => r.cityTotal }),
     );
