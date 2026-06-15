@@ -43,6 +43,13 @@ import type { Styles as JsPdfStyles } from "jspdf-autotable";
  * which row in the app a given printed line came from.
  * ────────────────────────────────────────────────────────────────────── */
 
+/** Firm letterhead printed on every exported file. This is the company
+ *  that operates the app and bills the end customer. It is NOT a
+ *  collaborator. Partners (Stalexone, EMV, Bitlo, etc.) only ever appear
+ *  in the per-row payout column or as a decont's named collaborator,
+ *  never as the firm. */
+const FIRM_NAME = "Ambient Intermed";
+
 /* ── Export settings ──────────────────────────────────────────────── */
 
 /** Which pairs the file includes. "all" = every pair handed in;
@@ -98,13 +105,15 @@ export function pairInScope(p: Pair, settings: ExportSettings): boolean {
   return c === settings.scope || (settings.includeUnassigned && c === null);
 }
 
-/** Statement mode hard-implies its column shape: the base tariff IS
- *  the row's money column and nothing commission- or client-side may
- *  appear. Normalized here (not only in the UI) so a stale persisted
- *  settings blob can never produce a decont that leaks client prices. */
-function normalizeSettings(s: ExportSettings): ExportSettings {
-  if (!s.statement) return s;
-  return { ...s, colCarrier: true, colCityTotal: false, colCollab: false };
+/** Statement mode hard-implies its column shape: the base tariff IS the
+ *  row's money column and nothing commission- or client-side may appear.
+ *  `stmtOn` is the EFFECTIVE decont flag (a single-collaborator scope is
+ *  required), computed by the caller; the returned settings are
+ *  normalized to match it so a stale persisted blob, or a non-collaborator
+ *  scope, can never produce a decont that leaks client prices. */
+function normalizeSettings(s: ExportSettings, stmtOn: boolean): ExportSettings {
+  if (!stmtOn) return { ...s, statement: false };
+  return { ...s, statement: true, colCarrier: true, colCityTotal: false, colCollab: false };
 }
 
 interface Row {
@@ -184,18 +193,16 @@ interface Projection {
  *  to the in-document header so the printed page identifies which
  *  day's batch it represents.
  *
- *  `city` + `collaborator` come from the global header dropdowns and
- *  drive which customer total and which fallback collaborator payout
- *  the exported file shows. They default to Ploiești / Stalexone so
- *  any legacy caller that doesn't pass them still gets a sensible
- *  file. `settings` carries the export-modal configuration; omitted →
- *  DEFAULT_EXPORT_SETTINGS (everything in, no decont). */
+ *  `city` comes from the global header dropdown and drives which
+ *  customer-total column the exported file shows; it defaults to
+ *  Ploiești so any legacy caller that doesn't pass it still gets a
+ *  sensible file. Which collaborator a row is attributed to comes from
+ *  the pair's OWN assignment (and, for a single-collaborator scope,
+ *  that scope), never a header pick. `settings` carries the export-modal
+ *  configuration; omitted falls back to DEFAULT_EXPORT_SETTINGS. */
 export interface ExportOptions {
   day?: string;
   city?: CityKey;
-  /** Selected collaborator. `null` means the city has no collaborator
-   *  (Constanța is the only such city today). */
-  collaborator?: CollaboratorKey | null;
   settings?: ExportSettings;
 }
 
@@ -211,20 +218,26 @@ export interface ExportOptions {
 export function pairsToRows(
   pairs: Pair[],
   city: CityKey = "Ploiesti",
-  collaborator: CollaboratorKey | null = "Stalexone",
   settingsIn: ExportSettings = DEFAULT_EXPORT_SETTINGS,
 ): Projection {
-  const settings = normalizeSettings(settingsIn);
   const site = primaryDispatchSite(city);
   const cityHeader = `Total ${CITY_COMMISSION_LABEL[site]}`;
 
-  // The collaborator pinned by the scope filter (when there is one)
-  // wins over the header dropdown as the fallback for unassigned rows;
-  // the decont anchors to the same pick.
+  // The collaborator pinned by the scope filter, if any. A decont
+  // (statement) is a per-collaborator payment file, so it applies ONLY
+  // when the scope pins one partner. "all"/"direct" exports are plain
+  // centralizatoare where every row shows its OWN collaborator and no
+  // single partner is stamped on the whole file (mirrors ExportMenu's
+  // `statementOn` gate so the file cannot disagree with it). The
+  // unassigned-row fallback is the scope partner too, never a header
+  // pick, so a "Toate perechile" export never attributes legacy pairs
+  // to one collaborator.
   const scopeCollab: CollaboratorKey | null =
-    settings.scope !== "all" && settings.scope !== "direct" ? settings.scope : null;
-  const anchor: CollaboratorKey | null = scopeCollab ?? collaborator;
-  const stmtCollab: CollaboratorKey | null = settings.statement ? anchor : null;
+    settingsIn.scope !== "all" && settingsIn.scope !== "direct" ? settingsIn.scope : null;
+  const stmtOn = settingsIn.statement && scopeCollab !== null;
+  const settings = normalizeSettings(settingsIn, stmtOn);
+  const anchor: CollaboratorKey | null = scopeCollab;
+  const stmtCollab: CollaboratorKey | null = stmtOn ? scopeCollab : null;
 
   const rows: Row[] = [];
   const effSeen = new Set<CollaboratorKey>();
@@ -550,7 +563,7 @@ export async function exportToPdf(
   pairs: Pair[],
   opts: ExportOptions = {},
 ): Promise<string | null> {
-  const proj = pairsToRows(pairs, opts.city, opts.collaborator, opts.settings);
+  const proj = pairsToRows(pairs, opts.city, opts.settings);
   if (proj.rows.length === 0) {
     throw new Error("Nu există perechi calculate pentru export.");
   }
@@ -573,7 +586,7 @@ export async function exportToPdf(
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.setTextColor(109, 102, 92); // ink-500
-  doc.text("Stalexone Trans", 40, 56);
+  doc.text(FIRM_NAME, 40, 56);
   doc.text(
     `Generat: ${proj.generatedAt.toLocaleString("ro-RO")}`,
     pageWidth - 40,
@@ -667,7 +680,7 @@ export async function exportToXlsx(
   pairs: Pair[],
   opts: ExportOptions = {},
 ): Promise<string | null> {
-  const proj = pairsToRows(pairs, opts.city, opts.collaborator, opts.settings);
+  const proj = pairsToRows(pairs, opts.city, opts.settings);
   if (proj.rows.length === 0) {
     throw new Error("Nu există perechi calculate pentru export.");
   }
@@ -701,7 +714,7 @@ export async function exportToXlsx(
   const lastCol = colLetter(TOTAL_COLS);
   ws.mergeCells(`A1:${lastCol}1`);
   const titleCell = ws.getCell("A1");
-  titleCell.value = `${docTitle(proj)} · Stalexone Trans`;
+  titleCell.value = `${docTitle(proj)} · ${FIRM_NAME}`;
   titleCell.font = { name: "Calibri", size: 16, bold: true, color: { argb: "FF25221E" } };
   titleCell.alignment = { vertical: "middle", horizontal: "left" };
   ws.getRow(1).height = 26;
@@ -835,7 +848,7 @@ export async function exportToDocx(
   pairs: Pair[],
   opts: ExportOptions = {},
 ): Promise<string | null> {
-  const proj = pairsToRows(pairs, opts.city, opts.collaborator, opts.settings);
+  const proj = pairsToRows(pairs, opts.city, opts.settings);
   if (proj.rows.length === 0) {
     throw new Error("Nu există perechi calculate pentru export.");
   }
@@ -986,7 +999,7 @@ export async function exportToDocx(
           }),
           new Paragraph({
             children: [
-              new TextRun({ text: "Stalexone Trans", color: INK_500, size: 20 }),
+              new TextRun({ text: FIRM_NAME, color: INK_500, size: 20 }),
             ],
           }),
           new Paragraph({

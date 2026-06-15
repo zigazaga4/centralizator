@@ -184,7 +184,6 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
         const path = await fn(pairs, {
           day,
           city,
-          collaborator,
           settings: { ...settings, statement: statementOn },
         });
         // path === null → user cancelled the save dialog; keep the
@@ -196,7 +195,7 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
         setBusy(null);
       }
     },
-    [busy, pairs, day, city, collaborator, settings, statementOn],
+    [busy, pairs, day, city, settings, statementOn],
   );
 
   return (
