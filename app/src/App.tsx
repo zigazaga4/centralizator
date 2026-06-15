@@ -375,15 +375,47 @@ export default function App() {
           // the data is visible the moment hydration finishes. We only
           // snap when the selected day is empty — if the user was on
           // a day that has pairs, we respect that choice.
-          const selectedHasPairs = loaded.some((p) => p.day === selectedDay);
-          if (!selectedHasPairs) {
+          let targetDay = selectedDay;
+          if (!loaded.some((p) => p.day === targetDay)) {
             // Most-recent day-with-pairs by ISO string (lexical sort
             // works because the format is YYYY-MM-DD). Falls back to
             // today if somehow no day had pairs (shouldn't happen
             // given loaded.length > 0).
             const days = [...new Set(loaded.map((p) => p.day))].sort();
-            const mostRecent = days[days.length - 1] ?? todayIso();
-            if (mostRecent !== selectedDay) setSelectedDay(mostRecent);
+            targetDay = days[days.length - 1] ?? todayIso();
+            if (targetDay !== selectedDay) setSelectedDay(targetDay);
+          }
+          // Smart-snap the CITY too. The paired table is filtered by the
+          // active store, but a fresh install defaults to Ploiești — so on a
+          // machine whose data lives in another centralizator (e.g. Constanța)
+          // the table looked EMPTY while the store-agnostic "documente fără
+          // pereche" still showed, which reads as "only unpaired appear". If
+          // the current city has NO ready pair visible on the target day but
+          // another city does, land on the city holding the most, so the data
+          // shows immediately. Only snaps when the current city is empty — a
+          // city the user is deliberately on that has pairs is respected.
+          const readyOnDay = loaded.filter(
+            (p) => p.day === targetDay && p.status.kind === "ready",
+          );
+          if (readyOnDay.length > 0) {
+            const curStore = primaryDispatchSite(selectedCity);
+            // A ready pair shows in the current city when its store matches OR
+            // it has no store yet (unfiled pairs show everywhere) — mirror
+            // `inActiveStore` exactly so the check matches what the user sees.
+            const curHasReady = readyOnDay.some((p) => {
+              const s = storeOf(p);
+              return s === null || s === curStore;
+            });
+            if (!curHasReady) {
+              const countForCity = (city: CityKey): number => {
+                const store = primaryDispatchSite(city);
+                return readyOnDay.filter((p) => storeOf(p) === store).length;
+              };
+              const best = [...CITY_KEYS].sort((a, b) => countForCity(b) - countForCity(a))[0];
+              if (best && best !== selectedCity && countForCity(best) > 0) {
+                setSelectedCity(best);
+              }
+            }
           }
         }
       } catch (err) {
