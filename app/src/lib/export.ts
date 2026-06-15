@@ -467,7 +467,7 @@ function statementLines(
 ): Array<{ label: string; value: number; strong: boolean }> {
   return [
     { label: "Subtotal tarif transport", value: st.baseTotal, strong: false },
-    { label: `Comision ${st.label} (${fmtPct(st.pct)})`, value: st.commission, strong: false },
+    { label: `Bonus ${st.label} (${fmtPct(st.pct)})`, value: st.commission, strong: false },
     { label: `Total de plată ${st.label}`, value: st.payTotal, strong: true },
   ];
 }
@@ -656,7 +656,7 @@ export async function exportToPdf(
   });
 
   // ── Decont bottom lines ──────────────────────────────────────────
-  // Subtotal bază → comision (applied ONCE here, never per row) →
+  // Subtotal bază → bonus (applied ONCE here, never per row) →
   // total de plată. Rendered under the table, right-aligned to it.
   if (proj.statement) {
     const finalY =
@@ -803,7 +803,7 @@ export async function exportToXlsx(
   });
 
   // ── Decont bottom lines ──────────────────────────────────────────
-  // Subtotal bază → comision (applied ONCE, off the SUM cell) → total
+  // Subtotal bază → bonus (applied ONCE, off the SUM cell) → total
   // de plată. Formulas chain off the carrier SUM so the sheet
   // self-heals after hand edits; raw values are the safety fallback.
   if (proj.statement) {
@@ -959,7 +959,7 @@ export async function exportToDocx(
   });
 
   // ── Decont bottom lines ──────────────────────────────────────────
-  // Subtotal bază → comision (applied ONCE here, never per row) →
+  // Subtotal bază → bonus (applied ONCE here, never per row) →
   // total de plată. Right-aligned paragraphs under the table.
   const note = scopeNote(proj.settings);
   const summaryParas = proj.statement

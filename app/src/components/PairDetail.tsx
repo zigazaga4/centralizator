@@ -738,7 +738,7 @@ function Spreadsheet({
             label={CITY_COMMISSION_LABEL[k]}
             value={
               cr
-                ? `${(cr.pct * 100).toFixed(1)} % · comision ${ron(cr.commission)} → ${ron(cr.customerTotal)}`
+                ? `${(cr.pct * 100).toFixed(1)} % · bonus ${ron(cr.commission)} → ${ron(cr.customerTotal)}`
                 : "—"
             }
             numeric

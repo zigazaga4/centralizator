@@ -184,7 +184,7 @@ function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
       title:
         "Costuri standard de transport — Bază: tarif de bază · Km+: supliment distanță · Inc.: incremente (livrări / greutate / marfă voluminoasă) · Wkd: supliment weekend · Desc.: taxă descărcare",
     },
-    { label: "Total client", align: "right", title: "Cât plătește clientul (cu comision inclus)" },
+    { label: "Total client", align: "right", title: "Cât plătește clientul (cu bonus inclus)" },
   ];
 
   return (
@@ -604,7 +604,7 @@ function CityTotalCell({
     return (
       <div
         className="flex items-center justify-end border-r border-ink-100 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
-        title={`Tarif macara (cu TVA, fără comision) — ${m.distanceBucket ?? "—"}, ${m.pallets} palet(i)`}
+        title={`Tarif macara (cu TVA, fără bonus) — ${m.distanceBucket ?? "—"}, ${m.pallets} palet(i)`}
       >
         {ron(m.total)}
       </div>
@@ -617,7 +617,7 @@ function CityTotalCell({
       className="flex items-center justify-end border-r border-ink-100 bg-coral-50 px-3 py-2 text-right text-base font-bold tabular-nums text-coral-700"
       title={
         row
-          ? `${carrierTip} + comision ${ron(row.commission)} (${(row.pct * 100).toFixed(1)} %)`
+          ? `${carrierTip} + bonus ${ron(row.commission)} (${(row.pct * 100).toFixed(1)} %)`
           : carrierTip
       }
     >
@@ -647,7 +647,7 @@ function CollaboratorTotalCell({
     return (
       <div
         className="flex items-center justify-end border-r border-ink-100 px-3 py-2 text-right tabular-nums text-ink-400"
-        title="Macara · fără comision colaborator"
+        title="Macara · fără bonus colaborator"
       >
         —
       </div>
@@ -869,7 +869,7 @@ function CostsCell({
     return (
       <div
         className="flex items-center border-r border-ink-100 px-3 py-1.5 text-[11px] italic text-ink-400"
-        title="Macara — fără tarif standard / comision; prețul rândului este tariful macara."
+        title="Macara — fără tarif standard / bonus; prețul rândului este tariful macara."
       >
         macara · fără tarif standard
       </div>

@@ -312,7 +312,7 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
                 <SectionTitle>Decont colaborator (fișier de plată)</SectionTitle>
                 <p className="mt-1 text-[11px] leading-snug text-ink-500">
                   Decontul este fișierul de plată al colaboratorului: fiecare rând arată
-                  transportul la tariful de bază, iar comisionul lui se adună o singură
+                  transportul la tariful de bază, iar bonusul lui se adună o singură
                   dată, la final, sub total.
                 </p>
                 <div className="mt-2">
@@ -320,7 +320,7 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
                     label="Generează decont pentru colaborator"
                     hint={
                       scopeIsCollab
-                        ? `Fiecare rând arată doar tariful de bază al transportului; comisionul ${COLLABORATOR_SHORT_LABEL[settings.scope as CollaboratorKey]} se aplică o singură dată, la final, sub total.`
+                        ? `Fiecare rând arată doar tariful de bază al transportului; bonusul ${COLLABORATOR_SHORT_LABEL[settings.scope as CollaboratorKey]} se aplică o singură dată, la final, sub total.`
                         : "Alege un colaborator la «Perechi incluse» pentru a putea genera decontul lui."
                     }
                     checked={statementOn}
@@ -365,8 +365,8 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
                     label="Plată colaborator (pe rând)"
                     hint={
                       statementOn
-                        ? "Exclus din decont — comisionul se aplică doar la final, nu pe rânduri."
-                        : "Cât primește colaboratorul fiecărui rând (cu comision inclus)."
+                        ? "Exclus din decont — bonusul se aplică doar la final, nu pe rânduri."
+                        : "Cât primește colaboratorul fiecărui rând (cu bonus inclus)."
                     }
                     checked={effCols.collab}
                     disabled={statementOn}
