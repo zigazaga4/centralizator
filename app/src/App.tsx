@@ -11,6 +11,7 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import { extractAndPrice, reprice, scanBatch, verifyProducts } from "./lib/api";
 import {
   deletePair,
+  deletePairsByDay,
   insertPair,
   loadAllPairs,
   persistPairStatus,
@@ -499,38 +500,52 @@ export default function App() {
     [commit, markLocal],
   );
 
-  /** Clear every pair on the currently-viewed day only. Other days are
-   *  untouched — the user's batch from yesterday survives a "reset
-   *  today" click. We loop `deletePair` rather than wiring a new
-   *  whole-day DB helper because pair counts are small (~20) and per-
-   *  pair DELETE is already optimised by the FK cleanup. */
-  const resetDay = useCallback(() => {
-    // Scoped to the active centralizator: "Goleşte ziua" clears only the
-    // current store's pairs for the day, leaving the other stores intact.
-    const toDelete = pairsRef.current.filter(
-      (p) =>
-        p.day === selectedDay &&
-        inActiveStore(p) &&
-        inActiveView(p) &&
-        inActiveCollaborator(p),
-    );
-    if (toDelete.length === 0) return;
-    for (const p of toDelete) {
+  /** "Goleşte ziua" clears the ENTIRE selected day on the server: every
+   *  pair filed under it, across all stores and collaborators, calculated
+   *  and unpaired alike. A two-step confirm guards the irreversible wipe. */
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const confirmResetTimer = useRef<number | null>(null);
+  /** First click arms the confirm; it auto-disarms so a forgotten armed
+   *  state never lingers as a one-click hazard. */
+  const armReset = useCallback(() => {
+    setConfirmingReset(true);
+    if (confirmResetTimer.current) clearTimeout(confirmResetTimer.current);
+    confirmResetTimer.current = window.setTimeout(() => setConfirmingReset(false), 4000);
+  }, []);
+  const cancelReset = useCallback(() => {
+    setConfirmingReset(false);
+    if (confirmResetTimer.current) clearTimeout(confirmResetTimer.current);
+  }, []);
+  /** Server-FIRST: one atomic DELETE removes the whole day server-side, so
+   *  a failure leaves the UI truthful (nothing dropped locally) instead of
+   *  optimistically hiding pairs the server still holds. On success we drop
+   *  them locally; the per-pair pair-deleted pushes keep other clients in
+   *  sync. */
+  const resetDay = useCallback(async () => {
+    cancelReset();
+    const doomed = pairsRef.current.filter((p) => p.day === selectedDay);
+    if (doomed.length === 0) return;
+    try {
+      await deletePairsByDay(selectedDay);
+    } catch (err) {
+      console.error("Goleşte ziua: clearing the day on the server failed:", err);
+      return;
+    }
+    for (const p of doomed) {
       const t = repriceTimers.current.get(p.id);
       if (t) clearTimeout(t);
       repriceTimers.current.delete(p.id);
     }
-    const doomed = new Set(toDelete.map((p) => p.id));
-    commit(pairsRef.current.filter((p) => !doomed.has(p.id)));
-    // Detail view of a deleted pair would dangle; pop back to queue.
-    setSelectedId((cur) => (cur && doomed.has(cur) ? null : cur));
-    for (const p of toDelete) {
-      markLocal(p.id);
-      void deletePair(p.id).catch((err) =>
-        console.error("Failed to delete pair from DB:", err),
-      );
-    }
-  }, [commit, selectedDay, markLocal, inActiveStore, inActiveView, inActiveCollaborator]);
+    const gone = new Set(doomed.map((p) => p.id));
+    commit(pairsRef.current.filter((p) => !gone.has(p.id)));
+    // Detail view of a deleted pair would dangle; pop back to the queue.
+    setSelectedId((cur) => (cur && gone.has(cur) ? null : cur));
+  }, [cancelReset, commit, selectedDay]);
+  // Switching day tabs disarms any pending confirm — never carry a
+  // "confirm clear" from one day onto another.
+  useEffect(() => {
+    setConfirmingReset(false);
+  }, [selectedDay]);
 
   /* ── Status transitions (shared by run + reprice) ─────────────────── */
 
@@ -1098,16 +1113,36 @@ export default function App() {
                 disabled={!exportPairs.some((p) => p.status.kind === "ready")}
               />
             )}
-            {dayPairs.length > 0 && (
-              <button
-                type="button"
-                onClick={resetDay}
-                title={`Şterge toate perechile pentru ${fmtDate(selectedDay)}`}
-                className="rounded-md border border-ink-300 bg-canvas-50 px-3 py-1.5 text-sm text-ink-700 transition hover:border-coral-400 hover:bg-canvas-200 hover:text-ink-900"
-              >
-                Goleşte ziua
-              </button>
-            )}
+            {pairs.some((p) => p.day === selectedDay) &&
+              (confirmingReset ? (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={resetDay}
+                    title={`Şterge definitiv toate perechile pentru ${fmtDate(selectedDay)} de pe server`}
+                    className="rounded-md border border-coral-600 bg-coral-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-coral-600"
+                  >
+                    Confirmă golirea
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelReset}
+                    title="Renunță"
+                    className="rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1.5 text-sm text-ink-600 transition hover:bg-canvas-200 hover:text-ink-900"
+                  >
+                    Renunță
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={armReset}
+                  title={`Şterge toate perechile pentru ${fmtDate(selectedDay)} (toate magazinele) de pe server`}
+                  className="rounded-md border border-ink-300 bg-canvas-50 px-3 py-1.5 text-sm text-ink-700 transition hover:border-coral-400 hover:bg-canvas-200 hover:text-ink-900"
+                >
+                  Goleşte ziua
+                </button>
+              ))}
           </div>
 
           <button

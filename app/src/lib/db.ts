@@ -358,3 +358,21 @@ export async function deletePair(id: string): Promise<void> {
 export async function deleteAllPairs(): Promise<void> {
   await httpRetry("deleteAllPairs", "/pairs", { method: "DELETE" });
 }
+
+/**
+ * Clear ONE filing day on the server — every pair filed under `day`
+ * (all stores, all collaborators, calculated and unpaired alike). The
+ * server does it atomically in one transaction and pushes a pair-deleted
+ * event per row, so all clients converge. Returns the number removed.
+ * Retries on transient failure like the other mutators, and deleting an
+ * already-empty day is a harmless no-op that returns 0.
+ */
+export async function deletePairsByDay(day: string): Promise<number> {
+  const res = await httpRetry(
+    `deletePairsByDay ${day}`,
+    `/pairs/day/${encodeURIComponent(day)}`,
+    { method: "DELETE" },
+  );
+  const data = (await res.json()) as { removed: number };
+  return data.removed;
+}

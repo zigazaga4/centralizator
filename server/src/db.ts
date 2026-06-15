@@ -400,6 +400,11 @@ const stmt = {
   deletePair: db.prepare(`DELETE FROM pairs WHERE id = ?`),
   deleteAllImages: db.prepare(`DELETE FROM pair_images`),
   deleteAllPairs: db.prepare(`DELETE FROM pairs`),
+  selectDayPairIds: db.prepare<[string], { id: string }>(`SELECT id FROM pairs WHERE day = ?`),
+  deleteDayImages: db.prepare(
+    `DELETE FROM pair_images WHERE pair_id IN (SELECT id FROM pairs WHERE day = ?)`,
+  ),
+  deleteDayPairs: db.prepare(`DELETE FROM pairs WHERE day = ?`),
   selectLmProduct: db.prepare<[string], LmProductRow>(
     `SELECT query, found, url, name, brand, price_buc, weight_kg, area_m2, dims_mm, fetched_at
        FROM lm_products WHERE query = ?`,
@@ -738,6 +743,25 @@ export function deletePair(id: string): boolean {
   tx();
   publishPairEvent({ type: "pair-deleted", id });
   return true;
+}
+
+/**
+ * Clear ONE filing day — every pair filed under `day` (all stores, all
+ * collaborators, calculated and unpaired alike), with their image rows.
+ * Atomic: a single transaction either removes the whole day or nothing.
+ * Emits one `pair-deleted` event per removed pair so every connected
+ * client drops exactly those rows live. Returns the count removed.
+ */
+export function deletePairsByDay(day: string): number {
+  const ids = stmt.selectDayPairIds.all(day).map((r) => r.id);
+  if (ids.length === 0) return 0;
+  const tx = db.transaction(() => {
+    stmt.deleteDayImages.run(day);
+    stmt.deleteDayPairs.run(day);
+  });
+  tx();
+  for (const id of ids) publishPairEvent({ type: "pair-deleted", id });
+  return ids.length;
 }
 
 /** Clear the entire queue (every day, every pair). The route layer
