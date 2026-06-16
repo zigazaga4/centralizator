@@ -671,21 +671,18 @@ function Spreadsheet({
           muted
         />
       )}
-      {/* Marfă voluminoasă (polistiren / vată) — warn the user whenever
-          the invoice carries bulky goods, billed or not. The 24-piece
-          ops rule (2026-06-11): one extra transport per started block
-          of 24; each extra transport = un increment + km suplimentari. */}
-      {(breakdown.bulkyUnits ?? 0) > 0 && (
+      {/* Marfă voluminoasă (polistiren / vată) — shown ONLY when the
+          24-piece ops rule (2026-06-11) actually fires: one extra transport
+          per started block of 24, each extra transport = un increment + km
+          suplimentari. Goods under the 24 threshold add nothing and are not
+          shown here. */}
+      {(breakdown.bulkyTransports ?? 0) > 0 && (
         <DataRow
           n={r()}
           label={`⚠ Marfă voluminoasă (${breakdown.bulkyUnits} buc. polistiren / vată)`}
-          value={
-            (breakdown.bulkyTransports ?? 0) > 0
-              ? `+${breakdown.bulkyTransports} transport${
-                  breakdown.bulkyTransports === 1 ? "" : "uri"
-                } suplimentar${breakdown.bulkyTransports === 1 ? "" : "e"} (prag 24 buc.)`
-              : "sub pragul de 24 buc. — fără transport suplimentar"
-          }
+          value={`+${breakdown.bulkyTransports} transport${
+            breakdown.bulkyTransports === 1 ? "" : "uri"
+          } suplimentar${breakdown.bulkyTransports === 1 ? "" : "e"} (prag 24 buc.)`}
           hint="regula voluminos"
         />
       )}

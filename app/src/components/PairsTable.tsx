@@ -322,10 +322,10 @@ function PairRow({
                 {edits?.awb.awb_number || <Dash />}
               </span>
               {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
-              {(breakdown?.bulkyUnits ?? 0) > 0 && (
+              {(breakdown?.bulkyTransports ?? 0) > 0 && (
                 <VoluminosChip
                   units={breakdown!.bulkyUnits!}
-                  transports={breakdown!.bulkyTransports ?? 0}
+                  transports={breakdown!.bulkyTransports!}
                 />
               )}
               <ProductBadge
@@ -950,27 +950,20 @@ function MacaraChip({ warning }: { warning: boolean }) {
   );
 }
 
-/** Voluminos marker — shown whenever the invoice carries bulky-but-light
- *  goods (polistiren / vată). Coral ⚠ when the 24-piece rule actually
- *  fired and extra transports are billed; amber notice when the goods
- *  are present but under the threshold (no surcharge, still worth the
- *  user's eye). The tooltip carries the exact piece count. */
+/** Voluminos marker — shown ONLY when the 24-piece rule actually fired
+ *  (extra transports billed). Bulky-but-light goods (polistiren / vată)
+ *  under the 24 threshold add nothing to the price, so they no longer
+ *  raise a chip. The tooltip carries the exact piece count and the number
+ *  of extra transports billed. */
 function VoluminosChip({ units, transports }: { units: number; transports: number }) {
-  const billed = transports > 0;
   return (
     <span
-      title={
-        billed
-          ? `Marfă voluminoasă (polistiren / vată): ${units} bucăți → ${transports} transport${
-              transports === 1 ? "" : "uri"
-            } suplimentar${transports === 1 ? "" : "e"} facturat${transports === 1 ? "" : "e"}`
-          : `Marfă voluminoasă (polistiren / vată): ${units} bucăți — sub pragul de 24, fără transport suplimentar`
-      }
-      className={`shrink-0 whitespace-nowrap rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
-        billed ? "bg-coral-600 text-canvas-50" : "bg-amber-100 text-amber-800"
-      }`}
+      title={`Marfă voluminoasă (polistiren / vată): ${units} bucăți → ${transports} transport${
+        transports === 1 ? "" : "uri"
+      } suplimentar${transports === 1 ? "" : "e"} facturat${transports === 1 ? "" : "e"}`}
+      className="shrink-0 whitespace-nowrap rounded bg-coral-600 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-canvas-50"
     >
-      {billed ? `⚠ voluminos ×${transports}` : "voluminos"}
+      {`⚠ voluminos ×${transports}`}
     </span>
   );
 }
