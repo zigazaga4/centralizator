@@ -100,6 +100,39 @@ describe("addressLocality", () => {
     expect(addressLocality("România")).toEqual({ locality: null, county: null });
     expect(addressLocality("")).toEqual({ locality: null, county: null });
   });
+
+  it("recovers a locality GLUED to the house number (no clean segment)", () => {
+    // The locality rode in the same comma-segment as the street + number, so
+    // it used to collapse to the county and Mapbox matched the wrong town.
+    expect(
+      addressLocality("Strada Preot Vasile Nicolau Nr 204 204 Brebu Megiesesc, Prahova, România"),
+    ).toEqual({ locality: "Brebu Megiesesc", county: "Prahova" });
+    expect(addressLocality("Strada Principala, Nr 132 Magula, Prahova, România")).toEqual({
+      locality: "Magula",
+      county: "Prahova",
+    });
+  });
+
+  it("recovers a locality from a comma-less address (the Focșani 160 km bug)", () => {
+    // "Str Arges Nr48 Eforie Sud" has no commas at all → used to parse as
+    // null and let Mapbox's fuzzy match land 160 km away in Focșani.
+    expect(addressLocality("Strada Arges Nr48 Eforie Sud, România")).toEqual({
+      locality: "Eforie Sud",
+      county: null,
+    });
+  });
+
+  it("does not invent a locality when only a street + number is present", () => {
+    // Nothing trails the number → no false locality; the county still stands.
+    expect(addressLocality("Strada Florilor 3, Iasi, România")).toEqual({
+      locality: "Iasi",
+      county: "Iasi",
+    });
+    expect(addressLocality("Strada Mihai Viteazul 5, România")).toEqual({
+      locality: null,
+      county: null,
+    });
+  });
 });
 
 describe("localityMatches", () => {

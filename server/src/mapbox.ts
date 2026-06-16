@@ -161,6 +161,39 @@ function isStreetish(seg: string): boolean {
   return !DATE_LOCALITY.test(seg) && STREETISH.test(seg);
 }
 
+/** Street-type and address-part words that are never part of a locality
+ *  name — used to clean the tail when a locality is glued to the address. */
+const LOCALITY_STOPWORD = new Set([
+  "strada", "str", "bulevardul", "bdul", "bd", "blvd", "soseaua", "sos",
+  "calea", "cal", "aleea", "ale", "intrarea", "int", "drumul", "drum",
+  "splaiul", "prelungirea", "fundatura", "piata", "pta", "nr", "no",
+  "bloc", "bl", "scara", "sc", "apartament", "ap", "apt", "etaj", "et",
+  "parter", "tronson", "corp", "camera", "cam", "sat", "satul", "com",
+  "comuna", "oras", "orasul", "mun", "municipiul", "jud", "judetul",
+]);
+
+/**
+ * Recover a locality GLUED to the street + house number with no comma (the
+ * dominant AWB defect): the locality is the run of name-words that follows
+ * the LAST number-bearing token. "Str Principala Nr 132 Magula" → "Magula";
+ * "Str Arges Nr48 Eforie Sud" → "Eforie Sud". Returns null when no number is
+ * present (can't split street from locality) or no name trails it.
+ */
+function localityAfterNumber(segment: string): string | null {
+  const toks = segment.split(/\s+/).filter(Boolean);
+  let lastNum = -1;
+  for (let i = 0; i < toks.length; i++) if (/\d/.test(toks[i]!)) lastNum = i;
+  if (lastNum < 0) return null;
+  const tail: string[] = [];
+  for (const t of toks.slice(lastNum + 1)) {
+    const clean = t.replace(/[|.,]+/g, "").trim();
+    if (!clean || /\d/.test(clean) || !/\p{L}/u.test(clean)) continue;
+    if (LOCALITY_STOPWORD.has(norm(clean))) continue;
+    tail.push(clean);
+  }
+  return tail.join(" ").trim() || null;
+}
+
 /**
  * Read the locality + county a formatted address names.
  *
@@ -183,7 +216,10 @@ export function addressLocality(formatted: string): {
     .split(",")
     .map((s) => s.replace(POSTCODE, "").replace(/\s+/g, " ").trim())
     .filter((s) => s && !/^rom[âa]nia$/i.test(s));
-  if (segments.length < 2) return { locality: null, county: null };
+  if (segments.length === 0) return { locality: null, county: null };
+  // Comma-less address ("Str Arges Nr48 Eforie Sud") — no county to read,
+  // but the locality still trails the house number.
+  if (segments.length === 1) return { locality: localityAfterNumber(segments[0]!), county: null };
 
   // Explicit county markers are the county — pull them out of the pool.
   let county: string | null = null;
@@ -209,11 +245,27 @@ export function addressLocality(formatted: string): {
   }
 
   let locality: string | null = null;
+  // 1) A clean, non-streetish segment IS the locality (the common shape).
   for (let i = pool.length - 1; i >= 0; i--) {
     const seg = pool[i]!.replace(ADMIN_PREFIX, "").trim();
     if (seg && !isStreetish(seg)) {
       locality = seg;
       break;
+    }
+  }
+  // 2) Glued locality: AWBs routinely stick the locality onto the house
+  //    number with no comma ("…Nr 132 Magula", "…Nr 204 204 Brebu
+  //    Megiesesc"), so no clean segment exists and the locality used to
+  //    collapse to the county — making Mapbox validate against a whole
+  //    county and pick a same-named street in the wrong town. Recover the
+  //    name trailing the LAST number in the rightmost street-like segment.
+  if (!locality) {
+    for (let i = pool.length - 1; i >= 0; i--) {
+      const cand = localityAfterNumber(pool[i]!);
+      if (cand && (!county || norm(cand) !== norm(county))) {
+        locality = cand;
+        break;
+      }
     }
   }
   return { locality: locality ?? county, county };
