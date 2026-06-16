@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { linkDocuments, tokenSet, overlapScore, type DocInfo } from "./linker.js";
+import { linkDocuments, tokenSet, overlapScore, sameAddress, parseAddress, type DocInfo } from "./linker.js";
 
 /** Shorthand DocInfo factory. */
 function doc(index: number, type: DocInfo["type"], fields: Partial<DocInfo> = {}): DocInfo {
@@ -535,5 +535,90 @@ describe("linkDocuments — degenerate stacks", () => {
       doc(3, "invoice", { recipientName: "Ana Banu" }),
     ]);
     expect(groups.map((g) => g.awbIndex)).toEqual([1, 2]);
+  });
+});
+
+describe("sameAddress / parseAddress — true street+number identity", () => {
+  it("rejects two different streets in the same town (the Bucov bug)", () => {
+    // PETRE MATEOIU's invoice address vs Aurel Vasile's AWB address — both
+    // in Bucov, sharing only "str" + "bucov". NOT the same address.
+    expect(
+      sameAddress("Str tineretului 192, Bucov", "Str. Constantin Stere 110 110, Bucov, Prahova 107110"),
+    ).toBe(false);
+  });
+
+  it("matches the same street + number despite formatting and diacritics", () => {
+    expect(
+      sameAddress("Str. Constantin Stere nr 110, Bucov", "constantin stere 110, bucov, prahova"),
+    ).toBe(true);
+  });
+
+  it("rejects the same street with different house numbers", () => {
+    expect(sameAddress("Str Republicii 1, Blejoi", "Str Republicii 45, Blejoi")).toBe(false);
+  });
+
+  it("matches a partial street-name read by containment", () => {
+    expect(sameAddress("Stere 110", "Constantin Stere 110")).toBe(true);
+  });
+
+  it("tolerates a dropped number only on a COMPLETE street match", () => {
+    expect(sameAddress("Str Constantin Stere, Bucov", "Constantin Stere 110, Bucov")).toBe(true);
+    expect(sameAddress("Str Tineretului, Bucov", "Constantin Stere 110, Bucov")).toBe(false);
+  });
+
+  it("never matches on boilerplate or locality tokens alone", () => {
+    expect(sameAddress("Str, Bucov, Prahova", "Str, Bucov, Prahova")).toBe(false);
+    expect(sameAddress("Comuna Bucov, Prahova", "Comuna Bucov, Prahova")).toBe(false);
+    expect(sameAddress(null, "Constantin Stere 110")).toBe(false);
+  });
+
+  it("treats a 6-digit postal code as not-a-house-number", () => {
+    expect(parseAddress("Str Garii 7, Ploiesti 100001").number).toBe("7");
+    expect([...parseAddress("Str Garii 7, Ploiesti 100001").street]).toEqual(["garii"]);
+  });
+});
+
+describe("linkDocuments — same-town stranger never glues onto a foreign AWB", () => {
+  it("pairs the name-matching invoice and unpairs the same-town stranger", () => {
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "awb", {
+        awbNumber: "004206025",
+        recipientName: "Aurel Vasile",
+        recipientAddress: "Str. Constantin Stere 110, Bucov, Prahova",
+      }),
+      doc(1, "invoice", {
+        recipientName: "PETRE MATEOIU",
+        recipientAddress: "Str Tineretului 192, Bucov",
+        invoiceNumber: "0042600062938",
+        orderNumber: "543861",
+      }),
+      doc(2, "invoice", {
+        recipientName: "Aurel Vasile",
+        recipientAddress: "Str. Constantin Stere 110, Bucov, Prahova",
+        invoiceNumber: "0042600062676",
+        orderNumber: "543764",
+      }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [2] }]);
+    expect(unpaired).toEqual([1]);
+  });
+
+  it("still binds a no-name second invoice to the SAME address by street+number", () => {
+    // Name unreadable on the second invoice, but its address is the AWB's
+    // address exactly → address tier rescues it (legitimate same-address).
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "awb", {
+        awbNumber: "007211900",
+        recipientName: "Maria Pop",
+        recipientAddress: "Str Garii 7, Ploiesti",
+      }),
+      doc(1, "invoice", {
+        recipientName: null,
+        recipientAddress: "Strada Garii nr 7, Ploiesti, Prahova",
+        invoiceNumber: "0072600061111",
+      }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(unpaired).toEqual([]);
   });
 });

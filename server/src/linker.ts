@@ -104,8 +104,11 @@ export interface LinkResult {
  *  shorter name's tokens. 0.6 lets "Hudea George" match
  *  "Hudea George vasile" while rejecting single-common-token noise. */
 const NAME_MATCH = 0.6;
-/** Address token overlap that counts as confirmation. */
-const ADDRESS_MATCH = 0.5;
+/** Two STREET NAMES count as the same street at this token overlap
+ *  (containment-based, so "Stere" ⊂ "Constantin Stere" still scores 1).
+ *  Replaces the old whole-address bag-of-tokens overlap, which matched any
+ *  two deliveries to the same town on "str" + the town name alone. */
+const STREET_MATCH = 0.6;
 /** How far apart (in scan positions) two photos can be and still count as
  *  re-shoots of the same document when the number alone can't prove it. */
 const DUPLICATE_WINDOW = 4;
@@ -159,6 +162,90 @@ export function overlapScore(a: Set<string>, b: Set<string>): number {
   let shared = 0;
   for (const t of a) if (b.has(t)) shared++;
   return shared / Math.min(a.size, b.size);
+}
+
+/** Address words that carry NO place identity: street-type prefixes,
+ *  address-part labels and administrative-unit labels. Romanian addresses
+ *  are dense with these, and every delivery to a given town shares them — so
+ *  the OLD whole-address overlap matched strangers on "str" + the town name
+ *  (live: PETRE MATEOIU's invoice glued onto Aurel Vasile's AWB, both in
+ *  Bucov). They are dropped before any street comparison. */
+const ADDRESS_STOPWORDS = new Set([
+  "str", "strada", "stradela", "bd", "bdul", "blvd", "bulevard", "bulevardul",
+  "sos", "soseaua", "sosea", "cal", "calea", "ale", "aleea", "drum", "drumul",
+  "int", "intrarea", "pta", "piata", "splai", "splaiul", "fundatura", "prelungirea",
+  "nr", "no", "numarul", "bl", "blocul", "sc", "scara", "ap", "apartament",
+  "apartamentul", "et", "etaj", "etajul", "parter", "demisol", "mansarda",
+  "casa", "vila", "corp", "tronson", "km",
+  "jud", "judetul", "judet", "com", "comuna", "sat", "satul", "oras", "orasul",
+  "mun", "municipiul", "loc", "localitatea", "sector", "sectorul", "cartier",
+  "ro", "romania",
+]);
+
+/** Romanian county names (normalised, multi-word counties split into tokens).
+ *  An AWB and its invoice are in the SAME locality by construction, so the
+ *  county is shared by every same-town pair and proves nothing — dropping it
+ *  stops it being the lone "matching" street token. (parseAddress also drops
+ *  everything printed AFTER the house number, where town + county sit, so
+ *  this is a second safety net for oddly-ordered addresses.) */
+const ADDRESS_LOCALITY = new Set([
+  "alba", "arad", "arges", "bacau", "bihor", "bistrita", "nasaud", "botosani",
+  "braila", "brasov", "buzau", "calarasi", "caras", "severin", "cluj", "constanta",
+  "covasna", "dambovita", "dolj", "galati", "giurgiu", "gorj", "harghita",
+  "hunedoara", "ialomita", "iasi", "ilfov", "maramures", "mehedinti", "mures",
+  "neamt", "olt", "prahova", "salaj", "sibiu", "suceava", "teleorman", "timis",
+  "tulcea", "valcea", "vaslui", "vrancea", "bucuresti",
+]);
+
+/** Split an address into its IDENTIFYING parts — the street-name tokens and
+ *  the house number. Romanian addresses read
+ *  "[street-type] <name…> [nr] <number> , <town> , <county> <postal>", so the
+ *  street name is the run of meaningful words BEFORE the first house number,
+ *  and the town/county/postal that trail the number are dropped (shared by
+ *  every same-town pair). A 5–6 digit postal code is never a house number.
+ *  Returns an empty street set when nothing identifiable is present. */
+export function parseAddress(s: string | null): { street: Set<string>; number: string | null } {
+  const raw = norm(s ?? "").split(/[^a-z0-9]+/).filter((t) => t.length > 0);
+  let number: string | null = null;
+  let numberPos = raw.length;
+  for (let i = 0; i < raw.length; i++) {
+    if (/^\d{1,4}$/.test(raw[i]!)) {
+      number = raw[i]!;
+      numberPos = i;
+      break;
+    }
+  }
+  const street = new Set<string>();
+  for (const t of raw.slice(0, numberPos)) {
+    if (t.length < 2) continue;
+    if (/^\d+$/.test(t)) continue;
+    if (ADDRESS_STOPWORDS.has(t)) continue;
+    if (ADDRESS_LOCALITY.has(t)) continue;
+    street.add(t);
+  }
+  return { street, number };
+}
+
+/** Same physical address? Two addresses match ONLY when their street names
+ *  agree AND their house numbers do not contradict — the operator's rule
+ *  ("the address must be the SAME, not a word-by-word overlap"). Different
+ *  streets never match; the same street with two different numbers never
+ *  matches; the same street with a number missing on one side matches only
+ *  on a COMPLETE street-name agreement (OCR sometimes drops the number). */
+export function sameAddress(a: string | null, b: string | null): boolean {
+  const pa = parseAddress(a);
+  const pb = parseAddress(b);
+  if (pa.street.size === 0 || pb.street.size === 0) return false;
+  // Without a house number on EITHER side we cannot tell where the street
+  // name ends and the (unbounded, un-stopwordable) town begins, so a
+  // town-only string like "Bucov" would survive as a lone "street" token and
+  // false-match. Require a number on at least one side to anchor the parse;
+  // numberless addresses fall through to the human (unpaired), which is safe.
+  if (pa.number === null && pb.number === null) return false;
+  const streetScore = overlapScore(pa.street, pb.street);
+  if (streetScore < STREET_MATCH) return false;
+  if (pa.number !== null && pb.number !== null) return pa.number === pb.number;
+  return streetScore === 1;
 }
 
 /** Usable digits of a doc's AWB read, or null when the read is noise:
@@ -240,7 +327,9 @@ function invoiceSubstance(d: DocInfo): boolean {
  *
  * Invoices (and unreadable photos) then each pick an anchor:
  *   tier 1 — name-token match, nearest in scan order;
- *   tier 2 — address-token match, nearest in scan order.
+ *   tier 2 — SAME street + house number match (sameAddress), nearest in
+ *            scan order. Not a word overlap: a stranger's invoice in the
+ *            same town no longer binds on "str" + the town name alone.
  *
  * There is no tier 3 (by command): a photo matching no anchor by name
  * or address is never guessed onto the nearest one — it goes to
@@ -372,7 +461,6 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     }
 
     const itemNames = nameTokenSet(item.recipientName);
-    const itemAddr = tokenSet(item.recipientAddress);
     const pick = (pool: DocInfo[]): DocInfo =>
       pool.reduce((best, c) => {
         const db = Math.abs(best.index - item.index);
@@ -389,15 +477,14 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     const tier1 = nearAnchors.filter(
       (a) => overlapScore(itemNames, nameTokenSet(a.recipientName)) >= NAME_MATCH,
     );
-    // Addresses share boilerplate tokens ("str", the town), so within the
-    // address tier the HIGHEST overlap wins and distance only breaks ties.
+    // Address tier: bind ONLY to an anchor at the SAME street + house number
+    // (sameAddress). The old whole-address token overlap matched any two
+    // deliveries to the same town on "str" + the town name alone, gluing a
+    // stranger's invoice onto a shipment — now a different street or a
+    // different house number never binds; the invoice goes to `unpaired`.
     let tier2: DocInfo[] = [];
     if (tier1.length === 0) {
-      const scored = nearAnchors
-        .map((a) => ({ a, s: overlapScore(itemAddr, tokenSet(a.recipientAddress)) }))
-        .filter(({ s }) => s >= ADDRESS_MATCH);
-      const best = Math.max(0, ...scored.map(({ s }) => s));
-      tier2 = scored.filter(({ s }) => s === best).map(({ a }) => a);
+      tier2 = nearAnchors.filter((a) => sameAddress(item.recipientAddress, a.recipientAddress));
     }
     // NO tier 3: a photo neither tier claims is never position-guessed
     // onto the nearest anchor — the human pairs it from the app instead.
