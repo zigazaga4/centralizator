@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseDimsMm, compareDims, parseLmProduct, pickProductUrl } from "./leroymerlin.js";
+import {
+  parseDimsMm,
+  compareDims,
+  parseLmProduct,
+  pickProductUrl,
+  canonicalUrl,
+  pickSearchProductUrl,
+} from "./leroymerlin.js";
 
 describe("parseDimsMm", () => {
   it("parses a 3-number group with a shared trailing unit (cm → mm)", () => {
@@ -65,89 +72,116 @@ describe("pickProductUrl", () => {
 });
 
 describe("parseLmProduct", () => {
-  // Mirrors the real Markdown structure ScrapingDog returns for a product
-  // page: H1 title, a per-piece price line, then the alternating
-  // label/value characteristics table (with a packaged-dimensions
-  // sub-block that must NOT desync the targeted field lookups).
-  const markdown = [
-    "# Polistiren expandat EPS80, 10 x 100 x 50 cm, 2.5 m²",
-    "",
-    "34,47 lei Vândut de către m²",
-    "",
-    "86,18 lei de către buc.",
-    "",
-    "Tabelul cu caracteristicile produsului",
-    "",
-    "Grosime (in mm)",
-    "",
-    "100",
-    "",
-    "Material principal",
-    "",
-    "Polistiren expandat (EPS)",
-    "",
-    "Latimea (in m)",
-    "",
-    "0.5",
-    "",
-    "Lungime (in m)",
-    "",
-    "1",
-    "",
-    "Brand produs",
-    "",
-    "MINDO",
-    "",
-    "Suprafata produsului (in m²)",
-    "",
-    "2.5",
-    "",
-    "Numar bucati continut",
-    "",
-    "5",
-    "",
-    "Dimensiunile produsului ambalat",
-    "",
-    "Produs ambalat: latime (in cm)",
-    "",
-    "100",
-    "",
-    "Produs ambalat: greutate (in kg)",
-    "",
-    "3.7",
-  ].join("\n");
+  /** Build a characteristics-table row exactly as leroymerlin.ro renders it. */
+  const row = (label: string, value: string) =>
+    `<tr class="m-product-attr-row "><th class="m-product-attr-row__name" scope="row">${label}</th>` +
+    `<td class="m-product-attr-row__value"> ${value} </td></tr>`;
 
-  it("extracts name, brand, price, weight, area and name-derived dims", () => {
-    const p = parseLmProduct("11698211", "https://www.leroymerlin.ro/x-11698211.html", markdown);
+  // Mirrors the real HTML: a jsonld_PRODUCT block (name + price) plus the
+  // m-product-attr-row spec table, including a packaged sub-block that must
+  // NOT bleed into the nominal-dimension lookups.
+  const polistirenHtml = `
+    <h1 class="m-product-title">Polistiren expandat EPS80, 10 x 100 x 50 cm, 2.5 m²</h1>
+    <script type="application/ld+json" id="jsonld_PRODUCT">
+      { "@type":"Product",
+        "name":"Polistiren expandat EPS80, 10 x 100 x 50 cm, 2.5 m²",
+        "offers":{ "@type":"Offer", "price":"86.18", "priceCurrency":"RON" } }
+    </script>
+    <table>
+      ${row("Grosime (in mm)", "100")}
+      ${row("Material principal", "Polistiren expandat (EPS)")}
+      ${row("Latimea (in m)", "0.5")}
+      ${row("Lungime (in m)", "1")}
+      ${row("Brand produs", "MINDO")}
+      ${row("Suprafata produsului (in m²)", "2.5")}
+      ${row("Numar bucati continut", "5")}
+      ${row("Produs ambalat: latime (in cm)", "100")}
+      ${row("Produs ambalat: greutate (in kg)", "3.7")}
+    </table>`;
+
+  it("extracts name, brand, price, packaged weight, area and name-derived dims", () => {
+    const p = parseLmProduct("11698211", "https://www.leroymerlin.ro/x-11698211.html", polistirenHtml);
     expect(p.found).toBe(true);
     expect(p.name).toBe("Polistiren expandat EPS80, 10 x 100 x 50 cm, 2.5 m²");
     expect(p.brand).toBe("MINDO");
     expect(p.priceBuc).toBeCloseTo(86.18, 2);
-    expect(p.weightKg).toBeCloseTo(3.7, 2); // from "Produs ambalat: greutate (in kg)"
+    expect(p.weightKg).toBeCloseTo(3.7, 2); // prefers "Produs ambalat: greutate (in kg)"
     expect(p.areaM2).toBeCloseTo(2.5, 2);
     expect(p.dimsMm).toEqual([100, 500, 1000]); // from the product NAME
   });
 
+  it("reads 'Greutate neta (in kg)' when no packaged weight is listed (the gutter bug)", () => {
+    // Real jgheab page: only a net weight, name-derived dims, JSON-LD price.
+    const html = `
+      <script type="application/ld+json" id="jsonld_PRODUCT">
+        { "@type":"Product", "name":"Jgheab metal, Ø 125 mm, L 3000 mm, maro",
+          "offers":{ "price":"41.89" } }
+      </script>
+      ${row("Diametrul burlanului (in mm)", "125")}
+      ${row("Lungime (in m)", "3")}
+      ${row("Greutate neta (in kg)", "3.24")}`;
+    const p = parseLmProduct("11503604", "https://www.leroymerlin.ro/x-11503604.html", html);
+    expect(p.name).toBe("Jgheab metal, Ø 125 mm, L 3000 mm, maro");
+    expect(p.priceBuc).toBeCloseTo(41.89, 2);
+    expect(p.weightKg).toBeCloseTo(3.24, 2); // <- was null before the fix
+    expect(p.dimsMm).toEqual([125, 3000]); // from the product NAME
+  });
+
   it("falls back to spec-table dims when the name has no size", () => {
-    const md = [
-      "# Adeziv flexibil gri",
-      "",
-      "Tabelul cu caracteristicile produsului",
-      "",
-      "Grosime (in mm)",
-      "",
-      "8",
-      "",
-      "Latimea (in cm)",
-      "",
-      "30",
-      "",
-      "Lungime (in m)",
-      "",
-      "1.2",
-    ].join("\n");
-    const p = parseLmProduct("123", "https://www.leroymerlin.ro/x-123.html", md);
+    const html = `
+      <script type="application/ld+json" id="jsonld_PRODUCT">{ "name":"Adeziv flexibil gri" }</script>
+      ${row("Grosime (in mm)", "8")}
+      ${row("Latimea (in cm)", "30")}
+      ${row("Lungime (in m)", "1.2")}`;
+    const p = parseLmProduct("123", "https://www.leroymerlin.ro/x-123.html", html);
     // 8 mm, 30 cm = 300 mm, 1.2 m = 1200 mm → sorted
     expect(p.dimsMm).toEqual([8, 300, 1200]);
+  });
+
+  it("does not borrow a packaged dimension as a nominal one", () => {
+    // No name size, no nominal length rows — only a packaged row exists.
+    const html = `
+      <script type="application/ld+json" id="jsonld_PRODUCT">{ "name":"Sac ciment gri" }</script>
+      ${row("Produs ambalat: latime (in cm)", "40")}
+      ${row("Greutate neta (in kg)", "25")}`;
+    const p = parseLmProduct("9", "https://www.leroymerlin.ro/x-9.html", html);
+    expect(p.dimsMm).toEqual([]); // packaged width must NOT count
+    expect(p.weightKg).toBeCloseTo(25, 2);
+  });
+});
+
+describe("canonicalUrl / pickSearchProductUrl (search-bar resolution)", () => {
+  it("reads the canonical product URL off a product page", () => {
+    expect(
+      canonicalUrl('<link rel="canonical" href="https://www.leroymerlin.ro/produse/x-123.html">'),
+    ).toBe("https://www.leroymerlin.ro/produse/x-123.html");
+  });
+
+  it("falls back to og:url", () => {
+    expect(
+      canonicalUrl('<meta property="og:url" content="https://www.leroymerlin.ro/produse/y-9.html">'),
+    ).toBe("https://www.leroymerlin.ro/produse/y-9.html");
+  });
+
+  it("returns null when neither canonical nor og:url is present", () => {
+    expect(canonicalUrl("<html><head></head></html>")).toBeNull();
+  });
+
+  it("prefers the exact-code product card, absolutising relative links", () => {
+    const html =
+      '<a href="/produse/alt-produs-999.html">x</a>' +
+      '<a href="/produse/terminatie-plinta-pvc-11531653.html">y</a>';
+    expect(pickSearchProductUrl(html, "11531653")).toBe(
+      "https://www.leroymerlin.ro/produse/terminatie-plinta-pvc-11531653.html",
+    );
+  });
+
+  it("falls back to the first product link and ignores category pages", () => {
+    const html = '<a href="/produse/gradina-si-amenajare/">cat</a><a href="/produse/abc-500.html">p</a>';
+    expect(pickSearchProductUrl(html, "12345")).toBe("https://www.leroymerlin.ro/produse/abc-500.html");
+  });
+
+  it("returns null when the results list no products", () => {
+    expect(pickSearchProductUrl('<a href="/produse/baie/">x</a> niciun rezultat', "1")).toBeNull();
   });
 });

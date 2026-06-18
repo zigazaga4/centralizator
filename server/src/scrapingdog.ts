@@ -8,13 +8,14 @@
  *       reliable — a bare product code returns the exact product at rank 1.
  *
  *   • Web Scraping API    GET https://api.scrapingdog.com/scrape
- *       Pull the product page as Markdown. leroymerlin.ro is behind an
- *       anti-bot wall (a plain request returns 403, and a non-premium
- *       proxy returns an EMPTY body), so we MUST scrape with
- *       `dynamic=true&premium=true` and a render `wait`. The Markdown
- *       carries the full "Tabelul cu caracteristicile produsului" spec
- *       table, the H1 product name, brand and price — everything we
- *       compare against the invoice.
+ *       Pull the product page as raw HTML. leroymerlin.ro is behind a
+ *       DataDome anti-bot wall (a plain request returns 403, and a
+ *       non-premium proxy returns an EMPTY body), so we MUST scrape with
+ *       `dynamic=true&premium=true` and a render `wait`. We take HTML, not
+ *       Markdown — ScrapingDog's Markdown conversion comes back EMPTY for
+ *       these product pages. The HTML carries the full `m-product-attr-row`
+ *       spec table + the `jsonld_PRODUCT` block — everything we compare
+ *       against the invoice (parsed in leroymerlin.ts).
  *
  * The `ai_extract_rules` AI-parser feature is deliberately NOT used: on
  * the current key it returns `{}` (plan-gated), and Markdown parsing is
@@ -36,6 +37,12 @@ const SCRAPE_TIMEOUT_MS = Number(process.env.SCRAPINGDOG_SCRAPE_TIMEOUT_MS ?? 60
 /** Milliseconds ScrapingDog waits after JS render before snapshotting.
  *  6 s reliably lets the product spec table hydrate. */
 const SCRAPE_WAIT_MS = Number(process.env.SCRAPINGDOG_WAIT_MS ?? 6_000);
+/** How many times to re-try a scrape that comes back as the anti-bot
+ *  challenge / an unrendered stub instead of the real page. Even with
+ *  premium JS render the DataDome wall occasionally slips through; a fresh
+ *  proxy + a longer render wait on the next try clears it. Each retry adds
+ *  4 s of wait. */
+const SCRAPE_MAX_TRIES = Number(process.env.SCRAPINGDOG_SCRAPE_TRIES ?? 4);
 
 export function scrapingdogConfigured(): boolean {
   return !!API_KEY;
@@ -87,30 +94,49 @@ export async function googleSearch(
 }
 
 /**
- * Scrape a URL and return its Markdown rendition. Uses the premium
- * residential proxy + JS rendering + a render wait — the combination
- * leroymerlin.ro needs to return real content instead of a 403/empty
- * body. Throws on transport failure, non-2xx, or an empty body.
+ * Scrape a URL and return its raw HTML. Uses the premium residential proxy
+ * + JS rendering + a render wait — the combination leroymerlin.ro needs to
+ * clear its DataDome wall and return real content instead of a 403/empty
+ * body. HTML, not Markdown: ScrapingDog's Markdown conversion comes back
+ * EMPTY for these product pages, whereas the server-rendered HTML carries
+ * the full spec table and the jsonld_PRODUCT block. Throws on transport
+ * failure, non-2xx, or an empty body.
  */
-export async function scrapeMarkdown(url: string): Promise<string> {
+export async function scrapeHtml(url: string, opts: { valid?: (body: string) => boolean } = {}): Promise<string> {
   const key = ensureKey();
-  const params = new URLSearchParams({
-    api_key: key,
-    url,
-    dynamic: "true",
-    premium: "true",
-    wait: String(SCRAPE_WAIT_MS),
-    formats: "markdown",
-  });
-  const res = await fetch(`${SCRAPE_URL}?${params.toString()}`, {
-    signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`ScrapingDog scrape failed (${res.status}): ${await res.text().catch(() => "")}`);
+  // A good body must look like the REAL page, not the tiny DataDome
+  // interstitial (which is non-empty, so an emptiness check is not enough —
+  // and the real page itself embeds the DataDome script, so a "datadome"
+  // blocklist would reject good pages). The caller passes a positive check
+  // ("contains the product table"); the default just rejects a tiny stub.
+  const valid = opts.valid ?? ((b: string) => b.trim().length >= 3_000);
+  let lastError = "";
+  for (let attempt = 1; attempt <= SCRAPE_MAX_TRIES; attempt++) {
+    const params = new URLSearchParams({
+      api_key: key,
+      url,
+      dynamic: "true",
+      premium: "true",
+      // Lengthen the render wait on each retry so a slow DataDome challenge
+      // has more time to clear before the snapshot.
+      wait: String(SCRAPE_WAIT_MS + (attempt - 1) * 4_000),
+      formats: "html",
+    });
+    try {
+      const res = await fetch(`${SCRAPE_URL}?${params.toString()}`, {
+        signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        lastError = `status ${res.status}: ${(await res.text().catch(() => "")).slice(0, 120)}`;
+      } else {
+        const body = await res.text();
+        if (body && valid(body)) return body;
+        lastError = "anti-bot challenge / unrendered body";
+      }
+    } catch (err) {
+      lastError = (err as Error).message;
+    }
+    if (attempt < SCRAPE_MAX_TRIES) await new Promise((r) => setTimeout(r, 1_500 * attempt));
   }
-  const body = await res.text();
-  if (!body || body.trim().length === 0) {
-    throw new Error("ScrapingDog scrape returned an empty body (blocked or not rendered).");
-  }
-  return body;
+  throw new Error(`ScrapingDog scrape failed after ${SCRAPE_MAX_TRIES} tries (${lastError}).`);
 }
