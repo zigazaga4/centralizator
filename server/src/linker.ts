@@ -112,10 +112,6 @@ const STREET_MATCH = 0.6;
 /** How far apart (in scan positions) two photos can be and still count as
  *  re-shoots of the same document when the number alone can't prove it. */
 const DUPLICATE_WINDOW = 4;
-/** How far (in scan positions) an invoice may look for a name/address
- *  match. A shipment's photos are taken together at one stop, so a match
- *  farther than this is a misread, not a discovery. */
-const ASSIGN_WINDOW = 6;
 /** Digit-string lengths: below MIN_PARTIAL the read is noise; within
  *  [FULL_MIN, FULL_MAX] the number is shaped like a complete AWB (real
  *  AWBs are 9 digits); ABOVE FULL_MAX it is something else entirely —
@@ -470,11 +466,13 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
         return c.index < item.index ? c : best;
       });
 
-    // A shipment's photos are taken together at one stop, so name/address
-    // matches only count among NEARBY anchors — a "match" across half the
-    // stack is a misread capturing someone else's invoice, not a discovery.
-    const nearAnchors = anchors.filter((a) => Math.abs(a.index - item.index) <= ASSIGN_WINDOW);
-    const tier1 = nearAnchors.filter(
+    // Name/address matches are searched BATCH-WIDE — no scan-distance
+    // window. A distinctive full-name match (or a same street + house
+    // number address match) identifies the shipment no matter how far apart
+    // the AWB and its invoice landed in the upload order. When more than one
+    // anchor matches, the NEAREST in scan order wins (see pick()), so two
+    // same-name shipments in one batch still split by adjacency.
+    const tier1 = anchors.filter(
       (a) => overlapScore(itemNames, nameTokenSet(a.recipientName)) >= NAME_MATCH,
     );
     // Address tier: bind ONLY to an anchor at the SAME street + house number
@@ -484,7 +482,7 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     // different house number never binds; the invoice goes to `unpaired`.
     let tier2: DocInfo[] = [];
     if (tier1.length === 0) {
-      tier2 = nearAnchors.filter((a) => sameAddress(item.recipientAddress, a.recipientAddress));
+      tier2 = anchors.filter((a) => sameAddress(item.recipientAddress, a.recipientAddress));
     }
     // NO tier 3: a photo neither tier claims is never position-guessed
     // onto the nearest anchor — the human pairs it from the app instead.
@@ -611,11 +609,7 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     }
     const candidates = [...groupOfAnchor.keys(), ...pendingLabels.map((l) => l.index)]
       .map((i) => docByIndex.get(i)!)
-      .filter(
-        (a) =>
-          Math.abs(a.index - p.index) <= ASSIGN_WINDOW &&
-          overlapScore(pNames, nameTokenSet(a.recipientName)) >= NAME_MATCH,
-      )
+      .filter((a) => overlapScore(pNames, nameTokenSet(a.recipientName)) >= NAME_MATCH)
       .sort((x, y) => {
         const d = Math.abs(x.index - p.index) - Math.abs(y.index - p.index);
         if (d !== 0) return d;

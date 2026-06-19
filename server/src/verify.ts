@@ -25,6 +25,7 @@ import {
   resolveLmProduct,
   compareDims,
   parseDimsMm,
+  weightFromName,
   type LmProduct,
 } from "./leroymerlin.js";
 import { getCachedLmProduct, putCachedLmProduct } from "./db.js";
@@ -59,22 +60,24 @@ const BUC_UNITS = new Set(["", "buc", "bucata", "bucati", "bc", "set", "rola", "
 const AREA_UNITS = new Set(["m2", "m²", "mp"]);
 
 /**
- * Best-effort per-line weight contribution. "buc"-like lines weigh
- * weightKg × quantity; m²-billed lines convert through the pack area
- * (the insulation case the operator cares about). Anything else is not
- * weighable — it makes coverage "partial" and suppresses the weight
- * warning rather than guessing.
+ * Best-effort per-line TOTAL weight from a known UNIT weight. "buc"-like
+ * lines weigh unitKg × quantity; m²-billed lines convert through the pack
+ * area (the insulation case the operator cares about). Anything else is not
+ * weighable — it makes coverage "partial" and suppresses the weight warning
+ * rather than guessing. The unit weight comes from the catalog when the page
+ * has it, else from the kg printed in the product name (weightFromName).
  */
 function lineWeight(
-  product: LmProduct,
+  unitKg: number | null,
+  areaM2: number | null,
   quantity: number,
   unit: string | null | undefined,
 ): number | null {
-  if (!product.found || product.weightKg == null) return null;
+  if (unitKg == null) return null;
   const u = normUnit(unit);
-  if (BUC_UNITS.has(u)) return product.weightKg * quantity;
-  if (AREA_UNITS.has(u) && product.areaM2 && product.areaM2 > 0) {
-    return (quantity / product.areaM2) * product.weightKg;
+  if (BUC_UNITS.has(u)) return unitKg * quantity;
+  if (AREA_UNITS.has(u) && areaM2 && areaM2 > 0) {
+    return (quantity / areaM2) * unitKg;
   }
   return null;
 }
@@ -143,6 +146,11 @@ export async function verifyShipment(extracted: Extracted): Promise<Verification
 
     const sizeStatus = product.found ? compareDims(invoiceDimsMm, product.dimsMm) : "unknown";
 
+    // Unit weight: the catalog page first (most precise), then the kg printed
+    // in the product name ("…20KG") — so a line still carries a weight even
+    // when the site lookup failed or the page omits it.
+    const unitWeightKg = (product.found ? product.weightKg : null) ?? weightFromName(item.name);
+
     const check: ItemCheck = {
       invoiceIndex,
       itemIndex,
@@ -156,19 +164,19 @@ export async function verifyShipment(extracted: Extracted): Promise<Verification
       siteName: product.name,
       brand: product.brand,
       priceBuc: product.priceBuc,
-      weightKg: product.weightKg,
+      weightKg: unitWeightKg,
       siteDimsMm: product.dimsMm,
       sizeStatus,
     };
-    return { check, product };
+    return { check, product, unitWeightKg };
   });
 
   // ── Weight aggregate ──────────────────────────────────────────────
   const awbWeightKg = extracted.awb.weight_kg;
   let weighable = 0;
   let estimate = 0;
-  for (const { check, product } of checks) {
-    const w = lineWeight(product, check.quantity, check.unit);
+  for (const { check, product, unitWeightKg } of checks) {
+    const w = lineWeight(unitWeightKg, product.areaM2, check.quantity, check.unit);
     if (w != null) {
       weighable += 1;
       estimate += w;

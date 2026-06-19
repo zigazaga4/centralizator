@@ -6,7 +6,8 @@
  *      (`/search?q=<code>`) — an exact code redirects straight onto the
  *      product page. Google `site:` search is a fallback (it does not index
  *      many of these reference codes). All scraping is ScrapingDog premium
- *      + JS render (leroymerlin.ro is behind DataDome).
+ *      (no JS render: leroymerlin.ro is behind DataDome, but the page is
+ *      server-rendered, so `premium=true` alone returns it first try).
  *   2. Parse the product name + price from the jsonld_PRODUCT block and the
  *      weight / area / nominal dimensions from the `m-product-attr-row`
  *      characteristics table (present in the HTML, no accordion click).
@@ -103,6 +104,28 @@ export function compareDims(a: number[], b: number[]): "match" | "mismatch" | "u
     if (Math.abs(x - y) > tol) return "mismatch";
   }
   return "match";
+}
+
+/**
+ * Unit weight in KILOGRAMS printed in a product NAME — e.g.
+ * "CIMENT ECOPLANET PLUS 20KG" → 20, "ALB20KG" → 20, "0,5 kg" → 0.5.
+ *
+ * This is the reliable fallback for weight when leroymerlin.ro has no
+ * catalog weight (the lookup failed, or the page omits it): the kg is
+ * printed right on the invoice line. A number (optionally decimal, comma or
+ * dot) immediately followed by the unit "kg" (any case, optional space) is
+ * a weight; a number with ANY other unit ("2MM", "MIN100", "M29A", "CM11+")
+ * is ignored because it is not followed by "kg". Grams are deliberately NOT
+ * parsed (wrong magnitude). The first kg token wins when more than one
+ * appears (none observed across the real invoices). Returns null when the
+ * name states no kg weight.
+ */
+export function weightFromName(name: string | null | undefined): number | null {
+  if (!name) return null;
+  const m = /(\d+(?:[.,]\d+)?)\s*kg\b/i.exec(name);
+  if (!m) return null;
+  const v = parseFloat(m[1]!.replace(",", "."));
+  return Number.isFinite(v) && v > 0 ? v : null;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -322,24 +345,29 @@ export async function resolveLmProduct(query: string): Promise<LmProduct> {
   if (!cleaned) return notFound;
 
   // 1) Native search bar. The result page is large (~250 KB); the DataDome
-  //    interstitial is tiny — so a generous length check rejects the block
-  //    and the retry clears it.
+  //    interstitial is tiny — so a generous length check rejects a stub and
+  //    we treat the line as "not fetched" (no false-negative cache).
   const searchUrl = `https://www.leroymerlin.ro/search?q=${encodeURIComponent(cleaned)}`;
+  // Track whether the search page ACTUALLY came back. A real fetch (even a
+  // "niciun rezultat" page) lets us record a genuine miss; a transient block
+  // (scrape threw after its retries) must NOT be cached as "not found".
   let searchHtml = "";
+  let searchFetched = false;
   try {
     searchHtml = await scrapeHtml(searchUrl, { valid: (b) => b.length > 20_000 });
+    searchFetched = true;
   } catch {
-    searchHtml = "";
+    searchFetched = false;
   }
 
   // 1a) An exact code redirects onto the product page itself → parse it now
   //     (one scrape total), recording the canonical product URL.
-  if (PRODUCT_PAGE_RE.test(searchHtml)) {
+  if (searchFetched && PRODUCT_PAGE_RE.test(searchHtml)) {
     return parseLmProduct(query, canonicalUrl(searchHtml) ?? searchUrl, searchHtml);
   }
 
   // 1b) Results grid → take the exact-code card (else the first product).
-  let url = pickSearchProductUrl(searchHtml, cleaned);
+  let url = searchFetched ? pickSearchProductUrl(searchHtml, cleaned) : null;
 
   // 2) Fallback: Google `site:` search, for any code the bar didn't place.
   if (!url) {
@@ -349,10 +377,19 @@ export async function resolveLmProduct(query: string): Promise<LmProduct> {
       url = null;
     }
   }
-  if (!url) return notFound;
 
-  // Scrape the resolved product URL, retrying until the spec table (the
-  // source of weight + dimensions) is actually rendered.
+  if (!url) {
+    // Genuine miss: the search page WAS fetched and listed no product
+    // ("niciun rezultat") — a real "not found" worth caching. But if the
+    // search scrape FAILED (transient anti-bot block) and Google didn't save
+    // us, do NOT cache a false negative — throw so the caller leaves the line
+    // unchecked and a later pass retries it.
+    if (searchFetched) return notFound;
+    throw new Error(`leroymerlin: code "${cleaned}" not resolvable right now (search unavailable).`);
+  }
+
+  // Scrape the resolved product URL. The spec table (the source of weight +
+  // dimensions) is in the server-rendered HTML, so one premium fetch gets it.
   const html = await scrapeHtml(url, { valid: (b) => PRODUCT_PAGE_RE.test(b) });
   return parseLmProduct(query, url, html);
 }

@@ -71,17 +71,18 @@ describe("linkDocuments — assignment", () => {
     expect(groups).toEqual([{ awbIndex: 4, invoiceIndices: [2] }]);
   });
 
-  it("a name match BEYOND the assignment window never binds — everything goes unpaired", () => {
-    // The live VOICU case: a far anchor must not steal a stop's invoice,
-    // and (by command) the invoice is never position-guessed onto the
-    // near anchor either — the human pairs it from the app.
+  it("a name match binds across the whole batch — no scan-distance window", () => {
+    // The live PETRE MATEOIU case: the AWB and its invoice landed far apart
+    // in the upload, but the recipient name is identical on both, so they
+    // MUST pair regardless of distance. The neighbouring Mihai Bercea AWB
+    // (no name match) is never guessed onto the invoice and goes unpaired.
     const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211261", recipientName: "Mihai Bercea" }),
-      doc(1, "invoice", { recipientName: "VOICU CONSTANTIN" }), // misread or shuffled paper
+      doc(1, "invoice", { recipientName: "VOICU CONSTANTIN" }),
       doc(11, "awb", { awbNumber: "007211193", recipientName: "VOICU CONSTANTIN" }),
     ]);
-    expect(groups).toEqual([]);
-    expect(unpaired).toEqual([0, 1, 11]);
+    expect(groups).toEqual([{ awbIndex: 11, invoiceIndices: [1] }]);
+    expect(unpaired).toEqual([0]);
   });
 
   it("unreadable photos are never position-bound — they go unpaired", () => {

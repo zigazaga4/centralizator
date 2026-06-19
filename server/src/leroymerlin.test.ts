@@ -6,6 +6,7 @@ import {
   pickProductUrl,
   canonicalUrl,
   pickSearchProductUrl,
+  weightFromName,
 } from "./leroymerlin.js";
 
 describe("parseDimsMm", () => {
@@ -183,5 +184,36 @@ describe("canonicalUrl / pickSearchProductUrl (search-bar resolution)", () => {
 
   it("returns null when the results list no products", () => {
     expect(pickSearchProductUrl('<a href="/produse/baie/">x</a> niciun rezultat', "1")).toBeNull();
+  });
+});
+
+describe("weightFromName (unit weight from the product name)", () => {
+  it("parses the kg printed in real invoice product names", () => {
+    expect(weightFromName("CIMENT ECOPLANET PLUS 20KG")).toBe(20);
+    expect(weightFromName("TENC BOB WEBER MIN100 2MM ALB20KG")).toBe(20);
+    expect(weightFromName("ADEZIV INTERIOR CERESIT 25KG CM11+")).toBe(25);
+    expect(weightFromName("CHIT ROSTURI PRAF ANTRACIT 2KG CE40")).toBe(2);
+    expect(weightFromName("GRUND TENCUIALA BONUSS GRI GRAFIT 5KG")).toBe(5);
+    expect(weightFromName("MEMBRANA LICHIDA MAPEI MAPEGUM WPS 10KG")).toBe(10);
+    expect(weightFromName("MORTAR REFRACTAR M29A 25KG")).toBe(25); // 25, not the code's 29
+  });
+
+  it("accepts a space, any case and a decimal (comma or dot)", () => {
+    expect(weightFromName("Sac ciment 25 kg")).toBe(25);
+    expect(weightFromName("adeziv 0,5kg")).toBe(0.5);
+    expect(weightFromName("vopsea 1.5 KG")).toBe(1.5);
+  });
+
+  it("ignores other units and product codes (no false positives)", () => {
+    expect(weightFromName("TENC STRUCT BONUSS 2MM GRI GRAFIT")).toBeNull(); // mm, no kg
+    expect(weightFromName("MORTAR REFRACTAR M29A")).toBeNull(); // code, no kg
+    expect(weightFromName("JGHEAB 125 mm 3000 mm")).toBeNull();
+    expect(weightFromName("Bidon vopsea 5 l")).toBeNull(); // litres, not kg
+  });
+
+  it("returns null on empty input or a name with no kg", () => {
+    expect(weightFromName(null)).toBeNull();
+    expect(weightFromName("")).toBeNull();
+    expect(weightFromName("Adeziv flexibil gri")).toBeNull();
   });
 });
