@@ -446,6 +446,14 @@ function Spreadsheet({
   // commission machinery and show the macara calc as the bottom line.
   const macara = breakdown.macara;
   const isMacara = !!macara?.isMacara;
+  // Macara→normal override. The toggle shows only when macara was detected on
+  // the documents (or already overridden), so it never clutters an ordinary
+  // delivery. `detected` is derived for breakdowns persisted before it existed.
+  const macaraDetected = macara
+    ? macara.detected ?? (macara.onAwb || macara.onInvoice)
+    : false;
+  const macaraForcedNormal = !!macara?.forcedNormal;
+  const showMacaraToggle = macaraDetected || macaraForcedNormal;
 
   // Split for readability — the spreadsheet renders the AWB section
   // once, then loops through every invoice as its own section. Pricing
@@ -499,6 +507,31 @@ function Spreadsheet({
           onChange={(v) => onPatch({ service: v as Service })}
         />
       </DataRow>
+      {/* Macara override — only on pairs the documents flagged as macara.
+          Leroy Merlin sometimes mis-tags an ordinary shipment as macara; this
+          lets the operator flip it back to a normal delivery (standard tariff
+          + commission). Toggling it re-prices on the spot. */}
+      {showMacaraToggle && (
+        <DataRow
+          n={r()}
+          label="Livrare cu macara"
+          editable
+          hint={
+            macaraForcedNormal
+              ? "setat normal manual"
+              : macara?.warning
+                ? "doar pe factură"
+                : undefined
+          }
+        >
+          <ToggleCell
+            value={isMacara}
+            onLabel="DA · macara"
+            offLabel="NU · livrare normală"
+            onChange={(next) => onPatch({ macara_force_normal: !next })}
+          />
+        </DataRow>
+      )}
       <DataRow n={r()} label="Greutate (kg)" editable>
         <NumberCell
           value={awb.weight_kg}
@@ -1007,6 +1040,43 @@ function NumberCell({
       }}
       className={`${EDIT_LOOK} block w-full cursor-text px-3 py-1 text-right text-sm tabular-nums`}
     />
+  );
+}
+
+function ToggleCell({
+  value,
+  onLabel,
+  offLabel,
+  onChange,
+}: {
+  value: boolean;
+  onLabel: string;
+  offLabel: string;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className={`${EDIT_LOOK} flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-1 text-sm`}
+      title="Comută între livrare cu macara și livrare normală"
+    >
+      <span className={value ? "font-medium text-coral-700" : "text-ink-700"}>
+        {value ? onLabel : offLabel}
+      </span>
+      <span
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition ${
+          value ? "bg-coral-500" : "bg-ink-300"
+        }`}
+        aria-hidden
+      >
+        <span
+          className={`inline-block h-4 w-4 transform rounded-full bg-canvas-50 shadow transition ${
+            value ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </span>
+    </button>
   );
 }
 

@@ -359,7 +359,15 @@ export interface CollaboratorPriceRow {
  * on the invoice but the AWB does not declare it.
  */
 export interface MacaraBreakdown {
+  /** EFFECTIVE classification = `detected && !forcedNormal`. */
   isMacara: boolean;
+  /** What the documents said (macara on AWB OR invoice), before any override.
+   *  Optional for breakdowns persisted before the override existed — derive it
+   *  from `onAwb || onInvoice` when missing. */
+  detected?: boolean;
+  /** Operator forced an ordinary delivery despite detection (Leroy Merlin
+   *  mis-tag). Optional for older breakdowns; treat missing as false. */
+  forcedNormal?: boolean;
   onAwb: boolean;
   onInvoice: boolean;
   warning: boolean;
@@ -531,6 +539,10 @@ export interface PricingRequest {
   /** Dispatch store the macara run leaves from — selects the macara rate
    *  table. Carried so a re-price keeps the right per-city macara price. */
   macara_store?: StoreKey | null;
+  /** Operator override forcing an ordinary (non-macara) delivery even when
+   *  macara was detected — corrects a Leroy Merlin mis-tag. Carried across
+   *  re-prices so the override sticks. Optional; default false. */
+  macara_force_normal?: boolean;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -649,6 +661,11 @@ export type PairPatch = {
   distance_extra_km?: number;
   num_deliveries?: number;
   delivery_date?: string;
+  /** Operator override: force this shipment to be treated as an ordinary
+   *  (non-macara) delivery, or restore the detected macara classification.
+   *  Set true to correct a Leroy Merlin macara mis-tag, false to revert.
+   *  Not an AWB field — handled specially (immediate re-price, no debounce). */
+  macara_force_normal?: boolean;
 };
 
 /* ──────────────────────────────────────────────────────────────────────

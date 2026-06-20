@@ -713,6 +713,60 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
     expect(r.macara.unloadCost).toBe(160.2);
     expect(r.macara.total).toBe(1436.8);
   });
+
+  // Operator override: macara was on the AWB but the operator forces a normal
+  // delivery (Leroy Merlin mis-tagged it). isMacara flips false, the macara
+  // total zeroes, and the standard totals match the plain non-macara run —
+  // while `detected` + the palet count are preserved so it can be toggled back.
+  it("macaraForceNormal turns a detected macara into an ordinary delivery", () => {
+    const base = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    const macara = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 3,
+    });
+    const forced = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 3, macaraForceNormal: true,
+    });
+    // Sanity: without the override it IS macara.
+    expect(macara.macara.isMacara).toBe(true);
+    // With the override it is billed as a normal delivery.
+    expect(forced.macara.isMacara).toBe(false);
+    expect(forced.macara.detected).toBe(true);
+    expect(forced.macara.forcedNormal).toBe(true);
+    expect(forced.macara.warning).toBe(false);
+    expect(forced.macara.total).toBe(0);
+    // The detected palet count is retained so the toggle can be reverted.
+    expect(forced.macara.pallets).toBe(3);
+    // Every per-city macara figure is zeroed too.
+    expect(forced.macaraByCity.Ploiesti.isMacara).toBe(false);
+    expect(forced.macaraByCity.Ploiesti.total).toBe(0);
+    // The standard totals now match the plain non-macara run byte-for-byte.
+    expect(forced.carrierTotal).toBe(base.carrierTotal);
+    expect(forced.grandTotal).toBe(base.grandTotal);
+    expect(forced.cityCommissions.Ploiesti.customerTotal).toBe(
+      base.cityCommissions.Ploiesti.customerTotal,
+    );
+  });
+
+  // The override is inert when there was no macara to begin with: a plain
+  // delivery stays plain and `forcedNormal` is false (nothing was overridden).
+  it("macaraForceNormal is a no-op when no macara was detected", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraForceNormal: true,
+    });
+    expect(r.macara.isMacara).toBe(false);
+    expect(r.macara.detected).toBe(false);
+    expect(r.macara.forcedNormal).toBe(false);
+    expect(r.macara.total).toBe(0);
+  });
 });
 
 /** Local 2-dp round mirroring the engine, for assertions. */

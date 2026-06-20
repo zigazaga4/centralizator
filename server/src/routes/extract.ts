@@ -103,6 +103,7 @@ export default async function extractRoutes(app: FastifyInstance) {
       service, weight_kg, distance_km, num_deliveries, delivery_date,
       bulky_units, has_other_products, unloading_units,
       macara_on_awb, macara_on_invoice, macara_pallets, macara_runs, macara_store,
+      macara_force_normal,
     } = parsed.data;
     try {
       const breakdown = calculatePrice({
@@ -119,6 +120,7 @@ export default async function extractRoutes(app: FastifyInstance) {
         macaraPallets: macara_pallets,
         macaraRuns: macara_runs,
         macaraStore: macara_store,
+        macaraForceNormal: macara_force_normal,
       });
       return reply.send({ breakdown });
     } catch (err) {

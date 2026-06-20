@@ -141,6 +141,12 @@ export interface PricingInput {
    *  table applies (Iași Tudor + Constanța vs. Ploiești + Iași ERA). Null /
    *  undefined falls back to the default (Table A). */
   macaraStore?: City | null;
+  /** Operator override: treat this as an ORDINARY (non-macara) delivery even
+   *  when macara was detected on the AWB/invoice. Leroy Merlin sometimes tags
+   *  a standard shipment as macara by mistake; this lets the operator correct
+   *  it so it prices on the normal tariff + commission. Default false (use the
+   *  detected classification). */
+  macaraForceNormal?: boolean;
 }
 
 /**
@@ -151,8 +157,18 @@ export interface PricingInput {
  * macara".
  */
 export interface MacaraBreakdown {
-  /** True when this run is macara — named on the AWB OR found on an invoice. */
+  /** EFFECTIVE classification: true when this run is billed as macara. Equals
+   *  `detected && !forcedNormal` — i.e. macara was found on the documents AND
+   *  the operator did not override it back to a normal delivery. */
   isMacara: boolean;
+  /** What the documents themselves said, BEFORE any operator override: macara
+   *  named on the AWB "Serviciu" OR found on an invoice line. This is preserved
+   *  even when `forcedNormal` is set, so the override can be toggled back. */
+  detected: boolean;
+  /** Operator override flag: the run was detected as macara but the operator
+   *  forced it to an ordinary delivery (Leroy Merlin mis-tagged it). When true,
+   *  `isMacara` is false and every macara figure below is zeroed. */
+  forcedNormal: boolean;
   /** Macara named on the AWB "Serviciu" — the legitimate signal (no warning). */
   onAwb: boolean;
   /** Macara found on an invoice line. */
@@ -161,8 +177,10 @@ export interface MacaraBreakdown {
    *  it (e.g. the AWB "Serviciu" reads "standard"). The operator must
    *  reconcile the AWB. False whenever the AWB itself names macara. */
   warning: boolean;
-  /** Paleți billed. 0 when not macara; 1 when macara is detected but no
-   *  palet count was read. */
+  /** Paleți. When billed as macara: 1 when detected but no count was read,
+   *  else the read count. When NOT billed as macara: 0 normally, but retains
+   *  the detected count when macara was forced to normal (so a toggle-back
+   *  restores it). */
   pallets: number;
   /** Number of crane truck runs = ceil(pallets / 8). One truck carries 1-8
    *  paleți; more needs another run, and the delivery price + per-km scale by
@@ -385,6 +403,9 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const macaraOnAwb = input.macaraOnAwb ?? false;
   const macaraOnInvoice = input.macaraOnInvoice ?? false;
   const macaraPallets = Math.max(0, Math.floor(input.macaraPallets ?? 0));
+  // Operator override — force an ordinary (non-macara) delivery even when the
+  // documents declared macara (Leroy Merlin mis-tags it sometimes).
+  const macaraForceNormal = input.macaraForceNormal ?? false;
   // Primary macara breakdown — uses the pair's resolved dispatch store (or the
   // default table when unknown). This is the one the table/footer fall back to.
   const macaraRuns = Math.max(0, Math.floor(input.macaraRuns ?? 0));
@@ -395,6 +416,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     runs: macaraRuns,
     distanceKm,
     store: input.macaraStore ?? null,
+    forceNormal: macaraForceNormal,
   });
   // Macara priced for EVERY city, so the UI can show the macara tariff per
   // city (Ploiești + Iași ERA on Table B, Iași Tudor + Constanța on Table A),
@@ -410,6 +432,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
         runs: macaraRuns,
         distanceKm,
         store: city,
+        forceNormal: macaraForceNormal,
       }),
     ]),
   ) as Record<City, MacaraBreakdown>;
@@ -501,19 +524,29 @@ function computeMacara(args: {
   runs?: number;
   distanceKm: number;
   store: City | null;
+  /** Operator override forcing an ordinary delivery despite detection. */
+  forceNormal?: boolean;
 }): MacaraBreakdown {
   const { onAwb, onInvoice, distanceKm, store } = args;
-  const isMacara = onAwb || onInvoice;
+  // Detection (what the documents say) vs. the EFFECTIVE classification (what
+  // we bill). The operator can force a detected macara back to normal.
+  const detected = onAwb || onInvoice;
+  const forcedNormal = (args.forceNormal ?? false) && detected;
+  const isMacara = detected && !forcedNormal;
   // Pick the rate table for the dispatch site (Table A: Iași Tudor +
   // Constanța; Table B: Ploiești + Iași ERA). Default A when undetermined.
   const table = store ? MACARA_TABLE_BY_CITY[store] : MACARA_DEFAULT_TABLE;
   if (!isMacara) {
     return {
       isMacara: false,
-      onAwb: false,
-      onInvoice: false,
+      detected,
+      forcedNormal,
+      // Preserve the raw detection + palet count so an override can be toggled
+      // back to macara without losing what the documents said.
+      onAwb,
+      onInvoice,
       warning: false,
-      pallets: 0,
+      pallets: Math.max(0, Math.floor(args.pallets)),
       runs: 0,
       distanceBucket: null,
       extraKm: 0,
@@ -557,6 +590,8 @@ function computeMacara(args: {
   const total = round2(basePrice + kmCost + unloadCost);
   return {
     isMacara: true,
+    detected,
+    forcedNormal: false,
     onAwb,
     onInvoice,
     warning,

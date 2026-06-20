@@ -296,5 +296,8 @@ export const PricingRequestSchema = z.object({
    *  table (Iași Tudor + Constanța vs. Ploiești + Iași ERA). Null = default
    *  table. */
   macara_store: StoreKeySchema.nullable().default(null),
+  /** Operator override forcing an ordinary (non-macara) delivery even when
+   *  macara was detected — corrects a Leroy Merlin mis-tag. Default false. */
+  macara_force_normal: z.boolean().default(false),
 });
 export type PricingRequest = z.infer<typeof PricingRequestSchema>;

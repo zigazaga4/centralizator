@@ -718,7 +718,7 @@ export default function App() {
   /* ── Per-pair edit + debounced re-price ───────────────────────────── */
 
   const repricePair = useCallback(
-    async (id: string) => {
+    async (id: string, override?: { macaraForceNormal?: boolean }) => {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
       const { service, edits, breakdown } = pair.status;
@@ -744,6 +744,11 @@ export default function App() {
           macara_pallets: breakdown.macara?.pallets ?? 0,
           macara_runs: breakdown.macara?.runs ?? 0,
           macara_store: macaraStore,
+          // The operator's macara→normal override: an explicit value from the
+          // toggle wins; otherwise carry the persisted decision forward so it
+          // survives unrelated edits (weight, km, …).
+          macara_force_normal:
+            override?.macaraForceNormal ?? (breakdown.macara?.forcedNormal ?? false),
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever
@@ -766,11 +771,37 @@ export default function App() {
       if (!cur || cur.status.kind !== "ready") return;
 
       const curAwb = cur.status.edits.awb;
+      // The macara→normal override is NOT an AWB field — it rides in the
+      // breakdown. Flip it optimistically so the toggle + the standard/macara
+      // sections switch instantly; the server recomputes the real totals on
+      // the immediate re-price below.
+      const macaraToggle = patch.macara_force_normal !== undefined;
+      const force = !!patch.macara_force_normal;
+      const curBreakdown = cur.status.breakdown;
+      const curMac = curBreakdown.macara;
+      const detected = curMac
+        ? curMac.detected ?? (curMac.onAwb || curMac.onInvoice)
+        : false;
+      const nextBreakdown =
+        macaraToggle && curMac
+          ? {
+              ...curBreakdown,
+              macara: {
+                ...curMac,
+                forcedNormal: force && detected,
+                isMacara: detected && !force,
+                warning: force ? false : curMac.warning,
+              },
+            }
+          : curBreakdown;
+
       // Spread the prior ready status so store / routing / verification
-      // survive a hand-edit; only service + the edited AWB fields change.
+      // survive a hand-edit; only service + the edited AWB fields (+ the
+      // optimistic macara flip) change.
       const nextStatus: PairStatus = {
         ...cur.status,
         service: patch.service ?? cur.status.service,
+        breakdown: nextBreakdown,
         edits: {
           ...cur.status.edits,
           awb: {
@@ -792,10 +823,17 @@ export default function App() {
 
       const prev = repriceTimers.current.get(id);
       if (prev) clearTimeout(prev);
-      repriceTimers.current.set(
-        id,
-        setTimeout(() => repricePair(id), REPRICE_DEBOUNCE_MS),
-      );
+      if (macaraToggle) {
+        // A discrete click, not typing — re-price immediately with the
+        // explicit override so the toggle never lags behind the totals.
+        repriceTimers.current.delete(id);
+        void repricePair(id, { macaraForceNormal: force });
+      } else {
+        repriceTimers.current.set(
+          id,
+          setTimeout(() => repricePair(id), REPRICE_DEBOUNCE_MS),
+        );
+      }
     },
     [persistAndSet, setStatusLocal, repricePair],
   );
