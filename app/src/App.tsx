@@ -4,6 +4,7 @@ import { ExportMenu } from "./components/ExportMenu";
 import { CompareExcelButton } from "./components/CompareExcelButton";
 import { PairAddCard } from "./components/PairAddCard";
 import { PairsTable } from "./components/PairsTable";
+import { SearchBar } from "./components/SearchBar";
 import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
@@ -19,6 +20,7 @@ import {
 import { loadPairImages, prefetchPairImages } from "./lib/images";
 import { subscribePairLive } from "./lib/live";
 import { date as fmtDate, todayIso } from "./lib/format";
+import { pairMatchesQuery } from "./lib/search";
 import {
   CITY_KEYS,
   CITY_LABEL,
@@ -1113,6 +1115,16 @@ export default function App() {
     [pairs, selectedDay, inActiveStore, inActiveView, inActiveCollaborator],
   );
 
+  // Free-text search over the day's pairs (AWB, recipient, invoice, …).
+  // Scoped to whatever `dayPairs` already shows, so it composes with the
+  // store / view / collaborator filters instead of fighting them.
+  const [query, setQuery] = useState("");
+  const trimmedQuery = query.trim();
+  const visiblePairs = useMemo(
+    () => (trimmedQuery ? dayPairs.filter((p) => pairMatchesQuery(p, trimmedQuery)) : dayPairs),
+    [dayPairs, trimmedQuery],
+  );
+
   // Pairs the EXPORT modal can draw from: day + store + view scoped, but
   // deliberately NOT filtered by the header's collaborator dropdown — the
   // modal owns its own collaborator scope setting, so the user can export
@@ -1382,8 +1394,17 @@ export default function App() {
                 onPair={pairManually}
               />
             )}
+            {/* Search the day's pairs. Only useful once there's something to
+                filter; hidden on an empty day so it doesn't clutter the hero. */}
+            {dayPairs.length > 0 && (
+              <SearchBar
+                value={query}
+                onChange={setQuery}
+                count={trimmedQuery ? visiblePairs.length : null}
+              />
+            )}
             <PairsTable
-              pairs={dayPairs}
+              pairs={visiblePairs}
               city={selectedCity}
               collaborator={selectedCollaborator}
               verifyingIds={verifyingIds}
@@ -1391,6 +1412,11 @@ export default function App() {
               onRemovePair={removePair}
               onSelectPair={setSelectedId}
             />
+            {trimmedQuery && visiblePairs.length === 0 && (
+              <p className="rounded-lg border border-dashed border-ink-200 bg-canvas-50 px-4 py-6 text-center text-sm text-ink-500">
+                Niciun rezultat pentru „{trimmedQuery}” în această zi.
+              </p>
+            )}
             <p className="text-center text-[11px] uppercase tracking-widest text-ink-400">
               Click pe orice rând pentru detalii complete · <kbd className="rounded border border-ink-200 bg-canvas-50 px-1 font-mono text-[10px] text-ink-700">Esc</kbd> pentru a reveni · perechile sunt salvate automat
             </p>
