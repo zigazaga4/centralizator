@@ -96,7 +96,7 @@ export function PairDetail({
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <aside className="lg:col-span-5 xl:col-span-4">
-          <ImageGallery pair={pair} />
+          <ImageGallery pair={pair} onDetachInvoice={onDetachInvoice} />
         </aside>
 
         <section className="lg:col-span-7 xl:col-span-8 space-y-6">
@@ -267,15 +267,44 @@ function imageLabel(i: number, total: number, invoiceCount: number): string {
   return total - 1 > 1 ? `Factură ${i}` : "Factură";
 }
 
-function ImageGallery({ pair }: { pair: Pair }) {
+function ImageGallery({
+  pair,
+  onDetachInvoice,
+}: {
+  pair: Pair;
+  /** Remove one invoice (by its index) straight from its photo. */
+  onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
+}) {
   // Lazy: bytes stream in per-image from the server (cached in-app
   // after the first load); local pairs resolve instantly. While
   // loading, one skeleton card per expected image keeps the layout.
   const { files, loading } = usePairImages(pair);
   const [urls, setUrls] = useState<string[]>([]);
   const [zoomed, setZoomed] = useState<string | null>(null);
+  // Per-image detach: first X click arms the confirm on that image index,
+  // the confirm button runs it. `detaching` disables the controls mid-call.
+  const [confirmImg, setConfirmImg] = useState<number | null>(null);
+  const [detaching, setDetaching] = useState<number | null>(null);
   // The AWB is stored first, invoices after — used to label each image.
   const invoiceCount = pair.status.kind === "ready" ? pair.status.edits.invoices.length : 0;
+  // The X-on-photo only maps cleanly to an invoice when storage is exactly
+  // 1 AWB + 1 photo per invoice (image i ≥ 1 → invoice i-1). For a combined
+  // photo or a dedup mismatch we hide it and leave the labelled buttons in
+  // the Factură section as the (index-based) way out.
+  const perImageDetach =
+    !!onDetachInvoice && pair.status.kind === "ready" && urls.length === invoiceCount + 1 && invoiceCount > 0;
+  const runDetach = async (invoiceIndex: number) => {
+    if (!onDetachInvoice) return;
+    setDetaching(invoiceIndex);
+    try {
+      await onDetachInvoice(invoiceIndex);
+    } catch (err) {
+      console.error("detach invoice (from image) failed:", err);
+    } finally {
+      setDetaching(null);
+      setConfirmImg(null);
+    }
+  };
 
   useEffect(() => {
     const list = files.map((f) => URL.createObjectURL(f));
@@ -314,6 +343,11 @@ function ImageGallery({ pair }: { pair: Pair }) {
         {urls.map((u, i) => {
           const label = imageLabel(i, urls.length, invoiceCount);
           const isAwb = i === 0;
+          // Invoice photos (i ≥ 1) get an X to remove that one invoice — but
+          // only when the photo→invoice mapping is unambiguous.
+          const invoiceIndex = i - 1;
+          const showDetach = perImageDetach && !isAwb;
+          const confirming = confirmImg === i;
           return (
             <figure
               key={u}
@@ -327,14 +361,62 @@ function ImageGallery({ pair }: { pair: Pair }) {
                   {files[i] ? `${(files[i]!.size / 1024).toFixed(0)} KB` : ""}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => setZoomed(u)}
-                className="block w-full cursor-zoom-in focus:outline-none"
-                title="Click pentru a mări"
-              >
-                <img src={u} alt={label} className="block w-full" />
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setZoomed(u)}
+                  className="block w-full cursor-zoom-in focus:outline-none"
+                  title="Click pentru a mări"
+                >
+                  <img src={u} alt={label} className="block w-full" />
+                </button>
+
+                {/* Remove-this-invoice X, top-right over the photo. */}
+                {showDetach && !confirming && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmImg(i)}
+                    title="Scoate această factură din pereche"
+                    aria-label="Scoate această factură din pereche"
+                    className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-coral-300 bg-canvas-50/95 text-coral-600 shadow-md transition hover:bg-coral-500 hover:text-canvas-50"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                )}
+
+                {/* Confirm overlay — guards an accidental removal. */}
+                {showDetach && confirming && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink-900/70 p-4 text-center">
+                    <p className="text-sm font-medium text-canvas-50">
+                      Scoți această factură din pereche?<br />
+                      <span className="text-[12px] font-normal text-canvas-200">
+                        Merge în „documente fără pereche”.
+                      </span>
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void runDetach(invoiceIndex)}
+                        disabled={detaching === invoiceIndex}
+                        className="rounded-md border border-coral-400 bg-coral-500 px-3 py-1.5 text-xs font-semibold text-canvas-50 shadow-sm transition hover:bg-coral-600 disabled:opacity-60"
+                      >
+                        {detaching === invoiceIndex ? "Se scoate…" : "Da, scoate"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmImg(null)}
+                        disabled={detaching === invoiceIndex}
+                        className="rounded-md border border-ink-200 bg-canvas-50 px-3 py-1.5 text-xs text-ink-700 transition hover:border-ink-400 disabled:opacity-60"
+                      >
+                        Anulează
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </figure>
           );
         })}
