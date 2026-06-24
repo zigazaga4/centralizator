@@ -80,6 +80,17 @@ export function PairDetail({
       ? `Pereche #${index + 1} · AWB ${status.edits.awb.awb_number}`
       : `Pereche #${index + 1}`;
 
+  // Per-invoice "remove from its photo" maps cleanly only when storage is
+  // exactly 1 AWB + one photo per invoice (image i ≥ 1 → invoice i-1). In that
+  // (normal) case the X-on-photo is the SINGLE detach control. When the mapping
+  // is ambiguous (a combined AWB+invoice photo, or extra/deduped photos) there
+  // is no invoice photo to mark, so the Factură-section button is the fallback.
+  // Exactly one of the two is ever shown, never both.
+  const invoiceCount = status.kind === "ready" ? status.edits.invoices.length : 0;
+  const imageCount = pair.images.length > 0 ? pair.images.length : pair.imageRefs?.length ?? 0;
+  const canDetachPerImage =
+    status.kind === "ready" && invoiceCount > 0 && imageCount === invoiceCount + 1;
+
   return (
     <div className="flex flex-col gap-6">
       <DetailHeader
@@ -95,7 +106,11 @@ export function PairDetail({
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <aside className="lg:col-span-5 xl:col-span-4">
-          <ImageGallery pair={pair} onDetachInvoice={onDetachInvoice} />
+          <ImageGallery
+            pair={pair}
+            onDetachInvoice={onDetachInvoice}
+            canDetachPerImage={canDetachPerImage}
+          />
         </aside>
 
         <section className="lg:col-span-7 xl:col-span-8 space-y-6">
@@ -112,6 +127,7 @@ export function PairDetail({
                 collaborator={collaborator}
                 onPatch={onPatch}
                 onDetachInvoice={onDetachInvoice}
+                canDetachPerImage={canDetachPerImage}
               />
               {(verification || routing) && (
                 <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
@@ -268,10 +284,15 @@ function imageLabel(i: number, total: number, invoiceCount: number): string {
 function ImageGallery({
   pair,
   onDetachInvoice,
+  canDetachPerImage = false,
 }: {
   pair: Pair;
   /** Remove one invoice (by its index) straight from its photo. */
   onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
+  /** True when storage is exactly 1 AWB + one photo per invoice, so the
+   *  X-on-photo maps unambiguously (image i ≥ 1 → invoice i-1). Computed by
+   *  the parent so it stays in lock-step with the Factură-section fallback. */
+  canDetachPerImage?: boolean;
 }) {
   // Lazy: bytes stream in per-image from the server (cached in-app
   // after the first load); local pairs resolve instantly. While
@@ -289,8 +310,7 @@ function ImageGallery({
   // 1 AWB + 1 photo per invoice (image i ≥ 1 → invoice i-1). For a combined
   // photo or a dedup mismatch we hide it and leave the labelled buttons in
   // the Factură section as the (index-based) way out.
-  const perImageDetach =
-    !!onDetachInvoice && pair.status.kind === "ready" && urls.length === invoiceCount + 1 && invoiceCount > 0;
+  const perImageDetach = !!onDetachInvoice && canDetachPerImage;
   const runDetach = async (invoiceIndex: number) => {
     if (!onDetachInvoice) return;
     setDetaching(invoiceIndex);
@@ -344,7 +364,7 @@ function ImageGallery({
           // Invoice photos (i ≥ 1) get an X to remove that one invoice — but
           // only when the photo→invoice mapping is unambiguous.
           const invoiceIndex = i - 1;
-          const showDetach = perImageDetach && !isAwb;
+          const showDetach = perImageDetach && !isAwb && invoiceIndex < invoiceCount;
           const confirming = confirmImg === i;
           return (
             <figure
@@ -512,6 +532,7 @@ function Spreadsheet({
   collaborator,
   onPatch,
   onDetachInvoice,
+  canDetachPerImage = false,
 }: {
   data: Extracted;
   service: Service;
@@ -522,6 +543,9 @@ function Spreadsheet({
   collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
   onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
+  /** True when the X-on-photo detach is available for this pair; the
+   *  Factură-section detach button shows ONLY as the fallback when it is not. */
+  canDetachPerImage?: boolean;
 }) {
   let row = 0;
   const r = () => ++row;
@@ -739,7 +763,7 @@ function Spreadsheet({
         return (
           <div key={i}>
             <Section title={heading} />
-            {onDetachInvoice && (
+            {onDetachInvoice && !canDetachPerImage && (
               <div className={`${ROW_GRID} border-b border-ink-200 bg-canvas-50`}>
                 <div className="border-r border-ink-200 bg-canvas-100" />
                 <div className="col-span-2 flex flex-wrap items-center justify-end gap-2 px-3 py-1.5">
