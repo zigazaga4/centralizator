@@ -692,10 +692,10 @@ function Spreadsheet({
                     <button
                       type="button"
                       onClick={() => setConfirmDetach(i)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-xs text-ink-600 transition hover:border-coral-400 hover:text-coral-700"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-coral-300 bg-coral-50 px-3 py-1.5 text-xs font-semibold text-coral-700 shadow-sm transition hover:border-coral-400 hover:bg-coral-100"
                       title="Scoate această factură din pereche și trimite-o în documente fără pereche"
                     >
-                      <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                         <line x1="18" y1="6" x2="6" y2="18" />
                         <line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
