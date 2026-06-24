@@ -81,11 +81,19 @@ const ImageWireSchema = z.object({
 
 /**
  * Image cap matches `MAX_IMAGES` in routes/extract.ts: 1 AWB + up to
- * 11 invoices. `min(2)` is the floor because a pair without an
- * invoice makes no sense (the model needs one AWB and at least one
- * invoice to produce a valid Extracted struct).
+ * 11 invoices. `min(1)` is the floor: ONE image is a legitimate pair.
+ * A lone AWB — a transport label with NO invoice — happens for real in
+ * the unpaired pool (the linker found no factură with a matching
+ * recipient), and it still prices: the tariff is read entirely from the
+ * AWB-side scalars (weight, distance, deliveries, service), never from
+ * the invoices. `ExtractedSchema.invoices` is allowed to be empty, and
+ * the whole pipeline (extract → price → verify) already handles the
+ * no-invoice case, so the manual-pairing flow must be able to file a
+ * single document as its own pair. (A combined photo — label clipped
+ * onto its invoice in one frame — is also a single image; the vision
+ * model splits the halves.)
  */
-const NewPairSchema = z.object({
+export const NewPairSchema = z.object({
   id: z.string().min(1),
   day: isoDay,
   /** Upload-time collaborator assignment. The manual-pairing flow sends
@@ -94,7 +102,7 @@ const NewPairSchema = z.object({
     .enum(COLLABORATORS as readonly [Collaborator, ...Collaborator[]])
     .nullable()
     .optional(),
-  images: z.array(ImageWireSchema).min(2).max(12),
+  images: z.array(ImageWireSchema).min(1).max(12),
 });
 
 /**
