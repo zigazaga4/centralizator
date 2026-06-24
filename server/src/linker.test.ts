@@ -162,22 +162,28 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
     ]);
   });
 
-  it("unreadable-number anchor folds into a nearby same-name anchor", () => {
+  it("a numberless label is not an anchor — it binds to its real same-name AWB", () => {
+    // doc1's barcode is fully unreadable (no digits, no Hub), so it can never
+    // be its own AWB pair (operator rule 2026-06-24). It is treated as an
+    // extra document and binds, by name, to the REAL MARIAN PAIU AWB (doc0).
     const { groups } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "MARIAN PAIU" }),
-      doc(1, "awb", { recipientName: "MARIAN PAIU" }), // blurry barcode
+      doc(1, "awb", { recipientName: "MARIAN PAIU" }), // blurry barcode, no digits
       doc(2, "invoice", { recipientName: "MARIAN PAIU" }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [2] }]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1, 2] }]);
   });
 
-  it("an unreadable-number anchor FAR from its name twin stays its own shipment", () => {
-    const { droppedAnchors, unpaired } = linkDocuments([
+  it("a numberless label with a real same-name AWB present binds there, not its own shipment", () => {
+    // A label whose number is fully unreadable can never anchor a pair; with a
+    // real same-name AWB present (doc0) it binds there by name (batch-wide).
+    // It used to be kept as its own numberless 'shipment' — now disallowed.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211001", recipientName: "MARIAN PAIU" }),
       doc(20, "awb", { recipientName: "MARIAN PAIU" }),
     ]);
-    expect(droppedAnchors).toHaveLength(0); // not folded — two shipments
-    expect(unpaired).toHaveLength(2);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [20] }]);
+    expect(unpaired).toEqual([]);
   });
 
   it("a WEAK (rotated/blurred) full-number read folds by name+adjacency despite differing digits", () => {
@@ -263,8 +269,11 @@ describe("linkDocuments — anchor dedup (the 0900 trap)", () => {
       doc(6, "awb", { awbConfident: false, recipientName: "Leroy Merlin Romania" }),
     ]);
     expect(groups).toHaveLength(0); // none has an invoice → no pair
-    expect(droppedJunk.sort()).toEqual([5, 6]);
-    expect(unpaired).toEqual([0, 1]);
+    // doc 5 & 6 are numberless labels (no digits, no Hub) → not anchors; their
+    // stopword-only "name" matches nothing, so they surface as unpaired for the
+    // human (rather than silently dropped) alongside the two invoice-less AWBs.
+    expect(droppedJunk).toEqual([]);
+    expect(unpaired.slice().sort((a, b) => a - b)).toEqual([0, 1, 5, 6]);
   });
 
   it("a stray-sheet reading that identifies nothing never becomes a pair", () => {
@@ -336,23 +345,24 @@ describe("linkDocuments — degenerate stacks", () => {
     expect(unpaired).toEqual([2]);
   });
 
-  it("a combined photo with a readable name forms its own valid pair", () => {
-    // Liliana's real photo: label + invoice in ONE image — a complete
-    // shipment on its own, shown as a pair.
-    const { groups } = linkDocuments([
+  it("a combined photo with a name but NO AWB number does not self-pair — it goes unpaired", () => {
+    // Operator rule 2026-06-24: a label half with a recipient name but NO
+    // usable AWB number and NO Hub is an invoice the model decorated with a
+    // phantom report_awb (the model copies the buyer into recipient_name), so
+    // it must NOT form its own pair. With no same-name anchor to bind to, it
+    // surfaces as unpaired for the human (no more blank-AWB "pairs").
+    const { groups, unpaired } = linkDocuments([
       doc(0, "awb", { awbNumber: "007211281", recipientName: "Iuliana-Ioana" }),
       doc(1, "invoice", { recipientName: "Iuliana-Ioana" }),
       doc(2, "combined", {
         awbConfident: false,
         recipientName: "Liliana Radu",
-        awbRaw: { recipient_name: "Liliana Radu" }, // the LABEL prints her name
+        awbRaw: { recipient_name: "Liliana Radu" }, // name only — no number, no Hub
         invoiceRaw: { order_number: "480700" },
       }),
     ]);
-    expect(groups).toEqual([
-      { awbIndex: 0, invoiceIndices: [1] },
-      { awbIndex: 2, invoiceIndices: [2] },
-    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(unpaired).toEqual([2]);
   });
 
   it("a phantom label on an invoice photo never anchors a pair — the missing AWB is exposed", () => {
@@ -398,8 +408,11 @@ describe("linkDocuments — degenerate stacks", () => {
     expect(unpaired).toEqual([0, 1, 2]);
   });
 
-  it("a combined with a printed label recipient but unreadable digits still anchors its pair", () => {
-    const { groups } = linkDocuments([
+  it("a combined with a recipient name but unreadable digits no longer anchors — goes unpaired", () => {
+    // Was 'still anchors its pair'. Operator rule 2026-06-24: no usable AWB
+    // number (and no Hub) → not a real label → must not anchor. The phantom
+    // label photo and the invoice both surface as unpaired.
+    const { groups, unpaired } = linkDocuments([
       doc(0, "combined", {
         awbConfident: false,
         recipientName: "Mihai Popa",
@@ -408,7 +421,8 @@ describe("linkDocuments — degenerate stacks", () => {
       }),
       doc(1, "invoice", { recipientName: "Mihai Popa" }),
     ]);
-    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(groups).toEqual([]);
+    expect(unpaired.slice().sort((a, b) => a - b)).toEqual([0, 1]);
   });
 
   it("a nameless invoice photo between two shipments is never guessed — unpaired", () => {
@@ -562,9 +576,12 @@ describe("sameAddress / parseAddress — true street+number identity", () => {
     expect(sameAddress("Stere 110", "Constantin Stere 110")).toBe(true);
   });
 
-  it("tolerates a dropped number only on a COMPLETE street match", () => {
-    expect(sameAddress("Str Constantin Stere, Bucov", "Constantin Stere 110, Bucov")).toBe(true);
-    expect(sameAddress("Str Tineretului, Bucov", "Constantin Stere 110, Bucov")).toBe(false);
+  it("requires a real house number on BOTH sides — a numberless side never binds", () => {
+    // Operator rule 2026-06-24: a numberless landmark blob must not bind by a
+    // shared (often generic) street name like "Principala". Both sides need a
+    // parseable house number, and the numbers must match.
+    expect(sameAddress("Str Constantin Stere, Bucov", "Constantin Stere 110, Bucov")).toBe(false);
+    expect(sameAddress("Constantin Stere 110, Bucov", "Constantin Stere 110, Bucov")).toBe(true);
   });
 
   it("never matches on boilerplate or locality tokens alone", () => {
@@ -621,5 +638,60 @@ describe("linkDocuments — same-town stranger never glues onto a foreign AWB", 
     ]);
     expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
     expect(unpaired).toEqual([]);
+  });
+});
+
+describe("linkDocuments — regression: the live failures of 2026-06-24", () => {
+  it("BUG A: a 'combined' with no AWB number never becomes a blank-AWB pair (VIRGILIU NICOLESCU)", () => {
+    // The model decorated a plain invoice with a phantom report_awb that had
+    // NO awb_number and copied the buyer into recipient_name. It used to
+    // self-pair into a ready pair with a blank AWB. Now it is demoted and,
+    // with no real same-name AWB, surfaces as unpaired.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        recipientName: "VIRGILIU NICOLESCU",
+        awbRaw: { recipient_name: "VIRGILIU NICOLESCU" }, // name only — no number, no Hub
+        invoiceNumber: "I26 M004 004260005231",
+        invoiceRaw: {
+          invoice_number: "I26 M004 004260005231",
+          buyer_name: "VIRGILIU NICOLESCU",
+          invoice_total_gross: 250,
+        },
+      }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0]);
+  });
+
+  it("BUG B: a landmark-blob AWB does not vacuum up same-street strangers (AWB 004205970)", () => {
+    // AWB recipient is "Ilinca Cristina" at "Str. Principala 687a …, Dambovita".
+    // Two foreign invoices (Ion Popa in Gornet, Cristina Pigul in Strejnicu)
+    // are on a street ALSO called "Principala" but in different villages with
+    // different house numbers. Only Cristina Ilinca (name match) belongs.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "awb", {
+        awbNumber: "004205970",
+        recipientName: "Ilinca Cristina Cristina Ilinca",
+        recipientAddress:
+          "Str. Principala 687a Parcare, Trecere Pieton. Vizavi Monument I. L. Caragiale, Dambovita 137255",
+      }),
+      doc(1, "invoice", {
+        recipientName: "Ion Popa",
+        recipientAddress: "Principala 755, Magurele Prahova, Gornet",
+        invoiceNumber: "0042600062736",
+      }),
+      doc(2, "invoice", {
+        recipientName: "Cristina Ilinca",
+        recipientAddress: "Principala 12, I. L. Caragiale, Dambovita",
+        invoiceNumber: "0042600062455",
+      }),
+      doc(3, "invoice", {
+        recipientName: "Cristina Pigul",
+        recipientAddress: "Principala 211, Strejnicu, Prahova",
+        invoiceNumber: "0042600062951",
+      }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [2] }]);
+    expect(unpaired.slice().sort((a, b) => a - b)).toEqual([1, 3]);
   });
 });

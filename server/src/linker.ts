@@ -205,7 +205,14 @@ export function parseAddress(s: string | null): { street: Set<string>; number: s
   let number: string | null = null;
   let numberPos = raw.length;
   for (let i = 0; i < raw.length; i++) {
-    if (/^\d{1,4}$/.test(raw[i]!)) {
+    // House numbers are 1-4 digits with an OPTIONAL trailing letter ("687a",
+    // "12b") — Romanian addresses use these constantly. Without the letter,
+    // "687a" was read as no-number-at-all, which collapsed the whole address
+    // to a bare street name and false-matched any same-street delivery (live:
+    // AWB 004205970 on "Str. Principala 687a" glued on invoices from Gornet
+    // and Strejnicu, also on a "Principala"). A 5-6 digit postal code is still
+    // never a house number.
+    if (/^\d{1,4}[a-z]?$/.test(raw[i]!)) {
       number = raw[i]!;
       numberPos = i;
       break;
@@ -232,16 +239,16 @@ export function sameAddress(a: string | null, b: string | null): boolean {
   const pa = parseAddress(a);
   const pb = parseAddress(b);
   if (pa.street.size === 0 || pb.street.size === 0) return false;
-  // Without a house number on EITHER side we cannot tell where the street
-  // name ends and the (unbounded, un-stopwordable) town begins, so a
-  // town-only string like "Bucov" would survive as a lone "street" token and
-  // false-match. Require a number on at least one side to anchor the parse;
-  // numberless addresses fall through to the human (unpaired), which is safe.
-  if (pa.number === null && pb.number === null) return false;
-  const streetScore = overlapScore(pa.street, pb.street);
-  if (streetScore < STREET_MATCH) return false;
-  if (pa.number !== null && pb.number !== null) return pa.number === pb.number;
-  return streetScore === 1;
+  // Require a real house number on BOTH sides, and require them to be EQUAL.
+  // A landmark blob with no parseable number (e.g. "Vizavi Monument …") must
+  // never bind by a shared street name alone — street names like "Principala"
+  // are shared by every delivery in a village, so the old "one number missing
+  // → a complete street match is enough" branch glued strangers together
+  // (live: AWB 004205970). No number on a side → fall through to the human
+  // (unpaired), which the operator prefers over a wrong pair. (Rule 2026-06-24.)
+  if (pa.number === null || pb.number === null) return false;
+  if (overlapScore(pa.street, pb.street) < STREET_MATCH) return false;
+  return pa.number === pb.number;
 }
 
 /** Usable digits of a doc's AWB read, or null when the read is noise:
@@ -270,15 +277,19 @@ function nameScore(a: DocInfo, b: DocInfo): number {
  * or its own printed recipient/phone/address/hub.
  */
 function awbSubstance(d: DocInfo): boolean {
+  // A REAL courier label proves itself with a COURIER-ONLY signal: a usable
+  // AWB number, or the destination "Hub" line. Recipient name / address /
+  // phone are NOT proof — they are printed on invoices too, and the model
+  // copies the invoice buyer into a phantom report_awb on a plain invoice
+  // (live blank-AWB "pairs": VIRGILIU NICOLESCU, GPS AUTOMATION, Persoana
+  // Fizica — invoices with no real label). Requiring a courier-only signal
+  // sends a label-less invoice to the unpaired strip instead of letting it
+  // anchor a pair with no AWB, which is exactly the operator's rule
+  // ("daca nu au awb sa le lase la documente fara pereche", 2026-06-24).
   if (awbDigits(d) !== null) return true;
   const r = (d.awbRaw ?? {}) as Record<string, unknown>;
   const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
-  return (
-    text(r.recipient_name) !== "" ||
-    text(r.recipient_phone) !== "" ||
-    text(r.recipient_address) !== "" ||
-    text(r.hub_destination) !== ""
-  );
+  return text(r.hub_destination) !== "";
 }
 
 /**
@@ -335,12 +346,20 @@ function invoiceSubstance(d: DocInfo): boolean {
  * its own (the self-pair convention the extractor already understands).
  */
 export function linkDocuments(docs: DocInfo[]): LinkResult {
-  // Normalize FIRST: a "combined" whose AWB half identifies nothing
-  // label-like is an INVOICE the model decorated with a phantom label
-  // (avize and invoice headers print Standard/km/codes too). Letting it
-  // act as an anchor would build a pair with NO AWB in it — so it is
-  // demoted to a plain invoice before any anchoring happens.
-  docs = docs.map((d) => (d.type === "combined" && !awbSubstance(d) ? { ...d, type: "invoice" } : d));
+  // Normalize FIRST: an awb/combined photo whose AWB half carries no
+  // courier-only signal (no usable AWB number, no destination Hub) is NOT a
+  // real label — it is an invoice the model decorated with a phantom
+  // report_awb (avize and invoice headers print Standard/km/codes too, and
+  // the model copies the buyer into recipient_name). Letting it act as an
+  // anchor builds a pair with NO AWB in it, so it is demoted to a plain
+  // invoice before any anchoring happens. It then binds to its real shipment
+  // by name/address, or surfaces as unpaired for a human — never a blank-AWB
+  // pair. (Covers BOTH "combined" and "awb" mis-reads; rule 2026-06-24.)
+  docs = docs.map((d) =>
+    (d.type === "combined" || d.type === "awb") && !awbSubstance(d)
+      ? { ...d, type: "invoice" }
+      : d,
+  );
 
   const anchorsIn = docs
     .filter((d) => d.type === "awb" || d.type === "combined")
