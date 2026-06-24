@@ -25,12 +25,14 @@
  *   DELETE /pairs                — clear the entire queue.
  */
 
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   deleteAllPairs,
   deletePair,
   deletePairsByDay,
+  detachInvoiceImage,
   getPair,
   getPairImage,
   insertPair,
@@ -41,7 +43,11 @@ import {
 import { suggestPairs, SUGGEST_MAX_IMAGES } from "../classify.js";
 import { COLLABORATORS, type Collaborator } from "../tariffs.js";
 import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
-import type { Routing } from "../schema.js";
+import type { Extracted, Routing } from "../schema.js";
+import { buildPricingInput } from "../pipeline.js";
+import { calculatePrice } from "../pricing.js";
+import { verifyShipment } from "../verify.js";
+import { scrapingdogConfigured } from "../scrapingdog.js";
 import { STORES } from "../stores.js";
 import {
   geocode,
@@ -320,6 +326,108 @@ export default async function pairRoutes(app: FastifyInstance) {
         error: "AI-ul nu a putut sugera perechi acum — încearcă din nou.",
       });
     }
+  });
+
+  /* ── Detach a wrongly-matched invoice → back to the unpaired pool ─ */
+  // The linker pairs invoices to an AWB by the recipient name/address on the
+  // paper. When the operator disagrees with a match, this pulls ONE invoice
+  // out of a ready pair: it becomes its own "unpaired" document (so it can be
+  // re-paired later), and the source pair is re-priced + re-verified without
+  // it. Pricing DOES depend on the invoices (macara / descărcare / voluminos
+  // aggregate across them), so the re-price is mandatory, not cosmetic.
+  app.post<{ Params: { id: string } }>("/pairs/:id/detach-invoice", async (req, reply) => {
+    const parsed = z.object({ invoiceIndex: z.number().int().nonnegative() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.toString() });
+    }
+    const { invoiceIndex } = parsed.data;
+
+    const pair = getPair(req.params.id);
+    if (!pair) return reply.code(404).send({ error: `No pair ${req.params.id}.` });
+    if (pair.status.kind !== "ready") {
+      return reply.code(422).send({ error: "Doar perechile calculate au facturi de scos." });
+    }
+    const status = pair.status;
+    const invoices = status.edits.invoices;
+    if (invoices.length === 0) {
+      return reply.code(422).send({ error: "Perechea nu are facturi." });
+    }
+    if (invoiceIndex >= invoices.length) {
+      return reply.code(422).send({ error: `Index factură invalid (${invoiceIndex}).` });
+    }
+
+    // 1) Pull the invoice's image out (move when cleanly mapped, else copy).
+    const detached = detachInvoiceImage(req.params.id, invoiceIndex, invoices.length);
+    if (!detached) {
+      return reply.code(422).send({ error: "Perechea nu are imagini — nimic de scos." });
+    }
+
+    // 2) Stand the pulled invoice up as its own unpaired document so the
+    //    operator can re-pair it (or delete it) from the unpaired strip.
+    const unpaired = insertPair({
+      id: randomUUID(),
+      day: pair.day,
+      collaborator: pair.collaborator,
+      status: { kind: "unpaired", docType: "invoice" },
+      images: [
+        {
+          name: detached.name,
+          mimeType: detached.mimeType,
+          size: detached.size,
+          bytes: detached.bytes,
+        },
+      ],
+    });
+
+    // 3) Re-price the source pair without that invoice. Reuse the already
+    //    resolved routing (no new Mapbox call) and carry the macara→normal
+    //    override forward so it survives the edit.
+    const newExtracted: Extracted = {
+      ...status.edits,
+      invoices: invoices.filter((_, i) => i !== invoiceIndex),
+    };
+    const distanceKm = status.routing?.distanceKm ?? newExtracted.awb.distance_extra_km;
+    const macaraStore = status.routing?.store ?? status.store ?? null;
+    const breakdown = calculatePrice({
+      ...buildPricingInput(newExtracted, status.service, {
+        distanceKm,
+        weekendBasis: pair.day,
+        macaraStore,
+      }),
+      macaraForceNormal: status.breakdown.macara?.forcedNormal ?? false,
+    });
+
+    // 4) Re-verify the remaining invoices. The old verification indexed the
+    //    now-removed invoice, so it would be stale — recompute when we can,
+    //    otherwise drop it rather than show wrong item rows.
+    let verification = status.verification;
+    if (scrapingdogConfigured()) {
+      try {
+        verification = await verifyShipment(newExtracted);
+      } catch (err) {
+        req.log.warn({ err, pair: req.params.id }, "detach-invoice: re-verify failed — dropped stale verification");
+        verification = undefined;
+      }
+    } else {
+      verification = undefined;
+    }
+
+    persistPairStatus(req.params.id, {
+      kind: "ready",
+      service: status.service,
+      serviceFallback: status.serviceFallback,
+      edits: newExtracted,
+      breakdown,
+      store: status.store,
+      routing: status.routing,
+      verification,
+    });
+
+    req.log.info(
+      { pair: req.params.id, invoiceIndex, moved: detached.moved, unpaired: unpaired.id },
+      "detach-invoice: invoice sent back to the unpaired pool",
+    );
+    return reply.send({ pair: getPair(req.params.id), unpaired });
   });
 
   /* ── Create ───────────────────────────────────────────────────── */

@@ -8,7 +8,7 @@ import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { extractAndPrice, reprice, scanBatch, verifyProducts } from "./lib/api";
+import { detachInvoice as detachInvoiceApi, extractAndPrice, reprice, scanBatch, verifyProducts } from "./lib/api";
 import {
   deletePair,
   deletePairsByDay,
@@ -582,6 +582,25 @@ export default function App() {
       }
     },
     [selectedDay],
+  );
+
+  /**
+   * Remove a wrongly-matched invoice from a ready pair. The server detaches
+   * it into a new "unpaired" document and re-prices the source pair without
+   * it; we apply both results locally for instant feedback (the SSE echoes
+   * are idempotent: the source pair merges by last-write-wins, the new
+   * unpaired row merges by id). Resolves on success, rejects on failure so
+   * the detail view can surface the error.
+   */
+  const detachInvoice = useCallback(
+    async (pairId: string, invoiceIndex: number) => {
+      const { pair, unpaired } = await detachInvoiceApi(pairId, invoiceIndex);
+      const cur = pairsRef.current;
+      let next = cur.map((p) => (p.id === pair.id ? pair : p));
+      if (!next.some((p) => p.id === unpaired.id)) next = [...next, unpaired];
+      commit(next);
+    },
+    [commit],
   );
 
   const removePair = useCallback(
@@ -1323,6 +1342,7 @@ export default function App() {
             collaborator={selectedPair.collaborator ?? selectedCollaborator}
             verifying={verifyingIds.has(selectedPair.id)}
             onPatch={(patch) => patchPair(selectedPair.id, patch)}
+            onDetachInvoice={(invoiceIndex) => detachInvoice(selectedPair.id, invoiceIndex)}
             onBack={() => setSelectedId(null)}
             onRemove={() => removePair(selectedPair.id)}
           />

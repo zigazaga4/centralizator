@@ -35,6 +35,26 @@ export function distanceBucket(distanceKm: number): DistanceBucket {
 }
 
 /**
+ * Does the Mapbox-routed distance push the shipment into a HIGHER price
+ * bracket than the AWB's printed km? This is the operator's km-alert rule
+ * (2026-06-24): a km discrepancy only matters when it would change the
+ * tariff. Concretely:
+ *   • map km ≤ AWB km            → never alert (closer/equal is harmless;
+ *                                   the AWB km is always what we bill).
+ *   • map km > AWB km, SAME bucket → no alert (e.g. AWB 21 → map 24, both
+ *                                   in the 20-30 km bracket — same price).
+ *   • map km > AWB km, HIGHER bucket → ALERT (e.g. AWB 21 → map 31: 20-30
+ *                                   crosses into 30-50, a different tariff).
+ * Buckets are monotonic in km, so "larger AND different bucket" is exactly
+ * "lands in a more expensive bracket".
+ */
+export function distanceTariffEscalates(awbKm: number, mapboxKm: number): boolean {
+  if (!Number.isFinite(awbKm) || !Number.isFinite(mapboxKm)) return false;
+  if (mapboxKm <= awbKm) return false;
+  return distanceBucket(mapboxKm) !== distanceBucket(awbKm);
+}
+
+/**
  * Romanian weekend = Saturday (6) or Sunday (0).
  * Accepts either a Date or an ISO-style `YYYY-MM-DD` string. Uses the
  * UTC weekday — calendar days don't shift across CET/CEST boundaries

@@ -36,6 +36,7 @@ import {
   distancesToStores,
   type LngLat,
 } from "./mapbox.js";
+import { distanceBucket, distanceTariffEscalates } from "./buckets.js";
 import type { Extracted, Routing } from "./schema.js";
 
 export type { Routing } from "./schema.js";
@@ -44,14 +45,6 @@ export type { Routing } from "./schema.js";
 function round1(x: number): number {
   return Math.round(x * 10) / 10;
 }
-
-/**
- * How far the Mapbox-routed km may stray from the AWB's printed km before
- * it raises a warning. The operator's rule is "any difference", so this is
- * 0 by default; the tiny epsilon in the comparison only absorbs float noise
- * between two values that are each already rounded to 0.1 km.
- */
-const KM_WARN_TOLERANCE = Number(process.env.KM_WARN_TOLERANCE ?? 0);
 
 function storeLngLat(key: StoreKey): LngLat {
   const s = STORES[key];
@@ -174,12 +167,15 @@ export async function resolveRouting(extracted: Extracted): Promise<Routing> {
 
     const mapboxKm = round1(km);
     // The billed distance is ALWAYS the AWB's printed km — Mapbox never
-    // replaces it. We only reconcile the two: the operator wants ANY
-    // difference flagged, so a mismatch rides on the warning component.
+    // replaces it. We only reconcile the two, and we only ALERT when the
+    // discrepancy would change the tariff: the routed distance lands in a
+    // higher price bracket than the AWB km (operator rule, 2026-06-24). A
+    // map distance that is smaller, or larger-but-in-the-same-bracket
+    // (e.g. AWB 21 → map 24, both 20-30 km), is shown but never alarms.
     const kmDiff = round1(mapboxKm - awbKm);
-    const kmWarning = Math.abs(kmDiff) > KM_WARN_TOLERANCE + 1e-9;
+    const kmWarning = distanceTariffEscalates(awbKm, mapboxKm);
     const kmNote = kmWarning
-      ? `Mapbox a calculat ${mapboxKm} km față de ${awbKm} km de pe AWB — s-a folosit km de pe AWB.`
+      ? `Mapbox a calculat ${mapboxKm} km față de ${awbKm} km de pe AWB — alt prag de tarifare (${distanceBucket(awbKm)} → ${distanceBucket(mapboxKm)}). S-a folosit km de pe AWB.`
       : null;
     return {
       store,

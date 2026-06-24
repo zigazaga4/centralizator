@@ -829,6 +829,92 @@ export function putCachedLmProduct(p: LmProduct): void {
   });
 }
 
+/**
+ * Pull the image that belongs to one invoice out of a pair, for the
+ * "remove a wrongly-matched invoice" flow. Images are stored AWB-first
+ * (slot 0), then one per invoice in `edits.invoices` order — so invoice
+ * `invoiceIndex` lives at slot `invoiceIndex + 1` WHEN the slot count
+ * matches (1 AWB + one image per invoice).
+ *
+ *   • clean 1:1 mapping  → MOVE that slot out (delete it, renumber the
+ *                          rest down) and report `moved: true`.
+ *   • combined / deduped → we cannot safely identify a single invoice's
+ *                          own image (one photo carries AWB + invoice, or
+ *                          two photos collapsed to one invoice). COPY the
+ *                          closest image, leave the pair's images intact,
+ *                          and report `moved: false`.
+ *
+ * Returns the chosen image's bytes so the caller can stand up a new
+ * "unpaired" row from it. `null` only if the pair has no images at all.
+ */
+export interface DetachedImage {
+  name: string;
+  mimeType: string;
+  size: number;
+  bytes: Buffer;
+  /** true = the image was removed from the source pair; false = copied. */
+  moved: boolean;
+}
+
+export function detachInvoiceImage(
+  pairId: string,
+  invoiceIndex: number,
+  invoiceCount: number,
+): DetachedImage | null {
+  const rows = stmt.selectImagesByPair.all(pairId); // ordered by slot ASC
+  if (rows.length === 0) return null;
+
+  // Clean per-invoice images: exactly AWB + one photo per invoice.
+  const onePerInvoice = rows.length === invoiceCount + 1;
+  if (onePerInvoice) {
+    const slot = invoiceIndex + 1;
+    const row = rows.find((r) => r.slot === slot);
+    if (row) {
+      // Remove that slot and re-lay the rest as a contiguous 0..n-1 run.
+      // We delete every image for the pair and re-insert the keepers with
+      // fresh slot numbers — bulletproof against any transient PK collision
+      // a in-place "shift slots down" UPDATE could hit, and cheap (one rare
+      // manual action over a handful of small BLOBs).
+      const keep = rows.filter((r) => r.slot !== slot).sort((a, b) => a.slot - b.slot);
+      const tx = db.transaction(() => {
+        stmt.deleteImagesByPair.run(pairId);
+        for (let i = 0; i < keep.length; i++) {
+          const k = keep[i]!;
+          stmt.insertImage.run({
+            pair_id: pairId,
+            slot: i,
+            name: k.name,
+            mime_type: k.mime_type,
+            size: k.size,
+            bytes: k.bytes,
+          });
+        }
+      });
+      tx();
+      return {
+        name: row.name,
+        mimeType: row.mime_type,
+        size: row.size,
+        bytes: row.bytes,
+        moved: true,
+      };
+    }
+  }
+
+  // Fallback: combined photo or a dedup mismatch — copy the closest image
+  // (the matching slot if present, else the AWB/only photo) without removing
+  // anything from the source pair.
+  const wantSlot = rows.length > 1 ? Math.min(invoiceIndex + 1, rows.length - 1) : 0;
+  const row = rows.find((r) => r.slot === wantSlot) ?? rows[0]!;
+  return {
+    name: row.name,
+    mimeType: row.mime_type,
+    size: row.size,
+    bytes: row.bytes,
+    moved: false,
+  };
+}
+
 /** Close the DB handle. Wired to the server's shutdown hooks so WAL
  *  is checkpointed cleanly on SIGINT/SIGTERM. */
 export function closeDb(): void {

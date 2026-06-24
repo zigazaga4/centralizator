@@ -39,6 +39,9 @@ interface Props {
   /** True while this pair's Leroy Merlin product check is in flight. */
   verifying?: boolean;
   onPatch: (patch: PairPatch) => void;
+  /** Remove a wrongly-matched invoice (by its index in `edits.invoices`)
+   *  from this pair, sending it back to the unpaired documents. */
+  onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
   onBack: () => void;
   onRemove: () => void;
 }
@@ -65,6 +68,7 @@ export function PairDetail({
   collaborator,
   verifying,
   onPatch,
+  onDetachInvoice,
   onBack,
   onRemove,
 }: Props) {
@@ -107,6 +111,7 @@ export function PairDetail({
                 city={city}
                 collaborator={collaborator}
                 onPatch={onPatch}
+                onDetachInvoice={onDetachInvoice}
               />
               {(verification || routing) && (
                 <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
@@ -424,6 +429,7 @@ function Spreadsheet({
   city,
   collaborator,
   onPatch,
+  onDetachInvoice,
 }: {
   data: Extracted;
   service: Service;
@@ -433,9 +439,26 @@ function Spreadsheet({
   city: CityKey;
   collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
+  onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
 }) {
   let row = 0;
   const r = () => ++row;
+  // Per-invoice "remove from pair" flow: first click arms a confirm on that
+  // index, second click detaches it. `detaching` disables the row mid-call.
+  const [confirmDetach, setConfirmDetach] = useState<number | null>(null);
+  const [detaching, setDetaching] = useState<number | null>(null);
+  const runDetach = async (i: number) => {
+    if (!onDetachInvoice) return;
+    setDetaching(i);
+    try {
+      await onDetachInvoice(i);
+    } catch (err) {
+      console.error("detach invoice failed:", err);
+    } finally {
+      setDetaching(null);
+      setConfirmDetach(null);
+    }
+  };
   // Each city now maps to exactly one dispatch site (the four series
   // from `PRETURI COLABORATORI.ods` are top-level options, not stacked
   // under "Iași"). One coral TOTAL CLIENT row at the bottom.
@@ -631,6 +654,49 @@ function Spreadsheet({
         return (
           <div key={i}>
             <Section title={heading} />
+            {onDetachInvoice && (
+              <div className={`${ROW_GRID} border-b border-ink-200 bg-canvas-50`}>
+                <div className="border-r border-ink-200 bg-canvas-100" />
+                <div className="col-span-2 flex flex-wrap items-center justify-end gap-2 px-3 py-1.5">
+                  {confirmDetach === i ? (
+                    <>
+                      <span className="text-[11px] text-coral-700">
+                        Scoți factura din pereche? Merge în „documente fără pereche”.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void runDetach(i)}
+                        disabled={detaching === i}
+                        className="rounded-md border border-coral-400 bg-coral-500 px-2.5 py-1 text-xs font-semibold text-canvas-50 transition hover:bg-coral-600 disabled:opacity-60"
+                      >
+                        {detaching === i ? "Se scoate…" : "Da, scoate"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDetach(null)}
+                        disabled={detaching === i}
+                        className="rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-xs text-ink-700 transition hover:border-ink-400 disabled:opacity-60"
+                      >
+                        Anulează
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDetach(i)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-xs text-ink-600 transition hover:border-coral-400 hover:text-coral-700"
+                      title="Scoate această factură din pereche și trimite-o în documente fără pereche"
+                    >
+                      <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                      Scoate factura din pereche
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             {rows}
             {inv.items.length > 0 && (
               <>

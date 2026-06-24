@@ -1,4 +1,5 @@
-import type { CollaboratorKey, CompareReport, Extracted, ExtractResponse, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
+import type { CollaboratorKey, CompareReport, Extracted, ExtractResponse, Pair, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
+import { wirePairToClient, type WirePair } from "./db";
 
 /**
  * In dev, Vite proxies /api/* to the Fastify server on localhost:3000.
@@ -106,6 +107,36 @@ export async function suggestPairs(ids: string[]): Promise<PairSuggestion[]> {
   }
   const data = (await res.json()) as { suggestions: PairSuggestion[] };
   return data.suggestions;
+}
+
+/**
+ * Pull one wrongly-matched invoice out of a ready pair. The invoice becomes
+ * its own "unpaired" document (so the operator can re-pair or delete it) and
+ * the source pair is re-priced + re-verified server-side without it. Returns
+ * both the updated source pair and the new unpaired document, already in the
+ * client `Pair` shape so the caller can apply them to the queue immediately
+ * (the SSE feed echoes the same changes to every other client).
+ */
+export async function detachInvoice(
+  pairId: string,
+  invoiceIndex: number,
+): Promise<{ pair: Pair; unpaired: Pair }> {
+  const res = await fetch(`${BASE}/pairs/${encodeURIComponent(pairId)}/detach-invoice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ invoiceIndex }),
+  });
+  if (!res.ok) {
+    let msg: string | null = null;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg ?? `detach-invoice failed (${res.status})`);
+  }
+  const data = (await res.json()) as { pair: WirePair; unpaired: WirePair };
+  return { pair: wirePairToClient(data.pair), unpaired: wirePairToClient(data.unpaired) };
 }
 
 export async function reprice(req: PricingRequest): Promise<PricingBreakdown> {
