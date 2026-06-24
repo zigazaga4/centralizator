@@ -172,6 +172,20 @@ const MIGRATIONS: { version: number; up: string }[] = [
       CREATE INDEX IF NOT EXISTS pairs_collaborator_idx ON pairs(collaborator);
     `,
   },
+  {
+    // v5 — per-day weekend override.
+    //   The operator can mark a filing day as a "weekend" so every pair
+    //   priced under it carries the +11,90 surcharge regardless of the
+    //   calendar (a holiday, or a Saturday-rate run filed on a weekday).
+    //   One row per forced day; the absence of a row = derive from the date.
+    version: 5,
+    up: `
+      CREATE TABLE IF NOT EXISTS day_flags (
+        day           TEXT    PRIMARY KEY,
+        force_weekend INTEGER NOT NULL DEFAULT 0
+      );
+    `,
+  },
 ];
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -405,6 +419,17 @@ const stmt = {
     `DELETE FROM pair_images WHERE pair_id IN (SELECT id FROM pairs WHERE day = ?)`,
   ),
   deleteDayPairs: db.prepare(`DELETE FROM pairs WHERE day = ?`),
+  selectWeekendDay: db.prepare<[string], { force_weekend: number }>(
+    `SELECT force_weekend FROM day_flags WHERE day = ?`,
+  ),
+  selectWeekendDays: db.prepare<[], { day: string }>(
+    `SELECT day FROM day_flags WHERE force_weekend = 1 ORDER BY day`,
+  ),
+  upsertWeekendDay: db.prepare(
+    `INSERT INTO day_flags (day, force_weekend) VALUES (@day, @force)
+       ON CONFLICT(day) DO UPDATE SET force_weekend = @force`,
+  ),
+  deleteWeekendDay: db.prepare(`DELETE FROM day_flags WHERE day = ?`),
   selectLmProduct: db.prepare<[string], LmProductRow>(
     `SELECT query, found, url, name, brand, price_buc, weight_kg, area_m2, dims_mm, fetched_at
        FROM lm_products WHERE query = ?`,
@@ -762,6 +787,37 @@ export function deletePairsByDay(day: string): number {
   tx();
   for (const id of ids) publishPairEvent({ type: "pair-deleted", id });
   return ids.length;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Per-day weekend override
+ *
+ * A small key/value over the filing day: when a day carries
+ * `force_weekend = 1`, every pair priced under it gets the +11,90
+ * surcharge regardless of the calendar. The pricing pipeline reads
+ * `getWeekendDay(day)` so new scans on a forced day inherit it; the
+ * desktop toggles it via `setWeekendDay`.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** Is this filing day forced to weekend pricing? False when no row exists. */
+export function getWeekendDay(day: string): boolean {
+  const row = stmt.selectWeekendDay.get(day);
+  return !!row && row.force_weekend === 1;
+}
+
+/** Every filing day currently forced to weekend pricing (ISO, sorted). */
+export function getWeekendDays(): string[] {
+  return stmt.selectWeekendDays.all().map((r) => r.day);
+}
+
+/** Mark (or clear) a filing day as weekend. Clearing removes the row so
+ *  the table only ever holds the forced days. */
+export function setWeekendDay(day: string, force: boolean): void {
+  if (force) {
+    stmt.upsertWeekendDay.run({ day, force: 1 });
+  } else {
+    stmt.deleteWeekendDay.run(day);
+  }
 }
 
 /** Clear the entire queue (every day, every pair). The route layer

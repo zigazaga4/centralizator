@@ -215,6 +215,8 @@ export function buildPricingInput(
     distanceKm: number;
     weekendBasis: string;
     macaraStore: PricingInput["macaraStore"];
+    /** Operator's per-day weekend override (force the surcharge ON). */
+    forceWeekend?: boolean;
   },
 ): PricingInput {
   const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
@@ -225,6 +227,7 @@ export function buildPricingInput(
     distanceKm: opts.distanceKm,
     numDeliveries: extracted.awb.num_deliveries ?? 1,
     deliveryDate: opts.weekendBasis,
+    forceWeekend: opts.forceWeekend,
     bulkyUnits,
     hasOtherProducts,
     unloadingUnits: summariseUnloading(extracted),
@@ -246,6 +249,7 @@ export function buildPricingInput(
 export async function extractAndPrice(
   images: ImageInput[],
   filingDay?: string,
+  forceWeekend?: boolean,
 ): Promise<ExtractAndPriceResult> {
   let extracted: Extracted;
   try {
@@ -253,7 +257,7 @@ export async function extractAndPrice(
   } catch (err) {
     throw new PipelineError("vision", (err as Error).message);
   }
-  return priceExtracted(extracted, filingDay);
+  return priceExtracted(extracted, filingDay, forceWeekend);
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -323,6 +327,7 @@ export function assembleExtracted(
 export async function priceExtracted(
   extracted: Extracted,
   filingDay?: string,
+  forceWeekend?: boolean,
 ): Promise<ExtractAndPriceResult> {
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
 
@@ -351,6 +356,9 @@ export async function priceExtracted(
         // Macara rate table is per dispatch site; use the store the routing
         // step resolved (null falls back to the default table in the engine).
         macaraStore: routing.store ?? null,
+        // Per-day operator override: when the filing day is marked a weekend,
+        // every pair priced under it carries the surcharge regardless of date.
+        forceWeekend,
       }),
     );
   } catch (err) {

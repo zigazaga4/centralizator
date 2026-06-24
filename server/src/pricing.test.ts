@@ -121,8 +121,40 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     });
     expect(r.weekend).toBe(true);
     expect(r.weekendSurcharge).toBe(11.90);
+    expect(r.weekendForced).toBe(false); // derived from the date, not forced
     // base 24.20 + weekend 11.90 = 36.10
     expect(r.carrierTotal).toBe(36.10);
+  });
+
+  it("forceWeekend applies the 11.90 surcharge on a weekday (manual override)", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-05-18", // Monday — no weekend by the calendar
+      forceWeekend: true,
+    });
+    expect(r.weekend).toBe(true);
+    expect(r.weekendForced).toBe(true);
+    expect(r.weekendSurcharge).toBe(11.90);
+    // base 24.20 + forced weekend 11.90 = 36.10
+    expect(r.carrierTotal).toBe(36.10);
+  });
+
+  it("forceWeekend=false leaves a weekday unchanged", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-05-18", // Monday
+      forceWeekend: false,
+    });
+    expect(r.weekend).toBe(false);
+    expect(r.weekendForced).toBe(false);
+    expect(r.weekendSurcharge).toBe(0);
+    expect(r.carrierTotal).toBe(24.20);
   });
 
   // Per-city company commissions are applied to commissionBase ONLY

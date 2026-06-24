@@ -394,6 +394,10 @@ export interface PricingBreakdown {
   incrementKey: string;
   extraKm: number;
   weekend: boolean;
+  /** True when the weekend surcharge was forced ON by the operator's per-day
+   *  override (manual weekend) rather than derived from the delivery date.
+   *  Optional: breakdowns persisted before the override don't carry it. */
+  weekendForced?: boolean;
   baseTariff: number;
   extraKmCost: number;
   incrementTariff: number;
@@ -543,6 +547,10 @@ export interface PricingRequest {
    *  macara was detected — corrects a Leroy Merlin mis-tag. Carried across
    *  re-prices so the override sticks. Optional; default false. */
   macara_force_normal?: boolean;
+  /** Operator override forcing the weekend surcharge ON regardless of the
+   *  delivery date — set when the pair's filing day is marked a weekend.
+   *  Optional; default false. */
+  force_weekend?: boolean;
 }
 
 /* ──────────────────────────────────────────────────────────────────────

@@ -35,9 +35,12 @@ import {
   detachInvoiceImage,
   getPair,
   getPairImage,
+  getWeekendDay,
+  getWeekendDays,
   insertPair,
   listAllPairsLight,
   persistPairStatus,
+  setWeekendDay,
   type PairStatus,
 } from "../db.js";
 import { suggestPairs, SUGGEST_MAX_IMAGES } from "../classify.js";
@@ -131,6 +134,7 @@ const PricingBreakdownSchema = z
     incrementKey: z.string(),
     extraKm: z.number(),
     weekend: z.boolean(),
+    weekendForced: z.boolean().optional(),
     baseTariff: z.number(),
     extraKmCost: z.number(),
     incrementTariff: z.number(),
@@ -393,6 +397,9 @@ export default async function pairRoutes(app: FastifyInstance) {
         distanceKm,
         weekendBasis: pair.day,
         macaraStore,
+        // Keep the day's weekend override (or the pair's own forced flag) so
+        // detaching an invoice never silently drops the surcharge.
+        forceWeekend: getWeekendDay(pair.day) || (status.breakdown.weekendForced ?? false),
       }),
       macaraForceNormal: status.breakdown.macara?.forcedNormal ?? false,
     });
@@ -482,6 +489,28 @@ export default async function pairRoutes(app: FastifyInstance) {
     const ok = deletePair(req.params.id);
     if (!ok) return reply.code(404).send({ error: `No pair ${req.params.id}.` });
     return reply.code(204).send();
+  });
+
+  /* ── Per-day weekend override ─────────────────────────────────────
+   * GET returns every day currently forced to weekend pricing; PUT
+   * marks (or clears) one day. The pricing pipeline reads the flag so
+   * new scans on a forced day inherit the +11,90 surcharge; the desktop
+   * re-prices the day's existing pairs client-side on toggle. */
+  app.get("/pairs/weekend-days", async (_req, reply) => {
+    return reply.send({ days: getWeekendDays() });
+  });
+
+  app.put<{ Params: { day: string } }>("/pairs/day/:day/weekend", async (req, reply) => {
+    const { day } = req.params;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return reply.code(400).send({ error: `Invalid day '${day}': expected YYYY-MM-DD.` });
+    }
+    const parsed = z.object({ force: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.toString() });
+    }
+    setWeekendDay(day, parsed.data.force);
+    return reply.send({ day, force: parsed.data.force });
   });
 
   /* ── Clear one filing day (all stores + collaborators + unpaired) ─ */

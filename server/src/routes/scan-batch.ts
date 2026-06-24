@@ -27,7 +27,7 @@ import { dedupeByDhash } from "../dhash.js";
 import { assembleExtracted, priceExtracted } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
-import { insertPair, persistPairStatus, signalExtracting, type UnpairedDocType } from "../db.js";
+import { getWeekendDay, insertPair, persistPairStatus, signalExtracting, type UnpairedDocType } from "../db.js";
 import { COLLABORATORS, type Collaborator } from "../tariffs.js";
 
 const ACCEPTED_MIME = new Set([
@@ -143,7 +143,7 @@ async function processGroup(
       .map((i) => docs[i]?.invoiceRaw)
       .filter((r): r is Record<string, unknown> => r != null);
     const assembled = assembleExtracted(anchorDoc?.awbRaw ?? null, invoiceRaws, day);
-    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await priceExtracted(assembled, day);
+    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await priceExtracted(assembled, day, getWeekendDay(day));
     persistPairStatus(id, {
       kind: "ready",
       service: resolvedService,

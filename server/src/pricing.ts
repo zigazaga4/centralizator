@@ -147,6 +147,12 @@ export interface PricingInput {
    *  it so it prices on the normal tariff + commission. Default false (use the
    *  detected classification). */
   macaraForceNormal?: boolean;
+  /** Operator override: force the weekend surcharge ON regardless of what the
+   *  calendar says for `deliveryDate`. Lets the operator mark an ordinary
+   *  weekday as a weekend run (e.g. a holiday or a Saturday-rate delivery
+   *  filed on a weekday). When omitted, the surcharge keys off the date as
+   *  before. Default false. */
+  forceWeekend?: boolean;
 }
 
 /**
@@ -233,6 +239,11 @@ export interface PricingBreakdown {
   bulkyTransports: number;
   /** Whether the weekend surcharge was applied. */
   weekend: boolean;
+  /** True when the weekend surcharge was forced ON by the operator (manual
+   *  day override) rather than derived from the calendar date. Lets the UI
+   *  show that the weekend was set by hand and lets a re-price carry the
+   *  decision forward. */
+  weekendForced: boolean;
   /** Base tariff from BASE_TARIFFS (VAT included). For >1200kg orders
    *  this is the 800-1200kg standard row; the >1200kg overflow is
    *  billed via incrementCost. */
@@ -378,7 +389,10 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const totalIncrements = weightIncrements + (numDeliveries - 1) + bulkyTransports;
   const incrementCost = round2(totalIncrements * incrementTariff);
 
-  const weekend = isWeekend(deliveryDate);
+  // Weekend surcharge: the operator can force it ON for a weekday (holiday /
+  // Saturday-rate run); otherwise it keys off the delivery date as usual.
+  const weekendForced = input.forceWeekend === true;
+  const weekend = weekendForced || isWeekend(deliveryDate);
   const weekendSurcharge = weekend ? WEEKEND_SURCHARGE : 0;
 
   // Unloading fee ("descărcare") — a SEPARATE flat tax, not commissioned.
@@ -487,6 +501,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     bulkyUnits,
     bulkyTransports,
     weekend,
+    weekendForced,
     baseTariff: round2(baseTariff),
     extraKmCost,
     incrementTariff: round2(incrementTariff),

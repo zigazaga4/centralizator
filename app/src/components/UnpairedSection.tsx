@@ -165,10 +165,12 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
     return null;
   };
 
-  /** Manual "Creează perechea" — open the collaborator gate for the one
-   *  selected group; the pair is created on confirm. */
+  /** Manual "Creează perechea" — open the collaborator gate for the
+   *  selected group; the pair is created on confirm. One document is
+   *  allowed: a lone AWB (label without an invoice) still prices on its
+   *  own. Two+ is the normal AWB + invoice(s) case. */
   const pair = () => {
-    if (selected.length < 2 || pairing || pendingSend) return;
+    if (selected.length < 1 || pairing || pendingSend) return;
     setPendingSend({ kind: "manual", groups: [selected], initial: inheritedCollaborator(selected) });
   };
 
@@ -267,8 +269,8 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
               Împerechere manuală · {items.length} document{items.length === 1 ? "" : "e"}
             </h2>
             <p className="truncate text-[11px] text-ink-500">
-              Click pe imagine pentru zoom · bifează eticheta AWB și facturile aceluiași transport,
-              apoi apasă „Creează perechea”.
+              Click pe imagine pentru zoom · bifează eticheta AWB și facturile aceluiași transport
+              (sau doar un AWB singur, fără factură), apoi apasă „Creează perechea”.
             </p>
           </div>
           <button
@@ -387,21 +389,21 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
           <span className="text-sm text-ink-600">
             {selected.length === 0
               ? "Nimic selectat."
-              : `${selected.length} selectat${selected.length === 1 ? "" : "e"}${
-                  selected.length < 2 ? " — mai alege cel puțin un document." : ""
-                }`}
+              : selected.length === 1
+                ? "1 selectat — AWB singur, fără factură."
+                : `${selected.length} selectate.`}
           </span>
           <button
             type="button"
             onClick={() => void pair()}
-            disabled={selected.length < 2 || pairing}
+            disabled={selected.length < 1 || pairing}
             className="ml-auto inline-flex items-center gap-2 rounded-md bg-coral-500 px-4 py-1.5 text-sm font-medium text-canvas-50 shadow-sm transition hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400"
-            title="Creează o pereche din documentele selectate și calculeaz-o"
+            title="Creează o pereche din documentele selectate (un singur AWB e suficient) și calculeaz-o"
           >
             {pairing ? (
               <Spinner label="Creez perechea…" />
             ) : (
-              <span>Creează perechea{selected.length >= 2 ? ` (${selected.length})` : ""}</span>
+              <span>Creează perechea{selected.length >= 1 ? ` (${selected.length})` : ""}</span>
             )}
           </button>
         </footer>

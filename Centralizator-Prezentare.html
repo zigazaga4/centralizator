@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8" />
+<title>Centralizator — Prezentare</title>
+<style>
+  @page {
+    size: A4 landscape;
+    margin: 0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --green:   #46A610;
+    --green-d: #2E7D0E;
+    --green-x: #1F5A08;
+    --tint:    #EEF6E4;
+    --tint-2:  #F6FAEF;
+    --ink:     #1B2016;
+    --muted:   #6A7264;
+    --line:    #DCE3D2;
+    --cream:   #FCFCF8;
+    --amber:   #C9820B;
+  }
+
+  html { -weasy-hyphens: none; }
+  body {
+    font-family: "Helvetica Neue", Arial, "Liberation Sans", sans-serif;
+    color: var(--ink);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .slide {
+    position: relative;
+    width: 297mm;
+    height: 209.6mm;           /* a hair under 210 to avoid blank overflow pages */
+    padding: 17mm 20mm 15mm 20mm;
+    background: var(--cream);
+    page-break-after: always;
+    overflow: hidden;
+  }
+  .slide:last-child { page-break-after: auto; }
+
+  /* left accent rule on every content slide */
+  .slide.content::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 7mm;
+    background: var(--green);
+  }
+
+  .kicker {
+    font-size: 11px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--green-d);
+    font-weight: 700;
+    margin-bottom: 7px;
+  }
+  h1.title {
+    font-size: 30px;
+    line-height: 1.12;
+    color: var(--ink);
+    font-weight: 800;
+    letter-spacing: -0.4px;
+    margin-bottom: 12px;
+  }
+  .lead {
+    font-size: 14.5px;
+    color: var(--muted);
+    max-width: 230mm;
+    margin-bottom: 18px;
+  }
+  .pagenum {
+    position: absolute;
+    right: 16mm; bottom: 9mm;
+    font-size: 10px;
+    color: #A9B0A0;
+    letter-spacing: 1px;
+  }
+  .foot {
+    position: absolute;
+    left: 20mm; bottom: 9mm;
+    font-size: 10px;
+    color: #A9B0A0;
+    letter-spacing: 0.5px;
+  }
+
+  /* ---------- COVER ---------- */
+  .cover {
+    background: linear-gradient(135deg, #205407 0%, #2E7D0E 48%, #46A610 100%);
+    color: #fff;
+    padding: 0;
+  }
+  .cover .wrap {
+    position: absolute;
+    left: 22mm; top: 50%;
+    transform: translateY(-50%);
+    right: 22mm;
+  }
+  .cover .mark {
+    display: inline-block;
+    font-size: 12px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: #DBF3C4;
+    border: 1.5px solid rgba(255,255,255,0.45);
+    padding: 6px 14px;
+    border-radius: 30px;
+    margin-bottom: 26px;
+  }
+  .cover h1 {
+    font-size: 58px;
+    font-weight: 800;
+    letter-spacing: -1.2px;
+    line-height: 1;
+    margin-bottom: 16px;
+  }
+  .cover .sub {
+    font-size: 19px;
+    color: #EAF7DC;
+    font-weight: 400;
+    max-width: 200mm;
+    line-height: 1.4;
+  }
+  .cover .rule {
+    width: 64px; height: 5px; background: #BFE89A;
+    border-radius: 3px; margin: 22px 0;
+  }
+  .cover .meta {
+    position: absolute;
+    left: 22mm; bottom: 16mm;
+    font-size: 12px;
+    color: #CDEAB4;
+    letter-spacing: 0.5px;
+  }
+  .cover .meta b { color:#fff; font-weight:700; }
+  .cover .corner {
+    position: absolute;
+    right: 18mm; top: 16mm;
+    text-align: right;
+    font-size: 12px;
+    color: #DBF3C4;
+    letter-spacing: 1px;
+  }
+
+  /* ---------- generic layout helpers ---------- */
+  .cols { display: table; width: 100%; border-spacing: 0; }
+  .col  { display: table-cell; vertical-align: top; }
+  .gap  { width: 8mm; }
+
+  .card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 14px 16px;
+  }
+  .card.tint { background: var(--tint-2); }
+  .card h3 {
+    font-size: 14px;
+    color: var(--green-x);
+    margin-bottom: 5px;
+    font-weight: 800;
+  }
+  .card p { font-size: 12.5px; color: #41483B; }
+
+  ul.clean { list-style: none; }
+  ul.clean li {
+    position: relative;
+    padding-left: 18px;
+    margin-bottom: 9px;
+    font-size: 13px;
+    color: #2C3326;
+  }
+  ul.clean li::before {
+    content: "";
+    position: absolute; left: 0; top: 6px;
+    width: 8px; height: 8px; border-radius: 2px;
+    background: var(--green);
+  }
+  ul.clean li b { color: var(--ink); }
+
+  .big-num {
+    font-size: 26px; font-weight: 800; color: var(--green-d);
+    line-height: 1; letter-spacing:-0.5px;
+  }
+  .big-num span { font-size: 13px; font-weight: 600; color: var(--muted); }
+
+  /* pipeline */
+  .pipe { display: table; width: 100%; border-spacing: 0; margin-top: 4px; }
+  .pstep {
+    display: table-cell;
+    width: 18%;
+    vertical-align: top;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--green);
+    border-radius: 8px;
+    padding: 11px 11px;
+    text-align: left;
+  }
+  .pstep .n { font-size:10px; font-weight:800; color:var(--green); letter-spacing:1px; }
+  .pstep h4 { font-size: 12.5px; margin: 3px 0 4px; color: var(--ink); }
+  .pstep p  { font-size: 10.8px; color: var(--muted); line-height:1.35; }
+  .parrow {
+    display: table-cell;
+    width: 2.5%;
+    vertical-align: middle;
+    text-align: center;
+    color: var(--green);
+    font-size: 17px;
+    font-weight: 700;
+  }
+
+  .pill {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--green-x);
+    background: var(--tint);
+    border: 1px solid #CBE3B2;
+    border-radius: 20px;
+    padding: 3px 10px;
+    margin: 0 5px 6px 0;
+  }
+
+  /* formula block */
+  .formula {
+    font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 11px;
+    background: #15240C;
+    color: #DCEFCB;
+    border-radius: 9px;
+    padding: 14px 16px;
+    line-height: 1.7;
+  }
+  .formula .c { color: #8Fd05a; }
+  .formula .k { color: #fff; font-weight:700; }
+  .formula .m { color: #9FB890; }
+
+  table.tbl { width:100%; border-collapse: collapse; font-size: 11.5px; margin-top:6px; }
+  table.tbl th, table.tbl td { text-align:left; padding: 6px 8px; border-bottom:1px solid var(--line); }
+  table.tbl th { color: var(--green-x); font-size:10.5px; text-transform:uppercase; letter-spacing:0.5px; }
+  table.tbl td.num { font-family:"DejaVu Sans Mono", monospace; color:#2E7D0E; font-weight:700; }
+
+  .note {
+    font-size: 11px; color: var(--muted); margin-top: 10px;
+    border-left: 3px solid var(--green); padding-left: 10px;
+  }
+
+  .section-h {
+    font-size: 19px; font-weight: 800; color: var(--ink);
+    margin: 2px 0 12px; letter-spacing:-0.2px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ 1 · COVER ============ -->
+<section class="slide cover">
+  <div class="corner">PREZENTARE INTERNĂ · 2026</div>
+  <div class="wrap">
+    <span class="mark">Leroy Merlin · Livrări</span>
+    <h1>Centralizator</h1>
+    <div class="rule"></div>
+    <div class="sub">
+      Citește un AWB și facturile aferente, iar tariful exact de livrare este
+      calculat în câteva secunde — fără tabel Excel completat manual, fără
+      căutări în liste de prețuri, fără calcule de mână.
+    </div>
+  </div>
+  <div class="meta">
+    Tarifare automată a livrărilor &nbsp;·&nbsp; <b>Aplicație desktop + scaner Android</b> &nbsp;·&nbsp; 4 magazine
+  </div>
+</section>
+
+<!-- ============ 2 · THE PROBLEM ============ -->
+<section class="slide content">
+  <div class="kicker">Problema de astăzi</div>
+  <h1 class="title">Fiecare livrare este tarifată manual.</h1>
+  <p class="lead">
+    Pentru fiecare livrare, cineva citește AWB-ul și facturile, caută tariful
+    corect într-un fișier Excel mare, măsoară distanța și aplică un lanț de
+    suprataxe și comisioane — rând cu rând.
+  </p>
+
+  <div class="cols">
+    <div class="col card">
+      <h3>Lent</h3>
+      <p>Minute întregi pentru fiecare livrare. Un teanc cu livrările pe o zi ocupă un om ore în șir cu căutări repetitive și introdus date.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Predispus la erori</h3>
+      <p>Interval greșit de greutate sau distanță, o suprataxă de weekend uitată, un increment de peste 1200&nbsp;kg omis — fiecare tarifează greșit livrarea, în tăcere.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Fragmentat</h3>
+      <p>Câte un fișier separat pentru fiecare magazin, fiecare colaborator, fiecare comision de oraș. Cifrele se abat, iar nimeni nu deține o singură sursă de adevăr.</p>
+    </div>
+  </div>
+
+  <p class="note">
+    Logica de tarifare în sine este bine definită — se află în fișierele Excel
+    și în documentele de prețuri ale operatorului. Costul îl reprezintă
+    <b>timpul și greșelile umane</b> de a o rula manual, de sute de ori pe săptămână.
+  </p>
+  <div class="foot">CENTRALIZATOR</div>
+  <div class="pagenum">02</div>
+</section>
+
+<!-- ============ 3 · THE SOLUTION ============ -->
+<section class="slide content">
+  <div class="kicker">Ce face Centralizator</div>
+  <h1 class="title">Încarci documentele — primești prețul.</h1>
+  <p class="lead">
+    Operatorul încarcă (sau fotografiază) AWB-ul și facturile. Un model AI de
+    viziune citește fiecare câmp, sistemul calculează distanța reală pe șosea,
+    iar tariful exact este calculat și afișat — dintr-o singură trecere, în câteva secunde.
+  </p>
+
+  <div class="cols">
+    <div class="col" style="width:58%">
+      <ul class="clean">
+        <li><b>Citește documentele automat</b> — greutate, serviciu, data livrării, adrese, marfă voluminoasă și linii de descărcare, direct de pe AWB-ul și facturile scanate.</li>
+        <li><b>Aplică exact formulele operatorului</b> — aceleași tarife din fișierul Excel și documentele de prețuri, transpuse unu-la-unu într-un motor determinist.</li>
+        <li><b>Un singur ecran, o singură sursă de adevăr</b> — fiecare livrare, fiecare magazin, fiecare colaborator, într-o singură grilă live folosită de toată echipa.</li>
+        <li><b>Modifici orice, prețul se recalculează instant</b> — corectezi un câmp și totalul se recalculează fără apel AI și fără așteptare.</li>
+      </ul>
+    </div>
+    <div class="col gap"></div>
+    <div class="col" style="width:40%">
+      <div class="card tint" style="height:100%">
+        <h3>De la hârtie la preț</h3>
+        <p style="margin-bottom:10px">O sarcină care dura <b>minute de căutări manuale</b> durează acum o încărcare și câteva <b>secunde</b>.</p>
+        <div class="big-num">30s <span>pe livrare, de la cap la coadă</span></div>
+        <div style="height:12px"></div>
+        <div class="big-num">0 <span>căutări manuale în Excel</span></div>
+        <div style="height:12px"></div>
+        <div class="big-num">4 <span>magazine într-o aplicație</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">CENTRALIZATOR</div>
+  <div class="pagenum">03</div>
+</section>
+
+<!-- ============ 4 · HOW IT WORKS ============ -->
+<section class="slide content">
+  <div class="kicker">Cum funcționează</div>
+  <h1 class="title">Cinci etape, complet automate.</h1>
+  <p class="lead">
+    Fiecare livrare trece printr-un singur flux. Dacă serviciul de hărți are
+    vreo problemă, sistemul revine în siguranță la distanța tipărită pe AWB —
+    o livrare nu eșuează niciodată din cauza unui serviciu extern.
+  </p>
+
+  <div class="pipe">
+    <div class="pstep">
+      <div class="n">01 · CAPTARE</div>
+      <h4>AWB + facturi</h4>
+      <p>Trage și plasează pe desktop sau fotografiază teancul cu scanerul Android.</p>
+    </div>
+    <div class="parrow">→</div>
+    <div class="pstep">
+      <div class="n">02 · CITIRE</div>
+      <h4>Extragere AI</h4>
+      <p>Modelul de viziune Gemini citește fiecare câmp într-un contract de date strict, validat.</p>
+    </div>
+    <div class="parrow">→</div>
+    <div class="pstep">
+      <div class="n">03 · RUTARE</div>
+      <h4>Km reali pe șosea</h4>
+      <p>Identifică magazinul de origine și măsoară cea mai scurtă distanță rutieră până la livrare.</p>
+    </div>
+    <div class="parrow">→</div>
+    <div class="pstep">
+      <div class="n">04 · TARIFARE</div>
+      <h4>Tarif exact</h4>
+      <p>Motorul determinist aplică formulele operatorului — fără estimări, fără AI în calcule.</p>
+    </div>
+    <div class="parrow">→</div>
+    <div class="pstep">
+      <div class="n">05 · AFIȘARE</div>
+      <h4>Rezultat live</h4>
+      <p>Detaliere completă pe oraș și colaborator, sincronizată live pe toate dispozitivele.</p>
+    </div>
+  </div>
+
+  <div style="height:16px"></div>
+  <div class="cols">
+    <div class="col card">
+      <h3>AI citește — calculul nu estimează</h3>
+      <p>AI-ul este folosit <b>doar pentru a citi documentele</b>. Fiecare cifră din preț provine dintr-o formulă pură, testabilă — așa că aceeași livrare produce mereu același preț.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Distanță autocorectată</h3>
+      <p>Distanța facturată este ruta reală <b>magazin&nbsp;→&nbsp;livrare</b>. Dacă diferă de km tipăriți pe AWB, aplicația o semnalează pentru verificare.</p>
+    </div>
+  </div>
+  <div class="foot">CENTRALIZATOR</div>
+  <div class="pagenum">04</div>
+</section>
+
+<!-- ============ 5 · WHAT IT COMPUTES ============ -->
+<section class="slide content">
+  <div class="kicker">Exact ce calculează</div>
+  <h1 class="title">Tariful complet, fiecare componentă.</h1>
+
+  <div class="cols">
+    <div class="col" style="width:52%">
+      <p style="font-size:12.5px;color:#41483B;margin-bottom:8px">
+        Pentru fiecare livrare, motorul derivă prețul din documentele de prețuri
+        ale operatorului — tarif de bază după serviciu, greutate și distanță,
+        plus fiecare suprataxă:
+      </p>
+      <div class="formula">
+        <span class="m"># tarif de bază: serviciu × greutate × interval distanță</span><br>
+        <span class="k">baza</span>  = TARIF[ serviciu / greutate / distanță ]<br>
+        <span class="k">km</span>    = (km−50) × 1.90 × 2 × curse&nbsp;&nbsp;<span class="c">// &gt;50 km</span><br>
+        <span class="k">inc</span>   = ( trepteGreutate + curseExtra ) × tarifTreaptă<br>
+        <span class="k">wknd</span>  = 11.90&nbsp;&nbsp;<span class="c">// Sâm / Dum</span><br>
+        <span class="k">desc</span>  = nr × 210&nbsp;&nbsp;<span class="c">// taxă separată</span><br>
+        <span class="m">———————————————————————</span><br>
+        <span class="k">total</span> = baza + inc + wknd + km
+      </div>
+      <p class="note">
+        Încărcăturile grele (&gt;1200&nbsp;kg) și marfa voluminoasă, dar ușoară
+        (polistiren, vată minerală) adaugă curse suplimentare reale — motorul le
+        numără și le tarifează pe fiecare. Descărcarea este urmărită ca taxă separată.
+      </p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col" style="width:44%">
+      <div class="card">
+        <h3>Apoi: cine plătește și cine câștigă</h3>
+        <p style="margin-bottom:4px">Din aceeași bază de transport, aplicația afișează totalul pentru client pe oraș-magazin și plata pe colaborator — totul într-o singură vedere.</p>
+        <table class="tbl">
+          <tr><th>Comision oraș-magazin</th><th>Cotă</th></tr>
+          <tr><td>Ploiești</td><td class="num">+50.1%</td></tr>
+          <tr><td>Iași (Tudor / ERA)</td><td class="num">+33.7%</td></tr>
+          <tr><td>Constanța</td><td class="num">+33.7%</td></tr>
+        </table>
+        <table class="tbl" style="margin-top:12px">
+          <tr><th>Bonus colaborator</th><th>Cotă</th></tr>
+          <tr><td>Stalexone · Vic Dinamic</td><td class="num">+25%</td></tr>
+          <tr><td>EMV</td><td class="num">+30.1%</td></tr>
+          <tr><td>Tiberiu</td><td class="num">+29%</td></tr>
+          <tr><td>Bitlo</td><td class="num">+12%</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="foot">CENTRALIZATOR</div>
+  <div class="pagenum">05</div>
+</section>
+
+<!-- ============ 6 · TWO WAYS IN ============ -->
+<section class="slide content">
+  <div class="kicker">Construit pentru felul în care lucrează echipa</div>
+  <h1 class="title">Desktop pentru birou, scaner pentru teanc.</h1>
+  <p class="lead">
+    Două interfețe, un singur sistem comun. Ce se scanează pe telefon apare pe
+    desktop în momentul în care este procesat — fără sincronizări, fără
+    exporturi, fără reintroducere de date.
+  </p>
+
+  <div class="cols">
+    <div class="col card">
+      <h3>Aplicație desktop Windows</h3>
+      <ul class="clean" style="margin-top:6px">
+        <li>Aplicație nativă Windows — se instalează dintr-un clic și <b>se actualizează singură</b>, automat.</li>
+        <li>Grilă în stil Excel: un rând pe livrare, grupate pe <b>zi</b> și pe <b>magazin</b>.</li>
+        <li>Exportă o zi în <b>PDF, Excel sau Word</b> pentru arhivă sau predare.</li>
+      </ul>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Scaner Android</h3>
+      <ul class="clean" style="margin-top:6px">
+        <li>Îndrepți camera — un <b>chenar verde</b> confirmă o captură curată.</li>
+        <li>Fotografiezi <b>tot teancul pe o zi deodată</b>; sistemul îl împarte automat în livrări.</li>
+        <li>Rezultatele revin în flux și apar live pe fiecare ecran conectat.</li>
+      </ul>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card tint">
+      <h3>Un singur creier comun</h3>
+      <ul class="clean" style="margin-top:6px">
+        <li>Un singur server securizat păstrează <b>fiecare livrare și preț</b>.</li>
+        <li><b>Actualizări live</b> ajung instant la toate dispozitivele.</li>
+        <li>Același motor de tarifare pentru desktop și telefon — <b>un singur set de cifre</b>, mereu.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot">CENTRALIZATOR</div>
+  <div class="pagenum">06</div>
+</section>
+
+<!-- ============ 7 · BUSINESS VALUE ============ -->
+<section class="slide content">
+  <div class="kicker">De ce contează</div>
+  <h1 class="title">Mai rapid, exact și consecvent — de fiecare dată.</h1>
+
+  <div class="cols">
+    <div class="col card">
+      <h3>Viteză</h3>
+      <p>Secunde în loc de minute pe livrare. Livrările pe o zi sunt tarifate în timpul în care înainte se tarifau câteva.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Acuratețe</h3>
+      <p>Un motor determinist — verificat pe AWB-uri reale într-o suită de teste automate — elimină greșelile umane care tarifează greșit livrările.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Consecvență</h3>
+      <p>Fiecare magazin și colaborator tarifate după <b>aceleași</b> reguli. Fără abateri între fișiere, fără confuzii de versiuni.</p>
+    </div>
+  </div>
+
+  <div style="height:14px"></div>
+
+  <div class="cols">
+    <div class="col card">
+      <h3>Auditabil</h3>
+      <p>Fiecare livrare păstrează imaginile sursă, câmpurile extrase și detalierea completă a prețului — o evidență clară pentru orice verificare.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Km autocalculați</h3>
+      <p>Distanța reală pe șosea magazin→livrare, calculată automat, cu neconcordanțele față de AWB semnalate pentru un om.</p>
+    </div>
+    <div class="col gap"></div>
+    <div class="col card">
+      <h3>Implementare fără întreținere</h3>
+      <p>Aplicația desktop se actualizează singură; modificările de tarife se distribuie central. Echipa rulează mereu cea mai nouă versiune corectă.</p>
+    </div>
+  </div>
+  <div class="foot">CENTRALIZATOR</div>
+  <div class="pagenum">07</div>
+</section>
+
+<!-- ============ 8 · STATUS / CLOSE ============ -->
+<section class="slide cover">
+  <div class="corner">STATUS · ACTIV</div>
+  <div class="wrap">
+    <span class="mark">Gata de utilizare</span>
+    <h1 style="font-size:46px">Construit, livrat<br>și funcțional.</h1>
+    <div class="rule"></div>
+    <div class="sub">
+      Motorul de tarifare, extragerea AI, rutarea, aplicația desktop și scanerul
+      Android sunt complete și funcționează pe livrări reale astăzi —
+      securizate cu o cheie privată pe propriul server, cu actualizări automate semnate.
+    </div>
+    <div style="margin-top:22px">
+      <span class="pill" style="color:#1F5A08;background:#EAF7DC;border-color:#BFE89A">Citire AI a documentelor</span>
+      <span class="pill" style="color:#1F5A08;background:#EAF7DC;border-color:#BFE89A">Motor de tarif exact</span>
+      <span class="pill" style="color:#1F5A08;background:#EAF7DC;border-color:#BFE89A">Distanță rutieră automată</span>
+      <span class="pill" style="color:#1F5A08;background:#EAF7DC;border-color:#BFE89A">Desktop + scaner</span>
+      <span class="pill" style="color:#1F5A08;background:#EAF7DC;border-color:#BFE89A">Sincronizare live</span>
+    </div>
+  </div>
+  <div class="meta">
+    Centralizator &nbsp;·&nbsp; Automatizarea tarifării livrărilor pentru Leroy Merlin
+  </div>
+</section>
+
+</body>
+</html>

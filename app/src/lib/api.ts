@@ -154,6 +154,39 @@ export async function reprice(req: PricingRequest): Promise<PricingBreakdown> {
 }
 
 /**
+ * Per-day weekend override.
+ *
+ * `getWeekendDays` returns every filing day (ISO) the operator has marked
+ * as a weekend, so the desktop can light up the toggle and enforce the
+ * surcharge on pairs as they land. `setWeekendDay` marks (or clears) one
+ * day; the server persists it and prices new scans on that day with the
+ * +11,90 surcharge automatically.
+ *
+ * `getWeekendDays` tolerates an older server that predates the endpoint:
+ * it returns [] on a 404 so the app keeps working until the server is
+ * updated.
+ */
+export async function getWeekendDays(): Promise<string[]> {
+  const res = await fetch(`${BASE}/pairs/weekend-days`, { headers: authHeaders() });
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`weekend-days failed (${res.status})`);
+  const data = (await res.json()) as { days?: string[] };
+  return data.days ?? [];
+}
+
+export async function setWeekendDay(day: string, force: boolean): Promise<void> {
+  const res = await fetch(`${BASE}/pairs/day/${encodeURIComponent(day)}/weekend`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ force }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`set weekend day failed (${res.status}): ${body}`);
+  }
+}
+
+/**
  * Cross-check a pair's invoice products against leroymerlin.ro. Called
  * after a pair goes "ready"; the returned verification is merged into
  * the pair's status and persisted so the warning icon survives reloads.

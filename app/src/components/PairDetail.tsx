@@ -758,7 +758,7 @@ function Spreadsheet({
         <DataRow
           n={r()}
           label="Supliment weekend"
-          value={ron(breakdown.weekendSurcharge)}
+          value={`${ron(breakdown.weekendSurcharge)}${breakdown.weekendForced ? " · setat manual" : ""}`}
           numeric
         />
       ) : (
