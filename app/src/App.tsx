@@ -739,7 +739,7 @@ export default function App() {
   /* ── Per-pair edit + debounced re-price ───────────────────────────── */
 
   const repricePair = useCallback(
-    async (id: string, override?: { macaraForceNormal?: boolean }) => {
+    async (id: string, override?: { macaraForceNormal?: boolean; forceWeekend?: boolean }) => {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
       const { service, edits, breakdown } = pair.status;
@@ -770,11 +770,11 @@ export default function App() {
           // survives unrelated edits (weight, km, …).
           macara_force_normal:
             override?.macaraForceNormal ?? (breakdown.macara?.forcedNormal ?? false),
-          // Weekend keys off the delivery date (the operator picks a weekend
-          // day via the per-pair calendar, which sets delivery_date). Carry any
-          // legacy "forced" flag forward so an older pair isn't silently
-          // un-weekended on an unrelated edit.
-          force_weekend: breakdown.weekendForced ?? false,
+          // Weekend is a manual per-pair switch — never derived from a date.
+          // An explicit value from the toggle wins; otherwise carry the
+          // persisted flag forward so an unrelated edit (weight, km, …) doesn't
+          // silently un-weekend the pair.
+          force_weekend: override?.forceWeekend ?? (breakdown.weekendForced ?? false),
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever
@@ -821,13 +821,24 @@ export default function App() {
             }
           : curBreakdown;
 
+      const weekendToggle = patch.force_weekend !== undefined;
+      const weekendOn = !!patch.force_weekend;
+      // Flip ONLY the switch's boolean state optimistically so the toggle
+      // responds instantly. Every monetary value — the +11,90 surcharge AND
+      // the dependent totals (carrier, city commissions, collaborator prices)
+      // — is recomputed by the SERVER on the immediate re-price below, so the
+      // client never shows a self-computed price.
+      const nextBreakdownWk = weekendToggle
+        ? { ...nextBreakdown, weekend: weekendOn, weekendForced: weekendOn }
+        : nextBreakdown;
+
       // Spread the prior ready status so store / routing / verification
       // survive a hand-edit; only service + the edited AWB fields (+ the
       // optimistic macara flip) change.
       const nextStatus: PairStatus = {
         ...cur.status,
         service: patch.service ?? cur.status.service,
-        breakdown: nextBreakdown,
+        breakdown: nextBreakdownWk,
         edits: {
           ...cur.status.edits,
           awb: {
@@ -854,6 +865,11 @@ export default function App() {
         // explicit override so the toggle never lags behind the totals.
         repriceTimers.current.delete(id);
         void repricePair(id, { macaraForceNormal: force });
+      } else if (weekendToggle) {
+        // Same for the weekend switch: a discrete click, re-price now with
+        // the explicit flag so the +11,90 lands instantly.
+        repriceTimers.current.delete(id);
+        void repricePair(id, { forceWeekend: weekendOn });
       } else {
         repriceTimers.current.set(
           id,

@@ -111,19 +111,22 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.carrierTotal).toBe(24.20);
   });
 
-  it("weekend Saturday triggers the 11.90 surcharge", () => {
+  it("a weekend DATE does NOT auto-trigger the surcharge — weekend is manual now", () => {
+    // The AWB's printed date is its GENERATION date, not the delivery date,
+    // so a Saturday on the paper must NOT add the surcharge by itself. Only
+    // the operator's manual `forceWeekend` flag does (see the next test).
     const r = calculatePrice({
       service: "Express",
       weightKg: 100,
       distanceKm: 5,
       numDeliveries: 1,
-      deliveryDate: "2026-05-23", // Saturday
+      deliveryDate: "2026-05-23", // Saturday — but the calendar no longer matters
     });
-    expect(r.weekend).toBe(true);
-    expect(r.weekendSurcharge).toBe(11.90);
-    expect(r.weekendForced).toBe(false); // derived from the date, not forced
-    // base 24.20 + weekend 11.90 = 36.10
-    expect(r.carrierTotal).toBe(36.10);
+    expect(r.weekend).toBe(false);
+    expect(r.weekendForced).toBe(false);
+    expect(r.weekendSurcharge).toBe(0);
+    // base 24.20, no weekend surcharge
+    expect(r.carrierTotal).toBe(24.20);
   });
 
   it("forceWeekend applies the 11.90 surcharge on a weekday (manual override)", () => {

@@ -95,7 +95,7 @@ import {
   type City,
   type Collaborator,
 } from "./tariffs.js";
-import { weightBucket, distanceBucket, isWeekend } from "./buckets.js";
+import { weightBucket, distanceBucket } from "./buckets.js";
 
 export interface PricingInput {
   /** Service tier — already mapped from AWB free text (Standard → Express, etc). */
@@ -106,7 +106,10 @@ export interface PricingInput {
   distanceKm: number;
   /** Number of distinct deliveries on this AWB. Default 1. */
   numDeliveries: number;
-  /** ISO date YYYY-MM-DD of the delivery. Drives the weekend surcharge. */
+  /** ISO date YYYY-MM-DD of the delivery. Display/reference only — it no
+   *  longer drives pricing. The weekend surcharge is manual now (see
+   *  `forceWeekend`); this date is the AWB's printed generation date and is
+   *  kept purely so the UI can show/edit it. */
   deliveryDate: string;
   /** Total count of bulky-but-light units (polystyrene / mineral wool)
    *  across every invoice on this AWB. Drives the extra-transport
@@ -147,11 +150,11 @@ export interface PricingInput {
    *  it so it prices on the normal tariff + commission. Default false (use the
    *  detected classification). */
   macaraForceNormal?: boolean;
-  /** Operator override: force the weekend surcharge ON regardless of what the
-   *  calendar says for `deliveryDate`. Lets the operator mark an ordinary
-   *  weekday as a weekend run (e.g. a holiday or a Saturday-rate delivery
-   *  filed on a weekday). When omitted, the surcharge keys off the date as
-   *  before. Default false. */
+  /** The operator's manual weekend switch for this pair. `true` applies the
+   *  +11,90 weekend surcharge, anything else leaves it off. This is the ONLY
+   *  thing that drives the surcharge — there is no date-based detection. The
+   *  operator sets it by hand because the real delivery day comes from the
+   *  Leroy app, not from the AWB. Default false. */
   forceWeekend?: boolean;
 }
 
@@ -328,7 +331,7 @@ export interface CollaboratorPrice {
 }
 
 export function calculatePrice(input: PricingInput): PricingBreakdown {
-  const { service, weightKg, distanceKm, numDeliveries, deliveryDate } = input;
+  const { service, weightKg, distanceKm, numDeliveries } = input;
   const bulkyUnits = Math.max(0, Math.floor(input.bulkyUnits ?? 0));
   const unloadingUnits = Math.max(0, Math.floor(input.unloadingUnits ?? 0));
 
@@ -389,10 +392,14 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const totalIncrements = weightIncrements + (numDeliveries - 1) + bulkyTransports;
   const incrementCost = round2(totalIncrements * incrementTariff);
 
-  // Weekend surcharge: the operator can force it ON for a weekday (holiday /
-  // Saturday-rate run); otherwise it keys off the delivery date as usual.
+  // Weekend surcharge — PURELY manual. We do NOT derive it from any date:
+  // the AWB's printed date is its GENERATION date, not the delivery date, so
+  // calendar detection taxed the wrong shipments (generated on a Saturday but
+  // delivered Monday, and the reverse). The real delivery date lives only in
+  // the operator's Leroy app, so they flip it per pair with a plain ON/OFF
+  // switch. `forceWeekend` is the single source of truth.
   const weekendForced = input.forceWeekend === true;
-  const weekend = weekendForced || isWeekend(deliveryDate);
+  const weekend = weekendForced;
   const weekendSurcharge = weekend ? WEEKEND_SURCHARGE : 0;
 
   // Unloading fee ("descărcare") — a SEPARATE flat tax, not commissioned.

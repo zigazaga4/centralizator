@@ -674,6 +674,11 @@ export type PairPatch = {
    *  Set true to correct a Leroy Merlin macara mis-tag, false to revert.
    *  Not an AWB field — handled specially (immediate re-price, no debounce). */
   macara_force_normal?: boolean;
+  /** Operator's manual weekend switch for THIS pair. true applies the +11,90
+   *  weekend surcharge, false removes it. This is the ONLY thing that drives
+   *  the surcharge — there is no date-based detection. Not an AWB field —
+   *  handled like the macara toggle (immediate re-price, no debounce). */
+  force_weekend?: boolean;
 };
 
 /* ──────────────────────────────────────────────────────────────────────
