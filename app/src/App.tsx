@@ -8,7 +8,7 @@ import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { detachInvoice as detachInvoiceApi, extractAndPrice, getWeekendDays, reprice, scanBatch, setWeekendDay, verifyProducts } from "./lib/api";
+import { detachInvoice as detachInvoiceApi, extractAndPrice, reprice, scanBatch, verifyProducts } from "./lib/api";
 import {
   deletePair,
   deletePairsByDay,
@@ -313,30 +313,6 @@ export default function App() {
   // One debounce timer per pair, scoped to the App so each row's edits
   // queue its own re-price without blocking siblings.
   const repriceTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-
-  // Filing days the operator has FORCED to weekend pricing (the +11,90
-  // surcharge regardless of the calendar). Loaded from the server on mount
-  // and kept in a ref so callbacks (runOne enforcement, reprice) read the
-  // latest set without re-subscribing.
-  const [weekendDays, setWeekendDays] = useState<Set<string>>(new Set());
-  const weekendDaysRef = useRef(weekendDays);
-  useEffect(() => {
-    weekendDaysRef.current = weekendDays;
-  });
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const days = await getWeekendDays();
-        if (!cancelled) setWeekendDays(new Set(days));
-      } catch (err) {
-        console.warn("[weekend] failed to load forced-weekend days:", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Live feed (SSE) connection state — drives the header "Live" pill.
   const [liveConnected, setLiveConnected] = useState(false);
@@ -761,7 +737,7 @@ export default function App() {
   /* ── Per-pair edit + debounced re-price ───────────────────────────── */
 
   const repricePair = useCallback(
-    async (id: string, override?: { macaraForceNormal?: boolean; forceWeekend?: boolean }) => {
+    async (id: string, override?: { macaraForceNormal?: boolean }) => {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
       const { service, edits, breakdown } = pair.status;
@@ -792,12 +768,11 @@ export default function App() {
           // survives unrelated edits (weight, km, …).
           macara_force_normal:
             override?.macaraForceNormal ?? (breakdown.macara?.forcedNormal ?? false),
-          // Weekend override: an explicit toggle value wins; otherwise keep the
-          // surcharge if EITHER the pair's day is marked a weekend OR this pair
-          // was already forced — so unrelated edits never silently drop it.
-          force_weekend:
-            override?.forceWeekend ??
-            (weekendDaysRef.current.has(pair.day) || (breakdown.weekendForced ?? false)),
+          // Weekend keys off the delivery date (the operator picks a weekend
+          // day via the per-pair calendar, which sets delivery_date). Carry any
+          // legacy "forced" flag forward so an older pair isn't silently
+          // un-weekended on an unrelated edit.
+          force_weekend: breakdown.weekendForced ?? false,
         });
         // Re-fetch the current pair: the user may have kept typing during
         // the round-trip, so we apply the new breakdown on top of whatever
@@ -812,45 +787,6 @@ export default function App() {
       }
     },
     [persistAndSet],
-  );
-
-  /* ── Per-day weekend toggle ────────────────────────────────────────
-   * Mark (or clear) a whole filing day as a weekend: persist the flag on
-   * the server (so new scans on that day inherit the surcharge), flip the
-   * local set, and re-price every ready pair on that day with the explicit
-   * override so the +11,90 lands immediately. Optimistic: we flip the set
-   * first and revert on a server failure. */
-  const toggleWeekendDay = useCallback(
-    async (day: string) => {
-      const next = !weekendDaysRef.current.has(day);
-      // Optimistic local flip so the button + totals react instantly.
-      setWeekendDays((cur) => {
-        const s = new Set(cur);
-        if (next) s.add(day);
-        else s.delete(day);
-        return s;
-      });
-      try {
-        await setWeekendDay(day, next);
-      } catch (err) {
-        console.error("[weekend] failed to persist day flag:", err);
-        // Revert the optimistic flip — the server never recorded it.
-        setWeekendDays((cur) => {
-          const s = new Set(cur);
-          if (next) s.delete(day);
-          else s.add(day);
-          return s;
-        });
-        return;
-      }
-      // Re-price every calculated pair on the day, in parallel, with the
-      // explicit override so the surcharge appears/disappears at once.
-      const ready = pairsRef.current.filter(
-        (p) => p.day === day && p.status.kind === "ready",
-      );
-      await Promise.all(ready.map((p) => repricePair(p.id, { forceWeekend: next })));
-    },
-    [repricePair],
   );
 
   const patchPair = useCallback(
@@ -998,18 +934,11 @@ export default function App() {
         // Auto-trigger the Leroy Merlin product check once the price is
         // saved. Fire-and-forget: it updates the pair again when it lands.
         if (ok) void verifyPairProducts(id, res.extracted);
-        // This path prices via /extract-and-price, which keys the weekend
-        // surcharge off "today" (it isn't told the pair's filing day). When
-        // the pair's day is marked a weekend, re-apply the override so the
-        // +11,90 lands — the scan-batch path already inherits it server-side.
-        if (ok && weekendDaysRef.current.has(pair.day) && res.breakdown.weekendForced !== true) {
-          void repricePair(id, { forceWeekend: true });
-        }
       } catch (err) {
         await persistAndSet(id, { kind: "error", message: (err as Error).message });
       }
     },
-    [persistAndSet, verifyPairProducts, repricePair],
+    [persistAndSet, verifyPairProducts],
   );
 
   /**
@@ -1432,17 +1361,11 @@ export default function App() {
            * table (its column headers stand in for the "empty" state). */
           <>
             <ModeToggle mode={viewMode} counts={modeCounts} onChange={setViewMode} />
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <DayTabs
-                days={dayCounts}
-                selectedDay={selectedDay}
-                onSelect={setSelectedDay}
-              />
-              <WeekendToggle
-                active={weekendDays.has(selectedDay)}
-                onToggle={() => void toggleWeekendDay(selectedDay)}
-              />
-            </div>
+            <DayTabs
+              days={dayCounts}
+              selectedDay={selectedDay}
+              onSelect={setSelectedDay}
+            />
             <PairAddCard
               onScan={scanImages}
               hero={dayPairs.length === 0 && dayUnpaired.length === 0}
@@ -1539,47 +1462,6 @@ function ModeToggle({
         );
       })}
     </div>
-  );
-}
-
-/* ──────────────────────────────────────────────────────────────────────
- * Weekend toggle — forces the +11,90 weekend surcharge on the whole
- * selected filing day, regardless of the calendar (a holiday, or a
- * Saturday-rate run filed on a weekday). One click marks the day and
- * re-prices its pairs; new scans on a marked day inherit it server-side.
- * ────────────────────────────────────────────────────────────────────── */
-function WeekendToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={active}
-      title={
-        active
-          ? "Ziua e marcată ca weekend — apasă pentru a anula suplimentul de weekend (+11,90)"
-          : "Marchează ziua ca weekend — aplică suplimentul de weekend (+11,90) la toate perechile zilei"
-      }
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12px] font-medium transition ${
-        active
-          ? "border-coral-500 bg-coral-500 text-canvas-50 shadow-sm hover:bg-coral-600"
-          : "border-dashed border-ink-300 bg-canvas-50 text-ink-600 hover:border-coral-400 hover:bg-canvas-200 hover:text-ink-900"
-      }`}
-    >
-      <svg
-        className="h-3.5 w-3.5"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-      </svg>
-      <span>{active ? "Weekend activ" : "Marchează weekend"}</span>
-    </button>
   );
 }
 

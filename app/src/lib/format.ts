@@ -47,6 +47,18 @@ export const todayIso = (): string => {
   return `${y}-${mo}-${da}`;
 };
 
+/** True when a local-TZ ISO date (`YYYY-MM-DD`) falls on a Saturday or
+ *  Sunday. Built from the local Date parts (NOT UTC) so it matches the
+ *  same weekend the operator sees on a paper calendar. Returns false for
+ *  a malformed string. Mirrors the server's `isWeekend`. */
+export const isWeekendIso = (iso: string | null | undefined): boolean => {
+  if (!iso) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return false;
+  const dow = new Date(+m[1]!, +m[2]! - 1, +m[3]!).getDay(); // 0 = Sun … 6 = Sat
+  return dow === 0 || dow === 6;
+};
+
 /** Add `n` days to a local-TZ ISO date, returning another local-TZ ISO
  *  date. `n` can be negative. Used by the day-tabs quick-nav buttons
  *  ("Mâine" → +1) and by anything else that needs to walk the calendar

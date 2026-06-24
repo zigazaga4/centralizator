@@ -16,8 +16,9 @@ import {
   type Service,
   type Verification,
 } from "../types";
-import { date, ron } from "../lib/format";
+import { date, isWeekendIso, ron } from "../lib/format";
 import { usePairImages } from "../lib/images";
+import { WeekendCalendar } from "./WeekendCalendar";
 import { EDIT_LOOK } from "../lib/ui";
 import { ProductBadge, ProductCheckSummary, hasAnyWarning } from "./ProductCheck";
 
@@ -110,6 +111,7 @@ export function PairDetail({
                 routing={status.routing}
                 city={city}
                 collaborator={collaborator}
+                pairDay={pair.day}
                 onPatch={onPatch}
                 onDetachInvoice={onDetachInvoice}
               />
@@ -428,6 +430,7 @@ function Spreadsheet({
   routing,
   city,
   collaborator,
+  pairDay,
   onPatch,
   onDetachInvoice,
 }: {
@@ -438,6 +441,8 @@ function Spreadsheet({
   routing?: Routing;
   city: CityKey;
   collaborator: CollaboratorKey | null;
+  /** The pair's filing day — the date "Anulează weekend" reverts to. */
+  pairDay: string;
   onPatch: (patch: PairPatch) => void;
   onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
 }) {
@@ -516,6 +521,9 @@ function Spreadsheet({
       />
       <DataRow n={r()} label="Data livrare" editable>
         <DateCell value={awb.delivery_date} onChange={(v) => onPatch({ delivery_date: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Weekend" editable>
+        <WeekendField value={awb.delivery_date} pairDay={pairDay} onPatch={onPatch} />
       </DataRow>
       <DataRow
         n={r()}
@@ -758,7 +766,7 @@ function Spreadsheet({
         <DataRow
           n={r()}
           label="Supliment weekend"
-          value={`${ron(breakdown.weekendSurcharge)}${breakdown.weekendForced ? " · setat manual" : ""}`}
+          value={ron(breakdown.weekendSurcharge)}
           numeric
         />
       ) : (
@@ -1154,6 +1162,74 @@ function DateCell({ value, onChange }: { value: string; onChange: (v: string) =>
       onChange={(e) => onChange(e.target.value)}
       className={`${EDIT_LOOK} block w-full cursor-text px-3 py-1 text-sm`}
     />
+  );
+}
+
+/* Per-pair weekend control. Marking the pair a weekend opens a calendar
+ * where only Sat/Sun are selectable; picking one sets THIS pair's delivery
+ * date to that weekend day, which is what applies the +11,90 surcharge.
+ * "Anulează" reverts the date to the pair's filing day (a weekday). */
+function WeekendField({
+  value,
+  pairDay,
+  onPatch,
+}: {
+  value: string;
+  pairDay: string;
+  onPatch: (patch: PairPatch) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const isWeekend = isWeekendIso(value);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {isWeekend ? (
+        <>
+          <span className="inline-flex items-center gap-1 rounded-md border border-coral-300 bg-coral-50 px-2 py-1 text-[12px] font-medium text-coral-700">
+            Weekend · {date(value)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-[12px] text-ink-700 transition hover:border-coral-400 hover:text-ink-900"
+          >
+            Schimbă
+          </button>
+          <button
+            type="button"
+            onClick={() => onPatch({ delivery_date: pairDay })}
+            title="Mută livrarea înapoi pe ziua de lucru — fără supliment de weekend"
+            className="rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-[12px] text-ink-600 transition hover:border-coral-400 hover:text-coral-700"
+          >
+            Anulează
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          title="Marchează această livrare ca weekend — alege ziua de sâmbătă/duminică"
+          className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-ink-300 bg-canvas-50 px-2.5 py-1 text-[12px] font-medium text-ink-600 transition hover:border-coral-400 hover:bg-canvas-200 hover:text-ink-900"
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+          Marchează weekend
+        </button>
+      )}
+      {open && (
+        <WeekendCalendar
+          value={isWeekend ? value : null}
+          onPick={(iso) => {
+            onPatch({ delivery_date: iso });
+            setOpen(false);
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </div>
   );
 }
 
