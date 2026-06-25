@@ -506,6 +506,15 @@ function rowToStatus(r: PairRow): PairStatus {
           routing = undefined; // corrupt blob — drop it, keep the pair
         }
       }
+      // Operator rule: a Mapbox km discrepancy NEVER alarms when the routed
+      // distance is shorter than (or equal to) the AWB's printed km — closer
+      // is harmless and the AWB km is always what we bill, no matter how much
+      // lower Mapbox came out. Pricing already bakes this into `kmWarning` for
+      // new pairs; normalize on read too so any pair priced before the rule
+      // never surfaces a stale warning. The billed distance is untouched.
+      if (routing && routing.mapboxKm != null && routing.mapboxKm <= routing.awbKm) {
+        routing.kmWarning = false;
+      }
       return {
         kind: "ready",
         service: r.service,
