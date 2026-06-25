@@ -253,12 +253,21 @@ export function sameAddress(a: string | null, b: string | null): boolean {
 
 /** Usable digits of a doc's AWB read, or null when the read is noise:
  *  too short, longer than any real AWB (a leaked invoice-header number),
- *  or equal to the doc's own invoice number (header contamination). */
-function awbDigits(d: Pick<DocInfo, "awbNumber" | "invoiceNumber">): string | null {
+ *  or equal to one of the doc's own invoice-side numbers (the 13-digit header
+ *  OR the Comandă) — header/Comandă contamination. The model copies an
+ *  invoice number into awb_number on an invoice it mis-tagged as a label, and
+ *  that number must never pass for an AWB identity (else a plain invoice
+ *  anchors an AWB-less pair). */
+function awbDigits(d: Pick<DocInfo, "awbNumber" | "invoiceNumber" | "orderNumber">): string | null {
   const n = (d.awbNumber ?? "").replace(/\D/g, "");
   if (n.length < MIN_PARTIAL_DIGITS || n.length > FULL_MAX_DIGITS) return null;
   const inv = (d.invoiceNumber ?? "").replace(/\D/g, "");
   if (inv.length > 0 && (n === inv || inv.endsWith(n))) return null;
+  // The Comandă (order) number is an invoice-side number too: when the model
+  // drops it into awb_number on a mis-tagged invoice it must NOT count as an
+  // AWB identity. (Operator rule 2026-06-25.)
+  const ord = (d.orderNumber ?? "").replace(/\D/g, "");
+  if (ord.length > 0 && n === ord) return null;
   return n;
 }
 
@@ -290,6 +299,30 @@ function awbSubstance(d: DocInfo): boolean {
   const r = (d.awbRaw ?? {}) as Record<string, unknown>;
   const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
   return text(r.hub_destination) !== "";
+}
+
+/**
+ * Does this photo carry proof it is a real waybill label? The ONLY trustworthy
+ * proof is a CONFIDENT, full-length AWB number (≥ FULL_MIN_DIGITS) that is not
+ * one of the invoice's own numbers (13-digit header or Comandă — see awbDigits).
+ *
+ * `hub_destination` is deliberately NOT accepted: it looked courier-only, but
+ * the vision model fabricates it on plain invoices (live 2026-06-25: a GFS
+ * AUTOMATION invoice tagged "combined" with hub_destination "Ploiesti Hub" and
+ * NO awb_number anchored an AWB-less pair of three same-company invoices). A
+ * field the model can invent on an invoice cannot be the thing that proves the
+ * photo is a label.
+ *
+ * This is the proof that lets a photo with invoice substance (a real label
+ * clipped onto its invoice) still anchor its pair. It is stricter than the raw
+ * digit read — a short partial or an unconfident scrap is NOT proof (those are
+ * how a mis-tagged invoice sneaks in) — and it runs AFTER the anchor dedup,
+ * where every genuine re-shoot ("0900", "0072") has already folded into its
+ * full anchor.
+ */
+function hasCourierProof(d: DocInfo): boolean {
+  const n = awbDigits(d);
+  return n !== null && n.length >= FULL_MIN_DIGITS && d.awbConfident;
 }
 
 /**
@@ -456,7 +489,18 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
     }
   }
 
-  const anchors = [...kept].sort((a, b) => a.index - b.index);
+  // Dedup survivors, in scan order. Re-shoots and partial reads have already
+  // folded into their full anchor above. A survivor may anchor a pair UNLESS it
+  // is a PHANTOM: a photo carrying invoice substance (it really IS an invoice)
+  // with no courier-only proof (no confident full AWB number, no Hub). That is
+  // exactly an invoice the model mis-tagged as a label — it is held OUT of the
+  // anchor pool, so no invoice attaches to it and it can never form an AWB-less
+  // pair; Pass A routes it as an invoice (binds by name) or surfaces it as
+  // unpaired. A GENUINE label — even one whose number is blurry — has no
+  // invoice substance, so it still anchors and pairs by name. (Operator rule
+  // 2026-06-25: "dacă nu au AWB, nu le împerechea — lasă-le fără pereche.")
+  const survivors = [...kept].sort((a, b) => a.index - b.index);
+  const anchors = survivors.filter((d) => hasCourierProof(d) || !invoiceSubstance(d));
 
   // ── Invoice assignment ──────────────────────────────────────────────
   const items = docs
@@ -540,6 +584,16 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       for (const k of invoiceKeysOf(docByIndex.get(i))) if (!keyToGroup.has(k)) keyToGroup.set(k, g);
   };
 
+  // Safety net: a combined re-shoot that folded onto a survivor which then
+  // turned out NOT to be a real label (two mis-tagged invoice photos that
+  // deduped onto each other) would lose its image — surface it as unpaired so
+  // no document is ever hidden. Empty in the common case (real anchors win
+  // dedups), so this only fires on that rare phantom-on-phantom fold.
+  for (const s of survivors) {
+    if (anchors.includes(s)) continue;
+    for (const extra of extraInvoices.get(s.index) ?? []) unpaired.push(extra);
+  }
+
   // Pass A — sort the lone anchors by what they actually are:
   //   • combined with a real AWB identity → a complete pair in one photo;
   //   • a real label (name or confident number) with no invoice YET →
@@ -549,16 +603,20 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
   //   • identifies nothing → junk.
   const pendingLabels: DocInfo[] = [];
   const rescuable: DocInfo[] = [];
-  for (const a of anchors) {
-    const invoices = [...new Set(assigned.get(a.index)!)].sort((x, y) => x - y);
+  for (const a of survivors) {
+    // Only real labels are in `anchors`, so only they ever have invoices
+    // assigned — a phantom survivor has none and falls through to the
+    // invoice/unpaired/junk routing below.
+    const invoices = [...new Set(assigned.get(a.index) ?? [])].sort((x, y) => x - y);
     if (invoices.length > 0) {
       registerGroup({ awbIndex: a.index, invoiceIndices: invoices });
       continue;
     }
-    const hasAwbIdentity =
-      nameTokenSet(a.recipientName).size > 0 ||
-      ((awbDigits(a)?.length ?? 0) >= FULL_MIN_DIGITS && a.awbConfident);
-    if (a.type === "combined" && hasAwbIdentity) {
+    // A combined photo may self-pair ONLY when it carries courier proof. A
+    // mis-tagged invoice with a buyer name (but no real AWB number/Hub) must
+    // NOT marry itself into a blank-AWB pair — it falls through to the invoice
+    // (rescue/unpaired) routing instead.
+    if (a.type === "combined" && hasCourierProof(a)) {
       if (!invoiceSubstance(a)) {
         // The "invoice" is a sliver peeking from under the label — this
         // photo IS a label. It waits for a real invoice photo (married
@@ -584,7 +642,10 @@ export function linkDocuments(docs: DocInfo[]): LinkResult {
       }
     } else if (a.invoiceRaw !== null || invoiceKeysOf(a).length > 0) {
       rescuable.push(a);
-    } else if (hasAwbIdentity) {
+    } else if (hasCourierProof(a) || nameTokenSet(a.recipientName).size > 0) {
+      // A genuine label awaiting its invoice (courier proof) or a label-typed
+      // photo with a readable recipient: it waits to marry its invoice by name
+      // below, or surfaces as unpaired — never anchors a blank-AWB pair.
       pendingLabels.push(a);
     } else {
       droppedJunk.push(a.index);

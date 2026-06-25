@@ -695,3 +695,118 @@ describe("linkDocuments — regression: the live failures of 2026-06-24", () => 
     expect(unpaired.slice().sort((a, b) => a - b)).toEqual([1, 3]);
   });
 });
+
+describe("linkDocuments — regression: no AWB-less pair on retry (2026-06-25)", () => {
+  // The operator re-ran AI pairing over a day's unpaired documents (POST
+  // /pairs/retry-unpaired) and it built a "pair" out of 3 invoices with NO
+  // AWB. A pair must NEVER form without a genuine courier label: documents
+  // without an AWB stay in "documente fără pereche" for a human to pair.
+
+  it("three same-buyer invoices, one mis-tagged with the Comandă as its AWB number, never pair", () => {
+    // The phantom: the model decorated the first invoice with a report_awb and
+    // copied the Comandă (480654) into awb_number. The Comandă is an
+    // invoice-side number, so it is NOT an AWB identity — the photo is demoted
+    // and all three surface as unpaired.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "480654",
+        recipientName: "ACME CONSTRUCT SRL",
+        invoiceNumber: "0072600012345",
+        orderNumber: "480654",
+        invoiceRaw: { buyer_name: "ACME CONSTRUCT SRL", order_number: "480654", invoice_total_gross: 500 },
+      }),
+      doc(1, "invoice", { recipientName: "ACME CONSTRUCT SRL", invoiceNumber: "0072600012346", orderNumber: "480655" }),
+      doc(2, "invoice", { recipientName: "ACME CONSTRUCT SRL", invoiceNumber: "0072600012347", orderNumber: "480656" }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired.slice().sort((a, b) => a - b)).toEqual([0, 1, 2]);
+  });
+
+  it("even a CONFIDENT full-length Comandă in awb_number is not an AWB identity", () => {
+    // The Comandă can be 6+ digits and read cleanly; it is still voided because
+    // it equals the invoice's own order number. No blank-AWB self-pair.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "480700", // confident, 6 digits — but it IS the Comandă
+        recipientName: "GAMA SRL",
+        orderNumber: "480700",
+        invoiceRaw: { buyer_name: "GAMA SRL", order_number: "480700", invoice_total_gross: 900 },
+      }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired).toEqual([0]);
+  });
+
+  it("a phantom label with only a short/unconfident number never anchors same-buyer invoices", () => {
+    // A mis-tagged invoice whose 'AWB number' is a short, unconfident scrap
+    // (not a real 9-digit waybill) cannot anchor its buyer-twin invoices.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        awbNumber: "12345",
+        awbConfident: false,
+        recipientName: "BETA DESIGN SRL",
+        orderNumber: "771000",
+        invoiceRaw: { buyer_name: "BETA DESIGN SRL", order_number: "771000", invoice_total_gross: 300 },
+      }),
+      doc(1, "invoice", { recipientName: "BETA DESIGN SRL", orderNumber: "771001" }),
+      doc(2, "invoice", { recipientName: "BETA DESIGN SRL", orderNumber: "771002" }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired.slice().sort((a, b) => a - b)).toEqual([0, 1, 2]);
+  });
+
+  it("a REAL AWB still pairs all of one buyer's invoices (the fix doesn't over-correct)", () => {
+    const { groups } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211500", recipientName: "GAMA INSTAL SRL" }),
+      doc(1, "invoice", { recipientName: "GAMA INSTAL SRL", orderNumber: "900001" }),
+      doc(2, "invoice", { recipientName: "GAMA INSTAL SRL", orderNumber: "900002" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1, 2] }]);
+  });
+
+  it("a real label with a blurry (unconfident) number still pairs by name", () => {
+    // The label is a genuine waybill (type awb, NO invoice content) whose number
+    // read came back unconfident. It is not a mis-tagged invoice, so it still
+    // anchors and pairs with its same-name invoice — the gate only blocks
+    // invoice-substance photos that lack courier proof, not blurry real labels.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "awb", { awbNumber: "007211480", awbConfident: false, recipientName: "DELTA PROIECT SRL" }),
+      doc(1, "invoice", { recipientName: "DELTA PROIECT SRL", orderNumber: "812000" }),
+    ]);
+    expect(groups).toEqual([{ awbIndex: 0, invoiceIndices: [1] }]);
+    expect(unpaired).toEqual([]);
+  });
+
+  it("LIVE case: a 'combined' invoice with a hallucinated Hub but NO AWB number never anchors (GPS/GFS AUTOMATION)", () => {
+    // The exact production failure (pair 517df404): the model tagged a GFS
+    // AUTOMATION invoice as 'combined' with hub_destination "Ploiesti Hub" and
+    // NO awb_number, then two same-company invoices married it into a 3-invoice
+    // AWB-less pair. A Hub the model invents on an invoice is NOT courier proof,
+    // so the photo (it has invoice substance) is held out — all three unpair.
+    const { groups, unpaired } = linkDocuments([
+      doc(0, "combined", {
+        recipientName: "GFS AUTOMATION TECHNOLOGIES S.R.L.",
+        awbRaw: { hub_destination: "Ploiesti Hub" }, // hub but NO awb_number
+        invoiceNumber: "0042600061730",
+        orderNumber: "548130",
+        invoiceRaw: {
+          buyer_name: "GFS AUTOMATION TECHNOLOGIES S.R.L.",
+          order_number: "548130",
+          invoice_total_gross: 1200,
+        },
+      }),
+      doc(1, "invoice", {
+        recipientName: "GPS AUTOMATION TECHNOLOGIES SRL",
+        invoiceNumber: "0042600061764",
+        orderNumber: "548132",
+      }),
+      doc(2, "invoice", {
+        recipientName: "GFS AUTOMATION TECHNOLOGIES S.R.L.",
+        invoiceNumber: "0042600061790",
+        orderNumber: "548135",
+      }),
+    ]);
+    expect(groups).toEqual([]);
+    expect(unpaired.slice().sort((a, b) => a - b)).toEqual([0, 1, 2]);
+  });
+});
