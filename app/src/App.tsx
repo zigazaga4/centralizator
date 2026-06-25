@@ -473,10 +473,15 @@ export default function App() {
           byId.set(sp.id, sp);
           changed = true;
         } else if (
-          (sp.updatedAt ?? 0) > (ex.updatedAt ?? 0) ||
-          ex.status.kind !== sp.status.kind ||
-          ex.day !== sp.day
+          ex.day !== sp.day ||
+          JSON.stringify(ex.status) !== JSON.stringify(sp.status)
         ) {
+          // The server is authoritative for any pair we did NOT just write
+          // (local echoes are skipped above). Take its status verbatim using a
+          // DEEP compare, not an updatedAt check — so read-time corrections that
+          // don't bump updatedAt (e.g. the Mapbox km re-check that clears a
+          // stale warning) are still picked up. We keep the local decoded image
+          // Files; only the status/day/version change.
           byId.set(sp.id, { ...ex, day: sp.day, status: sp.status, updatedAt: sp.updatedAt });
           changed = true;
         }
@@ -496,6 +501,23 @@ export default function App() {
       console.warn("[live] reconcile failed:", err);
     }
   }, [commit, isLocalEcho]);
+
+  // Always pull fresh data when the user returns to the app (window refocus or
+  // the tab becoming visible) so the queue can never sit on stale server state
+  // — a km re-check, a price correction, or a change made on another PC. Cheap:
+  // one GET that reconciles by deep-compare and only re-renders if something
+  // actually differs.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") void reconcile();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [reconcile]);
 
   useEffect(() => {
     const stop = subscribePairLive({

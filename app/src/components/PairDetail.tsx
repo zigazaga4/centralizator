@@ -129,7 +129,6 @@ export function PairDetail({
                 collaborator={collaborator}
                 onPatch={onPatch}
                 onDetachInvoice={onDetachInvoice}
-                onDismantle={onDismantle}
                 imageCount={imageCount}
               />
               {(verification || routing) && (
@@ -307,13 +306,13 @@ function ImageGallery({
   const [detaching, setDetaching] = useState<number | null>(null);
   const [dismantling, setDismantling] = useState(false);
   // The AWB is stored first, invoices after — used to label each image.
+  const ready = pair.status.kind === "ready";
   const invoiceCount = pair.status.kind === "ready" ? pair.status.edits.invoices.length : 0;
-  // The X shows on EVERY invoice photo (image i ≥ 1 → invoice i-1). Invoices
-  // with no dedicated photo fall back to the Factură section (in Spreadsheet).
-  const perImageDetach = !!onDetachInvoice && pair.status.kind === "ready" && invoiceCount > 0;
-  // Removing the pair's last invoice dismantles the whole pair instead of
-  // leaving a lone AWB behind.
-  const dismantleOnRemove = invoiceCount === 1;
+  // Every image gets an X. The AWB photo (slot 0) DISMANTLES the whole pair —
+  // you cannot have a pair without its AWB — sending every document back to the
+  // unpaired pool; each invoice photo detaches just that one invoice. So every
+  // document is removable, in any order (AWB first or invoices first). Invoices
+  // with no dedicated photo fall back to an X in the Factură section.
   const runDetach = async (invoiceIndex: number) => {
     if (!onDetachInvoice) return;
     setDetaching(invoiceIndex);
@@ -379,7 +378,7 @@ function ImageGallery({
           // Invoice photos (i ≥ 1) get an X to remove that one invoice — but
           // only when the photo→invoice mapping is unambiguous.
           const invoiceIndex = i - 1;
-          const showDetach = perImageDetach && !isAwb && invoiceIndex < invoiceCount;
+          const showDetach = ready && (isAwb ? !!onDismantle : !!onDetachInvoice && invoiceIndex < invoiceCount);
           const confirming = confirmImg === i;
           return (
             <figure
@@ -409,8 +408,8 @@ function ImageGallery({
                   <button
                     type="button"
                     onClick={() => setConfirmImg(i)}
-                    title={dismantleOnRemove ? "Scoate ultima factură — perechea va fi desfăcută" : "Scoate această factură din pereche"}
-                    aria-label={dismantleOnRemove ? "Scoate ultima factură — perechea va fi desfăcută" : "Scoate această factură din pereche"}
+                    title={isAwb ? "Scoate AWB-ul — perechea va fi desfăcută complet" : "Scoate această factură din pereche"}
+                    aria-label={isAwb ? "Scoate AWB-ul — perechea va fi desfăcută complet" : "Scoate această factură din pereche"}
                     className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-coral-300 bg-canvas-50/95 text-coral-600 shadow-md transition hover:bg-coral-500 hover:text-canvas-50"
                   >
                     <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -424,12 +423,12 @@ function ImageGallery({
                 {showDetach && confirming && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink-900/70 p-4 text-center">
                     <p className="text-sm font-medium text-canvas-50">
-                      {dismantleOnRemove ? (
+                      {isAwb ? (
                         <>
-                          Ultima factură — perechea va fi desfăcută.
+                          Scoți AWB-ul? Perechea va fi desfăcută.
                           <br />
                           <span className="text-[12px] font-normal text-canvas-200">
-                            AWB-ul și factura se mută în „documente fără pereche”.
+                            Toate documentele (AWB + facturi) merg în „documente fără pereche”.
                           </span>
                         </>
                       ) : (
@@ -445,17 +444,15 @@ function ImageGallery({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() =>
-                          dismantleOnRemove ? void runDismantle() : void runDetach(invoiceIndex)
-                        }
+                        onClick={() => (isAwb ? void runDismantle() : void runDetach(invoiceIndex))}
                         disabled={detaching === invoiceIndex || dismantling}
                         className="rounded-md border border-coral-400 bg-coral-500 px-3 py-1.5 text-xs font-semibold text-canvas-50 shadow-sm transition hover:bg-coral-600 disabled:opacity-60"
                       >
                         {detaching === invoiceIndex || dismantling
-                          ? dismantleOnRemove
+                          ? isAwb
                             ? "Se desface…"
                             : "Se scoate…"
-                          : dismantleOnRemove
+                          : isAwb
                             ? "Da, desfă perechea"
                             : "Da, scoate"}
                       </button>
@@ -568,7 +565,6 @@ function Spreadsheet({
   collaborator,
   onPatch,
   onDetachInvoice,
-  onDismantle,
   imageCount = 0,
 }: {
   data: Extracted;
@@ -580,8 +576,6 @@ function Spreadsheet({
   collaborator: CollaboratorKey | null;
   onPatch: (patch: PairPatch) => void;
   onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
-  /** Dismantle the whole pair — fired when its LAST invoice is removed. */
-  onDismantle?: () => Promise<void> | void;
   /** Number of stored images. An invoice WITHOUT a dedicated photo (index
    *  >= imageCount - 1, e.g. a combined AWB+invoice photo) shows its detach X
    *  here in the Factură section instead of on a photo. */
@@ -593,10 +587,6 @@ function Spreadsheet({
   // index, second click detaches it. `detaching` disables the row mid-call.
   const [confirmDetach, setConfirmDetach] = useState<number | null>(null);
   const [detaching, setDetaching] = useState<number | null>(null);
-  const [dismantling, setDismantling] = useState(false);
-  // Removing the pair's last invoice dismantles the whole pair instead of
-  // leaving a lone AWB behind.
-  const dismantleOnRemove = data.invoices.length === 1;
   const runDetach = async (i: number) => {
     if (!onDetachInvoice) return;
     setDetaching(i);
@@ -606,18 +596,6 @@ function Spreadsheet({
       console.error("detach invoice failed:", err);
     } finally {
       setDetaching(null);
-      setConfirmDetach(null);
-    }
-  };
-  const runDismantle = async () => {
-    if (!onDismantle) return;
-    setDismantling(true);
-    try {
-      await onDismantle();
-    } catch (err) {
-      console.error("dismantle pair failed:", err);
-    } finally {
-      setDismantling(false);
       setConfirmDetach(null);
     }
   };
@@ -826,28 +804,20 @@ function Spreadsheet({
                   {confirmDetach === i ? (
                     <>
                       <span className="text-[11px] text-coral-700">
-                        {dismantleOnRemove
-                          ? "Ultima factură — perechea va fi desfăcută. AWB-ul și factura merg în „documente fără pereche”."
-                          : "Scoți factura din pereche? Merge în „documente fără pereche”."}
+                        Scoți factura din pereche? Merge în „documente fără pereche”.
                       </span>
                       <button
                         type="button"
-                        onClick={() => (dismantleOnRemove ? void runDismantle() : void runDetach(i))}
-                        disabled={detaching === i || dismantling}
+                        onClick={() => void runDetach(i)}
+                        disabled={detaching === i}
                         className="rounded-md border border-coral-400 bg-coral-500 px-2.5 py-1 text-xs font-semibold text-canvas-50 transition hover:bg-coral-600 disabled:opacity-60"
                       >
-                        {detaching === i || dismantling
-                          ? dismantleOnRemove
-                            ? "Se desface…"
-                            : "Se scoate…"
-                          : dismantleOnRemove
-                            ? "Da, desfă perechea"
-                            : "Da, scoate"}
+                        {detaching === i ? "Se scoate…" : "Da, scoate"}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConfirmDetach(null)}
-                        disabled={detaching === i || dismantling}
+                        disabled={detaching === i}
                         className="rounded-md border border-ink-300 bg-canvas-50 px-2.5 py-1 text-xs text-ink-700 transition hover:border-ink-400 disabled:opacity-60"
                       >
                         Anulează
@@ -858,13 +828,13 @@ function Spreadsheet({
                       type="button"
                       onClick={() => setConfirmDetach(i)}
                       className="inline-flex items-center gap-1.5 rounded-md border border-coral-300 bg-coral-50 px-3 py-1.5 text-xs font-semibold text-coral-700 shadow-sm transition hover:border-coral-400 hover:bg-coral-100"
-                      title={dismantleOnRemove ? "Scoate ultima factură — perechea va fi desfăcută" : "Scoate această factură din pereche și trimite-o în documente fără pereche"}
+                      title="Scoate această factură din pereche și trimite-o în documente fără pereche"
                     >
                       <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                         <line x1="18" y1="6" x2="6" y2="18" />
                         <line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
-                      {dismantleOnRemove ? "Scoate factura (desface perechea)" : "Scoate factura din pereche"}
+                      Scoate factura din pereche
                     </button>
                   )}
                 </div>

@@ -251,10 +251,12 @@ const zoomTool = {
 
 const SYSTEM_INSTRUCTION =
   "You are an OCR and structured-extraction assistant. " +
-  "You will receive N images (N >= 2). ONE of them carries the Romanian courier waybill (AWB) — " +
+  "You will receive N images (N >= 1). ONE of them carries the Romanian courier waybill (AWB) — " +
   "usually on its own page, but SOMETIMES as a small label laid or taped on TOP of an invoice in the " +
   "same photo. Every other image is a Romanian fiscal invoice (factură) attached to that AWB. " +
-  "The caller does NOT tell you which image is which — you must decide.\n" +
+  "Often there is ONLY the AWB and NO invoice at all (a lone waybill, e.g. a single image): that is " +
+  "VALID — extract the AWB and return invoices: []. The AWB alone carries everything pricing needs " +
+  "(Greutate, Distanță extra, Serviciu). The caller does NOT tell you which image is which — you decide.\n" +
   "Heuristics:\n" +
   "  - AWB: portrait-oriented printed shipping label; barcode; fields like 'AWB', 'Hub destinație', " +
   "    'Greutate (kg)', 'Distanță extra (km)', 'Serviciu', 'Continut', 'Expeditor', 'Destinatar', " +
@@ -330,8 +332,8 @@ export async function extractFromImages(
   images: ImageInput[],
 ): Promise<Extracted> {
   if (!API_KEY) throw new Error("OPENROUTER_API_KEY is not configured on the server.");
-  if (images.length < 2) {
-    throw new Error(`extractFromImages needs at least 2 images (1 AWB + 1 invoice), got ${images.length}.`);
+  if (images.length < 1) {
+    throw new Error(`extractFromImages needs at least 1 image, got ${images.length}.`);
   }
 
   type Part = OpenAI.Chat.Completions.ChatCompletionContentPart;
