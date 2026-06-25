@@ -50,7 +50,7 @@ const MAX_BATCH_IMAGES = Number(process.env.MAX_BATCH_IMAGES ?? 120);
 const BATCH_CONCURRENCY = Number(process.env.SCAN_BATCH_CONCURRENCY ?? 100);
 
 /** One buffered upload: bytes for storage + the slim view the AI needs. */
-interface BatchImage {
+export interface BatchImage {
   name: string;
   mimeType: string;
   bytes: Buffer;
@@ -178,8 +178,12 @@ async function processGroup(
   }
 }
 
-/** The background job: dedup, group, then fan the groups out to the pipeline. */
-async function processBatch(
+/**
+ * The background job: dedup, group, then fan the groups out to the pipeline.
+ * Exported so other routes (e.g. "retry pairing over the day's unpaired
+ * documents") can re-run the EXACT same pairing system without duplicating it.
+ */
+export async function processBatch(
   batchId: string,
   allImages: BatchImage[],
   day: string,

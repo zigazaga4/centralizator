@@ -980,6 +980,35 @@ export function detachInvoiceImage(
   };
 }
 
+/**
+ * Replace a pair's entire image set in one transaction — used when an
+ * existing pair GAINS documents (attach-to-pair) and is re-extracted. The
+ * images are re-laid as a contiguous 0..n-1 slot run in the given order (AWB
+ * first, then invoices), the same storage convention every view reads. No
+ * event is emitted here; the caller follows with `persistPairStatus`, which
+ * pushes the live update.
+ */
+export function setPairImages(
+  pairId: string,
+  images: Array<{ name: string; mimeType: string; size: number; bytes: Buffer }>,
+): void {
+  const tx = db.transaction(() => {
+    stmt.deleteImagesByPair.run(pairId);
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i]!;
+      stmt.insertImage.run({
+        pair_id: pairId,
+        slot: i,
+        name: img.name || `image-${i + 1}`,
+        mime_type: img.mimeType || "image/*",
+        size: img.size,
+        bytes: img.bytes,
+      });
+    }
+  });
+  tx();
+}
+
 /** Close the DB handle. Wired to the server's shutdown hooks so WAL
  *  is checkpointed cleanly on SIGINT/SIGTERM. */
 export function closeDb(): void {

@@ -82,6 +82,14 @@ interface ModalProps {
    *  collaborator. Resolves true when the pair was created (the source
    *  rows are gone by then). */
   onPair: (ids: string[], collaborator: CollaboratorKey | null) => Promise<boolean>;
+  /** Existing (non-unpaired) pairs of the day the selected orphans can be
+   *  attached to. */
+  existingPairs: Pair[];
+  /** Attach the selected orphan(s) to an existing pair — appended as invoices,
+   *  the pair re-read + re-priced server-side, the orphan rows removed. */
+  onAttach: (pairId: string, sourceIds: string[]) => Promise<void>;
+  /** Re-run the AI pairing over ALL of the day's unpaired documents. */
+  onRetry: () => Promise<void>;
 }
 
 /** One AI-suggested (then human-rearranged) group of orphan-row ids.
@@ -91,10 +99,15 @@ interface SuggestedGroup {
   evidence: string | null;
 }
 
-export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) {
+export function UnpairedModal({ items, onClose, onRemove, onPair, existingPairs, onAttach, onRetry }: ModalProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [zoomed, setZoomed] = useState<string | null>(null);
   const [pairing, setPairing] = useState(false);
+  // Send-to-existing-pair: `picking` opens the pair-picker, `attaching` guards
+  // the in-flight attach. `retrying` guards the "re-run AI pairing" pass.
+  const [picking, setPicking] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   /** AI proposals: null = not requested yet; [] = asked, none found. */
   const [groups, setGroups] = useState<SuggestedGroup[] | null>(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -141,6 +154,10 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
         setPendingSend(null);
         return;
       }
+      if (picking) {
+        setPicking(false);
+        return;
+      }
       setZoomed((z) => {
         if (z !== null) return null;
         onClose();
@@ -149,7 +166,7 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, pendingSend]);
+  }, [onClose, pendingSend, picking]);
 
   const toggle = (id: string) =>
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -172,6 +189,36 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
   const pair = () => {
     if (selected.length < 1 || pairing || pendingSend) return;
     setPendingSend({ kind: "manual", groups: [selected], initial: inheritedCollaborator(selected) });
+  };
+
+  /** Re-run the AI pairing over EVERY unpaired document of the day. Useful
+   *  after adding more orphans: the server re-reads them all and pairs what it
+   *  can; the rest stream back as unpaired. */
+  const retry = async () => {
+    if (items.length < 1 || retrying || sending || pairing) return;
+    setRetrying(true);
+    try {
+      await onRetry();
+    } catch (err) {
+      console.error("retry pairing failed:", err);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  /** Attach the selected orphan(s) to an existing pair chosen in the picker. */
+  const attach = async (pairId: string) => {
+    if (selected.length < 1 || attaching) return;
+    setAttaching(true);
+    try {
+      await onAttach(pairId, selected);
+      setSelected([]);
+      setPicking(false);
+    } catch (err) {
+      console.error("attach to existing pair failed:", err);
+    } finally {
+      setAttaching(false);
+    }
   };
 
   /** "Împerechere AI" — ship every orphan's photo to the model in one
@@ -376,11 +423,20 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
           )}
         </div>
 
-        <footer className="flex items-center gap-3 border-t border-ink-200 bg-canvas-50 px-5 py-3">
+        <footer className="flex flex-wrap items-center gap-3 border-t border-ink-200 bg-canvas-50 px-5 py-3">
+          <button
+            type="button"
+            onClick={() => void retry()}
+            disabled={items.length < 1 || retrying || suggesting || sending || pairing}
+            title="Trimite toate documentele fără pereche înapoi la AI pentru o nouă citire + împerechere — util după ce ai adăugat documente noi"
+            className="inline-flex shrink-0 items-center gap-2 rounded-md border border-ink-300 px-4 py-1.5 text-sm font-medium text-ink-700 transition hover:border-coral-400 hover:text-ink-900 disabled:cursor-not-allowed disabled:text-ink-400"
+          >
+            {retrying ? <Spinner label="Reîncerc împerecherea…" /> : <span>🔄 Reîncearcă împerecherea (AI)</span>}
+          </button>
           <button
             type="button"
             onClick={() => void suggest()}
-            disabled={items.length < 2 || suggesting || sending}
+            disabled={items.length < 2 || suggesting || sending || retrying}
             title="Trimite toate documentele fără pereche la AI o singură dată — modelul propune perechi după ce vede pe hârtii"
             className="inline-flex shrink-0 items-center gap-2 rounded-md border border-ink-300 px-4 py-1.5 text-sm font-medium text-ink-700 transition hover:border-coral-400 hover:text-ink-900 disabled:cursor-not-allowed disabled:text-ink-400"
           >
@@ -395,10 +451,23 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
           </span>
           <button
             type="button"
+            onClick={() => setPicking(true)}
+            disabled={selected.length < 1 || existingPairs.length === 0 || attaching || pairing}
+            title="Trimite documentele selectate într-o pereche care există deja — se adaugă ca facturi și perechea se recalculează"
+            className="ml-auto inline-flex items-center gap-2 rounded-md border border-coral-300 bg-coral-50 px-4 py-1.5 text-sm font-medium text-coral-700 transition hover:border-coral-400 hover:bg-coral-100 disabled:cursor-not-allowed disabled:border-ink-200 disabled:bg-canvas-100 disabled:text-ink-400"
+          >
+            {attaching ? (
+              <Spinner label="Atașez…" />
+            ) : (
+              <span>Trimite la o pereche{selected.length >= 1 ? ` (${selected.length})` : ""}</span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => void pair()}
             disabled={selected.length < 1 || pairing}
-            className="ml-auto inline-flex items-center gap-2 rounded-md bg-coral-500 px-4 py-1.5 text-sm font-medium text-canvas-50 shadow-sm transition hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400"
-            title="Creează o pereche din documentele selectate (un singur AWB e suficient) și calculeaz-o"
+            className="inline-flex items-center gap-2 rounded-md bg-coral-500 px-4 py-1.5 text-sm font-medium text-canvas-50 shadow-sm transition hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400"
+            title="Creează o pereche nouă din documentele selectate (un singur AWB e suficient) și calculeaz-o"
           >
             {pairing ? (
               <Spinner label="Creez perechea…" />
@@ -429,6 +498,19 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
       )}
     </div>
 
+      {/* Pair-picker — choose which existing pair the selected orphan(s)
+          attach to. Sibling so its overlay clicks don't bubble into the
+          unpaired modal's close handler. */}
+      {picking && (
+        <PairPickModal
+          pairs={existingPairs}
+          count={selected.length}
+          busy={attaching}
+          onPick={(pairId) => void attach(pairId)}
+          onCancel={() => setPicking(false)}
+        />
+      )}
+
       {/* Collaborator gate — the pairs are filed (and sent to OCR) under
           the partner confirmed here, pre-filled from the upload-time
           assignment. Rendered as a sibling so its overlay clicks don't
@@ -456,6 +538,95 @@ export function UnpairedModal({ items, onClose, onRemove, onPair }: ModalProps) 
         />
       )}
     </>
+  );
+}
+
+/* ─── Pick an existing pair to attach the selected documents to ──────── */
+
+function PairPickModal({
+  pairs,
+  count,
+  busy,
+  onPick,
+  onCancel,
+}: {
+  /** Candidate target pairs (the day's non-unpaired pairs). */
+  pairs: Pair[];
+  /** How many documents will be attached — shown in the header. */
+  count: number;
+  /** An attach is in flight — disables the list. */
+  busy: boolean;
+  onPick: (pairId: string) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-900/70 p-6"
+      onClick={onCancel}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-xl border border-ink-200 bg-canvas-100 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="border-b border-ink-200 bg-canvas-50 px-5 py-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-900">
+            Trimite {count} document{count === 1 ? "" : "e"} la o pereche
+          </h2>
+          <p className="text-[11px] text-ink-500">
+            Alege perechea — documentele se adaugă ca facturi și perechea se recalculează.
+          </p>
+        </header>
+        <div className="flex-1 overflow-y-auto p-3">
+          {pairs.length === 0 ? (
+            <p className="px-2 py-6 text-center text-sm text-ink-500">
+              Nicio pereche existentă în această zi.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {pairs.map((p) => {
+                const awb = p.status.kind === "ready" ? p.status.edits.awb : null;
+                const invCount = p.status.kind === "ready" ? p.status.edits.invoices.length : 0;
+                return (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onPick(p.id)}
+                      className="flex w-full items-center justify-between gap-3 rounded-lg border border-ink-200 bg-canvas-50 px-3 py-2 text-left transition hover:border-coral-400 hover:bg-coral-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-ink-900">
+                          {awb ? `AWB ${awb.awb_number || "—"}` : "Pereche în așteptare"}
+                        </span>
+                        <span className="block truncate text-[11px] text-ink-500">
+                          {awb?.recipient_name || "destinatar necunoscut"} · {invCount} factur
+                          {invCount === 1 ? "ă" : "i"}
+                        </span>
+                      </span>
+                      <span className="shrink-0 rounded-md bg-coral-500 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-canvas-50">
+                        {busy ? "…" : "Alege"}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        <footer className="flex justify-end border-t border-ink-200 bg-canvas-50 px-5 py-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-ink-300 bg-canvas-50 px-4 py-1.5 text-sm text-ink-700 transition hover:border-coral-400 disabled:opacity-60"
+          >
+            Anulează
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

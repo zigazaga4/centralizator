@@ -9,7 +9,16 @@ import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { detachInvoice as detachInvoiceApi, extractAndPrice, reprice, scanBatch, verifyProducts } from "./lib/api";
+import {
+  attachToPair as attachToPairApi,
+  detachInvoice as detachInvoiceApi,
+  dismantlePair as dismantlePairApi,
+  extractAndPrice,
+  reprice,
+  retryUnpaired as retryUnpairedApi,
+  scanBatch,
+  verifyProducts,
+} from "./lib/api";
 import {
   deletePair,
   deletePairsByDay,
@@ -605,6 +614,50 @@ export default function App() {
     [commit],
   );
 
+  /**
+   * Dismantle a whole pair — the operator removed its LAST invoice. The server
+   * turns every document (the AWB and the invoice) back into its own unpaired
+   * row and deletes the pair; we drop the pair locally and add the new orphans
+   * (idempotent with the SSE echoes). Pops the detail view if it was open.
+   */
+  const dismantlePair = useCallback(
+    async (pairId: string) => {
+      const { unpaired } = await dismantlePairApi(pairId);
+      let next = pairsRef.current.filter((p) => p.id !== pairId);
+      for (const u of unpaired) if (!next.some((p) => p.id === u.id)) next = [...next, u];
+      commit(next);
+      setSelectedId((cur) => (cur === pairId ? null : cur));
+    },
+    [commit],
+  );
+
+  /**
+   * Attach unpaired document(s) to an existing pair. The server appends their
+   * photos, re-reads + re-prices the pair, and removes the orphan rows; we
+   * apply the updated pair and drop the consumed orphans.
+   */
+  const attachToPair = useCallback(
+    async (pairId: string, sourceIds: string[]) => {
+      const { pair, removed } = await attachToPairApi(pairId, sourceIds);
+      const gone = new Set(removed);
+      const next = pairsRef.current
+        .map((p) => (p.id === pair.id ? pair : p))
+        .filter((p) => !gone.has(p.id));
+      commit(next);
+    },
+    [commit],
+  );
+
+  /**
+   * Re-run the AI pairing over the day's unpaired documents. Fire-and-forget on
+   * the server; the live feed streams the re-paired results in and prunes the
+   * old orphan rows (the server deletes them). Rejects so the modal can surface
+   * a failure.
+   */
+  const retryUnpaired = useCallback(async (day: string) => {
+    await retryUnpairedApi(day);
+  }, []);
+
   const removePair = useCallback(
     (id: string) => {
       markLocal(id);
@@ -1165,6 +1218,14 @@ export default function App() {
     [pairs, selectedDay],
   );
 
+  // Candidate targets for "send to an existing pair": the day's real pairs
+  // (anything that is not an unpaired orphan). Deliberately NOT filtered by
+  // store/view so the operator can attach to any pair of the day.
+  const attachTargets = useMemo(
+    () => pairs.filter((p) => p.day === selectedDay && p.status.kind !== "unpaired"),
+    [pairs, selectedDay],
+  );
+
   // The modal lives only while there is something to resolve; once the
   // last orphan is paired or deleted the flag resets, so a FUTURE scan's
   // orphans never pop the modal open uninvited.
@@ -1379,6 +1440,7 @@ export default function App() {
             verifying={verifyingIds.has(selectedPair.id)}
             onPatch={(patch) => patchPair(selectedPair.id, patch)}
             onDetachInvoice={(invoiceIndex) => detachInvoice(selectedPair.id, invoiceIndex)}
+            onDismantle={() => dismantlePair(selectedPair.id)}
             onBack={() => setSelectedId(null)}
             onRemove={() => removePair(selectedPair.id)}
           />
@@ -1408,6 +1470,9 @@ export default function App() {
                 onClose={() => setUnpairedOpen(false)}
                 onRemove={removePair}
                 onPair={pairManually}
+                existingPairs={attachTargets}
+                onAttach={attachToPair}
+                onRetry={() => retryUnpaired(selectedDay)}
               />
             )}
             {/* Search the day's pairs. Only useful once there's something to

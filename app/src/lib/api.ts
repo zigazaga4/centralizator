@@ -139,6 +139,84 @@ export async function detachInvoice(
   return { pair: wirePairToClient(data.pair), unpaired: wirePairToClient(data.unpaired) };
 }
 
+/**
+ * Dismantle a whole pair: every document (the AWB and each invoice) goes back
+ * to "documente fără pereche" as its own row, and the pair is deleted. Fired
+ * when the operator removes the LAST invoice from a pair. Returns the new
+ * unpaired documents so the caller can drop the pair and add them at once.
+ */
+export async function dismantlePair(pairId: string): Promise<{ unpaired: Pair[] }> {
+  const res = await fetch(`${BASE}/pairs/${encodeURIComponent(pairId)}/dismantle`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    let msg: string | null = null;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg ?? `dismantle failed (${res.status})`);
+  }
+  const data = (await res.json()) as { unpaired: WirePair[] };
+  return { unpaired: data.unpaired.map(wirePairToClient) };
+}
+
+/**
+ * Attach one or more unpaired documents to an EXISTING pair. Their photos are
+ * appended to the pair as extra invoices, the whole pair is re-read + re-priced
+ * server-side, and the orphan rows are removed. Returns the updated pair and the
+ * ids that were consumed so the caller can apply both at once.
+ */
+export async function attachToPair(
+  pairId: string,
+  sourceIds: string[],
+): Promise<{ pair: Pair; removed: string[] }> {
+  const res = await fetch(`${BASE}/pairs/${encodeURIComponent(pairId)}/attach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ sourceIds }),
+  });
+  if (!res.ok) {
+    let msg: string | null = null;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg ?? `attach failed (${res.status})`);
+  }
+  const data = (await res.json()) as { pair: WirePair; removed: string[] };
+  return { pair: wirePairToClient(data.pair), removed: data.removed };
+}
+
+/**
+ * Re-run the AI pairing over ALL of a day's unpaired documents. The server
+ * re-reads each one and runs them back through the same pairing pipeline a
+ * phone scan uses; documents that now pair up become real pairs, the rest come
+ * back as unpaired. Fire-and-forget on the server (202) — results stream in
+ * over the live feed. Returns how many documents were re-submitted.
+ */
+export async function retryUnpaired(day: string): Promise<{ count: number }> {
+  const res = await fetch(`${BASE}/pairs/retry-unpaired`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ day }),
+  });
+  if (!res.ok) {
+    let msg: string | null = null;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(msg ?? `retry-unpaired failed (${res.status})`);
+  }
+  const data = (await res.json()) as { count: number };
+  return { count: data.count };
+}
+
 export async function reprice(req: PricingRequest): Promise<PricingBreakdown> {
   const res = await fetch(`${BASE}/price`, {
     method: "POST",

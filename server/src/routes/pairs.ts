@@ -40,6 +40,7 @@ import {
   insertPair,
   listAllPairsLight,
   persistPairStatus,
+  setPairImages,
   setWeekendDay,
   type PairStatus,
 } from "../db.js";
@@ -47,7 +48,8 @@ import { suggestPairs, SUGGEST_MAX_IMAGES } from "../classify.js";
 import { COLLABORATORS, type Collaborator } from "../tariffs.js";
 import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
 import type { Extracted, Routing } from "../schema.js";
-import { buildPricingInput } from "../pipeline.js";
+import { buildPricingInput, extractAndPrice } from "../pipeline.js";
+import { processBatch, type BatchImage } from "./scan-batch.js";
 import { calculatePrice } from "../pricing.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
@@ -443,6 +445,178 @@ export default async function pairRoutes(app: FastifyInstance) {
       "detach-invoice: invoice sent back to the unpaired pool",
     );
     return reply.send({ pair: getPair(req.params.id), unpaired });
+  });
+
+  /* ── Dismantle a whole pair → every document back to the unpaired pool ─ */
+  // Fired when the operator removes the LAST invoice from a pair (the client
+  // confirms first). The pair is mis-formed or no longer wanted, so instead of
+  // leaving a lone AWB behind we break the pair apart: every image becomes its
+  // own "unpaired" document (slot 0 = AWB, the rest = invoices) and the pair
+  // row is deleted. The operator re-pairs the pieces from the unpaired strip.
+  app.post<{ Params: { id: string } }>("/pairs/:id/dismantle", async (req, reply) => {
+    const pair = getPair(req.params.id);
+    if (!pair) return reply.code(404).send({ error: `No pair ${req.params.id}.` });
+
+    const unpaired = pair.images.map((img, slot) =>
+      insertPair({
+        id: randomUUID(),
+        day: pair.day,
+        collaborator: pair.collaborator,
+        status: { kind: "unpaired", docType: slot === 0 ? "awb" : "invoice" },
+        images: [
+          { name: img.name, mimeType: img.mimeType, size: img.size, bytes: Buffer.from(img.dataB64, "base64") },
+        ],
+      }),
+    );
+    deletePair(req.params.id);
+
+    req.log.info(
+      { pair: req.params.id, docs: unpaired.length },
+      "dismantle: pair broken into individual unpaired documents",
+    );
+    return reply.send({ unpaired });
+  });
+
+  /* ── Attach unpaired document(s) to an existing pair ──────────────────── */
+  // From the unpaired modal: the operator sends one or more orphan documents
+  // INTO a pair that already exists. The orphans' photos are appended to the
+  // pair (after its existing images, so the AWB stays in slot 0), the WHOLE
+  // pair is re-read + re-priced (so the new invoices' data and any macara /
+  // voluminos / descărcare they carry are picked up), and the orphan rows are
+  // removed. Re-uses the same extract+price pipeline as every other flow.
+  app.post<{ Params: { id: string } }>("/pairs/:id/attach", async (req, reply) => {
+    const parsed = z
+      .object({ sourceIds: z.array(z.string().min(1)).min(1).max(11) })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.toString() });
+
+    const target = getPair(req.params.id);
+    if (!target) return reply.code(404).send({ error: `No pair ${req.params.id}.` });
+    if (target.status.kind === "unpaired") {
+      return reply
+        .code(422)
+        .send({ error: "Nu se poate atașa la un document fără pereche — alege o pereche reală." });
+    }
+
+    // Resolve the orphans, skipping any that vanished or are no longer unpaired
+    // (raced a delete / another pairing). Never attach a non-orphan.
+    const sources = parsed.data.sourceIds
+      .map((sid) => getPair(sid))
+      .filter((p): p is NonNullable<typeof p> => !!p && p.status.kind === "unpaired");
+    if (sources.length === 0) {
+      return reply.code(422).send({ error: "Niciun document fără pereche valid de atașat." });
+    }
+
+    const decode = (img: { name: string; mimeType: string; size: number; dataB64: string }) => ({
+      name: img.name,
+      mimeType: img.mimeType,
+      size: img.size,
+      bytes: Buffer.from(img.dataB64, "base64"),
+    });
+    // Existing images first (AWB stays in slot 0), orphans appended as invoices.
+    const images = [...target.images.map(decode), ...sources.flatMap((s) => s.images.map(decode))];
+    if (images.length > 12) {
+      return reply.code(413).send({ error: "Prea multe imagini: maxim 12 per pereche." });
+    }
+
+    // Re-read + re-price the whole pair. Carry the manual weekend flag forward
+    // so attaching never silently drops a per-pair weekend surcharge.
+    const forceWeekend =
+      target.status.kind === "ready" ? target.status.breakdown.weekendForced ?? false : false;
+    let result;
+    try {
+      result = await extractAndPrice(
+        images.map((i) => ({ data: i.bytes, mimeType: i.mimeType })),
+        target.day,
+        forceWeekend,
+      );
+    } catch (err) {
+      req.log.error({ err, pair: req.params.id }, "attach: re-extract/price failed");
+      return reply.code(502).send({ error: (err as Error).message });
+    }
+
+    setPairImages(req.params.id, images);
+    persistPairStatus(req.params.id, {
+      kind: "ready",
+      service: result.resolvedService,
+      serviceFallback: result.serviceFallback,
+      edits: result.extracted,
+      breakdown: result.breakdown,
+      store: result.routing.store,
+      routing: result.routing,
+    });
+    for (const s of sources) deletePair(s.id);
+
+    // Product cross-check — best effort, mirrors the desktop + scan flows.
+    if (scrapingdogConfigured()) {
+      try {
+        const verification = await verifyShipment(result.extracted);
+        persistPairStatus(req.params.id, {
+          kind: "ready",
+          service: result.resolvedService,
+          serviceFallback: result.serviceFallback,
+          edits: result.extracted,
+          breakdown: result.breakdown,
+          store: result.routing.store,
+          routing: result.routing,
+          verification,
+        });
+      } catch (err) {
+        req.log.warn({ err, pair: req.params.id }, "attach: verification failed (kept pair without it)");
+      }
+    }
+
+    req.log.info(
+      { pair: req.params.id, attached: sources.map((s) => s.id) },
+      "attach: documents attached to existing pair and re-priced",
+    );
+    return reply.send({ pair: getPair(req.params.id), removed: sources.map((s) => s.id) });
+  });
+
+  /* ── Re-run AI pairing over the day's unpaired documents ──────────────── */
+  // The operator added more orphans (or just wants another pass): re-read ALL
+  // of the day's unpaired documents with the AI and run them back through the
+  // SAME pairing pipeline scan-batch uses (classify → link → price). Documents
+  // that now pair up become real pairs; the rest come back as unpaired. The
+  // originals are replaced (read into memory, deleted, then recreated by the
+  // pipeline). Live: the SSE feed streams the results in, like a phone scan.
+  app.post("/pairs/retry-unpaired", async (req, reply) => {
+    const parsed = z.object({ day: isoDay }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.toString() });
+    const { day } = parsed.data;
+
+    const orphans = listAllPairsLight().filter(
+      (p) => p.day === day && p.status.kind === "unpaired",
+    );
+    if (orphans.length === 0) {
+      return reply.code(422).send({ error: "Nu există documente fără pereche în această zi." });
+    }
+
+    // Pull each orphan's photo into memory, grouped by collaborator (the
+    // pairing pipeline stamps ONE collaborator per run), then drop the rows.
+    const groups = new Map<string, { collaborator: Collaborator | null; images: BatchImage[] }>();
+    for (const o of orphans) {
+      const img = getPairImage(o.id, 0);
+      if (!img) continue;
+      const key = o.collaborator ?? "";
+      let g = groups.get(key);
+      if (!g) {
+        g = { collaborator: o.collaborator ?? null, images: [] };
+        groups.set(key, g);
+      }
+      g.images.push({ name: img.name, mimeType: img.mimeType, bytes: img.bytes });
+      deletePair(o.id);
+    }
+
+    // Fire the pipeline per collaborator group — fire-and-forget, results
+    // stream back over SSE. processBatch is scan-batch's, used unchanged.
+    for (const g of groups.values()) {
+      if (g.images.length === 0) continue;
+      void processBatch(randomUUID(), g.images, day, g.collaborator, req.log);
+    }
+
+    req.log.info({ day, count: orphans.length }, "retry-unpaired: re-running AI pairing over the day's orphans");
+    return reply.code(202).send({ status: "processing", count: orphans.length });
   });
 
   /* ── Create ───────────────────────────────────────────────────── */
