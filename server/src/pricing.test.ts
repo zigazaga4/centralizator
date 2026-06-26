@@ -61,10 +61,9 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.carrierTotal).toBe(48.40);
   });
 
-  // Two deliveries adds one increment: increment key
-  // "Express / >1200kg / 0-15 km" = 54.50 (LEROY).
-  //   base 48.40 + increment 54.50 = 102.90
-  it("two deliveries adds one increment", () => {
+  // Delivery count no longer bills (ops 2026-06-25): increments are WEIGHT-based
+  // only, so 2 deliveries at 600 kg (≤1200 kg, no weight increment) add nothing.
+  it("delivery count does not add an increment (weight-based only)", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 600,
@@ -73,9 +72,8 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
       deliveryDate: "2026-05-19",
     });
     expect(r.baseTariff).toBe(48.40);
-    expect(r.incrementTariff).toBe(54.50);
-    expect(r.incrementCost).toBe(54.50);
-    expect(r.carrierTotal).toBe(102.90);
+    expect(r.incrementCost).toBe(0);
+    expect(r.carrierTotal).toBe(48.40);
   });
 
   // >50 km tier: base 133.10 (LEROY 500-800kg / 30-50 km used for >50)
@@ -334,13 +332,13 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     expect(r.carrierTotal).toBe(379.98);
   });
 
-  // Multi-stop AND >1200kg both add increment hits, both scale km cost.
-  // weight 1500 (1 weight-increment) + 2 deliveries (1 stop-increment)
-  //   → totalIncrements = 2, rounds = 2
-  //   base 130.66 + 2 × 124.66 = 379.98
-  //   extraKmCost = 31 × 1.90 × 2 × 2 (rounds) × 2 (deliv) = 471.20
-  //   carrier = 851.18
-  it("1500 kg + 2 deliveries stacks weight + stop increments", () => {
+  // The delivery count is ignored (ops 2026-06-25): 1500 kg / 81 km prices the
+  // SAME whether the AWB shows 1 or 2 deliveries — only weight + km bill.
+  //   weight 1500 → 1 weight-increment, rounds 2
+  //   base 130.66 + 1 × 124.66 = 255.32
+  //   extraKmCost = 31 × 1.90 × 2 × 2 (rounds) = 235.60
+  //   carrier = 490.92  (identical to the 1-delivery 1500 kg / 81 km case above)
+  it("1500 kg + 2 deliveries prices the same as 1 delivery (count ignored)", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 1500,
@@ -350,9 +348,9 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
     });
     expect(r.weightIncrements).toBe(1);
     expect(r.rounds).toBe(2);
-    expect(r.incrementCost).toBe(249.32); // 2 × 124.66
-    expect(r.extraKmCost).toBe(471.20);
-    expect(r.carrierTotal).toBe(851.18);
+    expect(r.incrementCost).toBe(124.66); // 1 × 124.66, weight only
+    expect(r.extraKmCost).toBe(235.60);
+    expect(r.carrierTotal).toBe(490.92);
   });
 });
 

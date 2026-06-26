@@ -23,8 +23,9 @@
  *                        24 → 1,  25 → 2,  48 → 2,  49 → 3
  *                      Each one is a real extra trip → +1 increment tariff
  *                      AND +1 round of the per-km surcharge.
- *   extraKmCost      = (km - 50) × 1.90 × 2 × (rounds × deliveries + bulkyTransports)  [>50 km]
- *   incrementCost    = (weightIncrements + (deliveries - 1) + bulkyTransports) × INCREMENT_TARIFFS[...]
+ *   extraKmCost      = (km - 50) × 1.90 × 2 × (rounds + bulkyTransports)  [>50 km]
+ *   incrementCost    = (weightIncrements + bulkyTransports) × INCREMENT_TARIFFS[...]
+ *                      (WEIGHT-based only — the delivery count never bills; ops 2026-06-25)
  *   weekendSurcharge = 11.90 if Sat/Sun else 0
  *   unloadingCount   = unloadingUnits + (weight > 1200kg ? weightIncrements : 0)
  *                      (the standard "descărcare" fee, +1 per extra transport
@@ -104,7 +105,9 @@ export interface PricingInput {
   weightKg: number;
   /** Total km from hub to recipient — AWB's "Distanță extra (km)" field. */
   distanceKm: number;
-  /** Number of distinct deliveries on this AWB. Default 1. */
+  /** Packages/stops printed on the AWB. Default 1. NO LONGER affects pricing
+   *  (ops 2026-06-25: weight-based increments only) — accepted for wire
+   *  compatibility and display, but the engine ignores it. */
   numDeliveries: number;
   /** ISO date YYYY-MM-DD of the delivery. Display/reference only — it no
    *  longer drives pricing. The weekend surcharge is manual now (see
@@ -256,8 +259,8 @@ export interface PricingBreakdown {
   /** Increment tariff from INCREMENT_TARIFFS (used for the row's
    *  incrementCost; surfaced separately so the UI can label it). */
   incrementTariff: number;
-  /** Extra-1000kg + extra-stop cost
-   *  = (weightIncrements + (deliveries - 1)) × incrementTariff. */
+  /** Extra-1000kg increment cost = (weightIncrements + bulkyTransports) ×
+   *  incrementTariff. WEIGHT-based only — the delivery count no longer adds. */
   incrementCost: number;
   /** Weekend surcharge (0 or 11.90). */
   weekendSurcharge: number;
@@ -331,13 +334,16 @@ export interface CollaboratorPrice {
 }
 
 export function calculatePrice(input: PricingInput): PricingBreakdown {
-  const { service, weightKg, distanceKm, numDeliveries } = input;
+  const { service, weightKg, distanceKm } = input;
   const bulkyUnits = Math.max(0, Math.floor(input.bulkyUnits ?? 0));
   const unloadingUnits = Math.max(0, Math.floor(input.unloadingUnits ?? 0));
 
-  if (!Number.isInteger(numDeliveries) || numDeliveries < 1) {
-    throw new RangeError(`numDeliveries must be a positive integer, got ${numDeliveries}`);
-  }
+  // num_deliveries no longer drives pricing. Per ops 2026-06-25 the increments
+  // are WEIGHT-based ONLY: an AWB is one delivery to one recipient, and the
+  // "X/N" on the label is a package-of-N counter, not a stop count. The vision
+  // model kept reading it as multiple deliveries and inflating the price (live:
+  // AWB 004206005/3, "3/3" → 3 deliveries → +2 phantom increments ≈ 249 RON),
+  // so the count is ignored here entirely (kept on the AWB for display only).
 
   const wBucket = weightBucket(weightKg);
   const dBucket = distanceBucket(distanceKm);
@@ -378,18 +384,21 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     : 0;
 
   // Extra-km surcharge only for the >50 km tier; the (km - 50) overage
-  // is charged at PER_KM_SURCHARGE × 2 (round trip). The weight rounds and
-  // the multi-delivery count compound (rounds × numDeliveries); each bulky
-  // transport is its own dispatch on the same route, so it adds one flat
-  // extra round on top.
+  // is charged at PER_KM_SURCHARGE × 2 (round trip). The weight rounds scale
+  // it (a heavy load needs repeat trips on the same route) and each bulky
+  // transport adds one flat extra round. The delivery count does NOT scale it
+  // (weight-based only — see the num_deliveries note at the top of the fn).
   const extraKm = dBucket === ">50 km" ? Math.max(0, distanceKm - EXTRA_KM_THRESHOLD) : 0;
   const perKm = dBucket === ">50 km" ? PER_KM_SURCHARGE : 0;
-  const extraKmCost = round2(extraKm * perKm * 2 * (rounds * numDeliveries + bulkyTransports));
+  const extraKmCost = round2(extraKm * perKm * 2 * (rounds + bulkyTransports));
 
-  // Extra-1000kg-over-1200, extra stops (numDeliveries > 1), AND extra
-  // bulky transports each pay one increment-row tariff. Same physical
-  // fact: an extra truck run with its own base load.
-  const totalIncrements = weightIncrements + (numDeliveries - 1) + bulkyTransports;
+  // Increments are WEIGHT-based: each extra 1000 kg over the 1200 kg base pays
+  // one increment-row tariff, and each extra bulky transport (volume-bound
+  // goods) pays one too. The delivery count is NOT an increment source any
+  // more (ops 2026-06-25): the model kept reading the "X/N" package counter as
+  // multiple deliveries and stacking phantom increments on top of the weight
+  // ones. One AWB is one delivery; only its weight (and bulky volume) bills.
+  const totalIncrements = weightIncrements + bulkyTransports;
   const incrementCost = round2(totalIncrements * incrementTariff);
 
   // Weekend surcharge — PURELY manual. We do NOT derive it from any date:
