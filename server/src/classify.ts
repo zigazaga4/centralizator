@@ -37,8 +37,15 @@ const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v
  *  is easy — a small thinking budget keeps the field reads sharp without
  *  latency. The explicit max_tokens MUST ride along (effort is carved out
  *  of it; unbounded thinking once starved the forced tool call).
- *  Set OPENROUTER_REASONING_EFFORT=off to disable entirely. */
-const REASONING_EFFORT = process.env.OPENROUTER_REASONING_EFFORT ?? "low";
+ *  Set OPENROUTER_REASONING_EFFORT=off to disable entirely.
+ *
+ *  OPENROUTER_GROUPING_REASONING_EFFORT overrides the effort for THIS stage
+ *  only (like OPENROUTER_GROUPING_MODEL splits the model): the classify read
+ *  is where a stray background label must be reasoned out geometrically, so
+ *  it can be dialled up independently of the extraction pass. Falls back to
+ *  the shared OPENROUTER_REASONING_EFFORT, then "low". */
+const REASONING_EFFORT =
+  process.env.OPENROUTER_GROUPING_REASONING_EFFORT ?? process.env.OPENROUTER_REASONING_EFFORT ?? "low";
 const REASONING =
   REASONING_EFFORT === "off"
     ? {}
@@ -85,7 +92,17 @@ const awbTool = {
         stray: {
           type: "boolean",
           description:
-            "true when this label does NOT belong to the photo's main document: it peeks in at the frame edge, sits upside down relative to the main page, or lies on a different sheet in the pile. A label clipped/stapled/laid squarely ON the main invoice is NOT stray.",
+            "Own-vs-stray is decided by GEOMETRY, not by whether an invoice is nearby. true when this " +
+            "label is a stray from the pile: it is rotated or upside down RELATIVE TO the photo's main " +
+            "document, and/or its label box is cut off by the frame edge so you cannot see the whole " +
+            "label. Such a label belongs to another shipment that slipped into the shot — mark stray=true " +
+            "and do NOT complete or guess the digits that run off the frame. A label is the photo's OWN " +
+            "(stray=false) ONLY when it is upright with the main document, its WHOLE box is inside the " +
+            "frame, and it is a main subject of the photo. The AWB's big printed NUMBER and barcode are " +
+            "the anchor: if that number/barcode is not fully visible AND upright, the label is stray " +
+            "(stray=true) even when its Expeditor/Destinatar text happens to be readable — never " +
+            "fabricate the missing digits. A courier label clipped/stapled/laid squarely ON its invoice, " +
+            "upright with its whole number+barcode visible, is the classic OWN label and is NOT stray.",
         },
       },
       required: ["confident", "stray"],
@@ -128,7 +145,10 @@ const SYSTEM_INSTRUCTION =
   "You are a document reader for a Romanian courier back office. You receive exactly ONE photo of paperwork " +
   "from a courier's van — usually a courier waybill label (AWB), a fiscal invoice (FACTURĂ), or a label clipped " +
   "onto its invoice. The photo is shot over a PILE of documents, so stray sheets and labels from OTHER " +
-  "shipments often peek into the frame, usually upside down relative to the main document.\n" +
+  "shipments often peek into the frame, usually upside down relative to the main document. An invoice " +
+  "that fills the frame very often has NO courier label of its own in the same photo — do NOT attach an " +
+  "edge label to it just because they share the frame; that shipment's real label may have been " +
+  "photographed separately.\n" +
   "What things look like:\n" +
   "  • AWB label: barcode + a 9-digit number (007…), 'Expeditor', 'Destinatar', 'Serviciu', 'Greutate (kg)', " +
   "often branded 'couriermanager'.\n" +
@@ -136,15 +156,23 @@ const SYSTEM_INSTRUCTION =
   "blocks, a 'Comandă' number, a 13-digit header number, line items and totals.\n" +
   "Documents may be ROTATED or UPSIDE DOWN — orient each one mentally before reading it.\n" +
   "Report the facts with the tools:\n" +
-  "  • call report_awb once for EACH courier label you can see, filling every field you can read (mark " +
-  "stray=true for labels that do not belong to the main document);\n" +
+  "  • call report_awb once for EACH courier label you can see, filling every field you can read. Decide " +
+  "own-vs-stray by GEOMETRY: a label is the photo's OWN (stray=false) only when it is UPRIGHT with the " +
+  "main document, its WHOLE box is inside the frame, and it is a main subject of the photo (the classic " +
+  "own label is a courier label clipped/laid squarely on its invoice, fully visible). Mark stray=true for " +
+  "any label that is rotated or upside down relative to the main document, or whose box is cut off by the " +
+  "frame edge — that is a background label from another shipment, not this photo's AWB;\n" +
   "  • call report_invoice once when an invoice page is the photo's main document, filling every field and " +
   "line item you can read;\n" +
   "  • a label clipped on its invoice → call BOTH report_awb (stray=false) AND report_invoice;\n" +
   "  • nothing readable → call report_unreadable.\n" +
   "Report ONLY what is printed — no field is mandatory, never fill a field you cannot see. NEVER guess digits: " +
   "a wrong digit creates a phantom shipment downstream; report only the certain digits with confident=false, " +
-  "or omit the number. The 13-digit FACTURĂ header number is never an awb_number. recipient_name/buyer_name is " +
+  "or omit the number. In particular, NEVER complete a number whose digits run off the frame or are hidden by a " +
+  "curl/fold — a partly-off-frame label is a stray background label (stray=true), not this photo's AWB. A photo " +
+  "has AT MOST ONE own label: the one whose big AWB number+barcode is upright and fully inside the frame. If no " +
+  "label's number is fully and uprightly visible, the photo has NO own label — report only the invoice. " +
+  "The 13-digit FACTURĂ header number is never an awb_number. recipient_name/buyer_name is " +
   "the actual person or company receiving/buying — never the Furnizor store, never the courier, never numeric " +
   "codes. Dates ISO YYYY-MM-DD (Romanian DD.MM.YYYY converts). Amounts in RON without thousand separators.\n" +
   "Reply ONLY with tool calls, never in prose.";
