@@ -977,6 +977,31 @@ export default function App() {
               patch.distance_extra_km !== undefined ? false : curAwb.distance_extra_km_missing,
             num_deliveries: patch.num_deliveries ?? curAwb.num_deliveries,
             delivery_date: patch.delivery_date ?? curAwb.delivery_date,
+            // Free-text identity/contact fields — hand-corrections that
+            // persist but never re-price (none of these feed pricing.ts).
+            // `!== undefined` (not `??`) so an intentional clear to "" sticks.
+            awb_number:
+              patch.awb_number !== undefined ? patch.awb_number : curAwb.awb_number,
+            service_text:
+              patch.service_text !== undefined ? patch.service_text : curAwb.service_text,
+            shipment_type:
+              patch.shipment_type !== undefined ? patch.shipment_type : curAwb.shipment_type,
+            content_code:
+              patch.content_code !== undefined ? patch.content_code : curAwb.content_code,
+            hub_destination:
+              patch.hub_destination !== undefined ? patch.hub_destination : curAwb.hub_destination,
+            sender_name:
+              patch.sender_name !== undefined ? patch.sender_name : curAwb.sender_name,
+            sender_phone:
+              patch.sender_phone !== undefined ? patch.sender_phone : curAwb.sender_phone,
+            sender_address:
+              patch.sender_address !== undefined ? patch.sender_address : curAwb.sender_address,
+            recipient_name:
+              patch.recipient_name !== undefined ? patch.recipient_name : curAwb.recipient_name,
+            recipient_phone:
+              patch.recipient_phone !== undefined ? patch.recipient_phone : curAwb.recipient_phone,
+            recipient_address:
+              patch.recipient_address !== undefined ? patch.recipient_address : curAwb.recipient_address,
           },
         },
       };
@@ -987,33 +1012,49 @@ export default function App() {
       setStatusLocal(id, nextStatus);
       void persistAndSet(id, nextStatus);
 
-      const prev = repriceTimers.current.get(id);
-      if (prev) clearTimeout(prev);
+      const touchesPrice =
+        patch.weight_kg !== undefined ||
+        patch.distance_extra_km !== undefined ||
+        patch.num_deliveries !== undefined ||
+        patch.delivery_date !== undefined ||
+        patch.service !== undefined;
+      const immediate = macaraToggle || macaraOnToggle || weekendToggle || unloadingToggle;
+
+      // Only disturb a pending debounced re-price when THIS edit will itself
+      // re-price. A text-only AWB edit (number, sender/recipient, hub, content
+      // code, …) must NOT cancel an in-flight price re-price the operator
+      // queued moments earlier — that would leave a stale price on screen.
+      if (immediate || touchesPrice) {
+        const prev = repriceTimers.current.get(id);
+        if (prev) clearTimeout(prev);
+        repriceTimers.current.delete(id);
+      }
+
       if (macaraToggle) {
         // A discrete click, not typing — re-price immediately with the
         // explicit override so the toggle never lags behind the totals.
-        repriceTimers.current.delete(id);
         void repricePair(id, { macaraForceNormal: force });
       } else if (macaraOnToggle) {
         // Same for the mirror toggle (normal → macara).
-        repriceTimers.current.delete(id);
         void repricePair(id, { macaraForceOn: forceOn });
       } else if (weekendToggle) {
         // Same for the weekend switch: a discrete click, re-price now with
         // the explicit flag so the +11,90 lands instantly.
-        repriceTimers.current.delete(id);
         void repricePair(id, { forceWeekend: weekendOn });
       } else if (unloadingToggle) {
         // Same for the descărcare stepper: a discrete +/- click, re-price
         // now with the explicit count so the fee lands instantly.
-        repriceTimers.current.delete(id);
         void repricePair(id, { unloadingManualExtra: newUnloadingExtra });
-      } else {
+      } else if (touchesPrice) {
+        // A price-affecting AWB field was typed — debounce a server re-price.
         repriceTimers.current.set(
           id,
           setTimeout(() => repricePair(id), REPRICE_DEBOUNCE_MS),
         );
       }
+      // else: a text-only AWB edit. It doesn't touch pricing, so the
+      // optimistic persist above is the whole job — no re-price, and any
+      // in-flight price re-price is deliberately left running.
     },
     [persistAndSet, setStatusLocal, repricePair],
   );

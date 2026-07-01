@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CITY_COMMISSION_KEYS,
   CITY_COMMISSION_LABEL,
@@ -644,7 +644,9 @@ function Spreadsheet({
       <ColumnHeader />
 
       <Section title="AWB" />
-      <DataRow n={r()} label="Număr AWB" value={awb.awb_number} />
+      <DataRow n={r()} label="Număr AWB" editable>
+        <TextCell value={awb.awb_number} onCommit={(v) => onPatch({ awb_number: v })} />
+      </DataRow>
       <DataRow
         n={r()}
         label="Magazin (centralizator)"
@@ -668,9 +670,11 @@ function Spreadsheet({
       <DataRow
         n={r()}
         label="Serviciu (AWB)"
-        value={awb.service_text || "—"}
+        editable
         hint={serviceFallback ? "necunoscut → Express" : undefined}
-      />
+      >
+        <TextCell value={awb.service_text} onCommit={(v) => onPatch({ service_text: v })} />
+      </DataRow>
       <DataRow n={r()} label="Serviciu (calcul)" editable>
         <SelectCell
           value={service}
@@ -744,15 +748,33 @@ function Spreadsheet({
           onChange={(v) => onPatch({ num_deliveries: Math.max(1, Math.floor(v)) })}
         />
       </DataRow>
-      <DataRow n={r()} label="Tip expediție" value={awb.shipment_type} />
-      <DataRow n={r()} label="Hub destinație" value={awb.hub_destination} />
-      <DataRow n={r()} label="Cod conținut" value={awb.content_code} />
-      <DataRow n={r()} label="Expeditor" value={awb.sender_name} />
-      <DataRow n={r()} label="Telefon expeditor" value={awb.sender_phone} />
-      <DataRow n={r()} label="Adresa expeditor" value={awb.sender_address} />
-      <DataRow n={r()} label="Destinatar" value={awb.recipient_name} />
-      <DataRow n={r()} label="Telefon destinatar" value={awb.recipient_phone} />
-      <DataRow n={r()} label="Adresa destinatar" value={awb.recipient_address} />
+      <DataRow n={r()} label="Tip expediție" editable>
+        <TextCell value={awb.shipment_type} onCommit={(v) => onPatch({ shipment_type: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Hub destinație" editable>
+        <TextCell value={awb.hub_destination} onCommit={(v) => onPatch({ hub_destination: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Cod conținut" editable>
+        <TextCell value={awb.content_code} onCommit={(v) => onPatch({ content_code: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Expeditor" editable>
+        <TextCell value={awb.sender_name} onCommit={(v) => onPatch({ sender_name: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Telefon expeditor" editable>
+        <TextCell value={awb.sender_phone} onCommit={(v) => onPatch({ sender_phone: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Adresa expeditor" editable>
+        <TextCell value={awb.sender_address} onCommit={(v) => onPatch({ sender_address: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Destinatar" editable>
+        <TextCell value={awb.recipient_name} onCommit={(v) => onPatch({ recipient_name: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Telefon destinatar" editable>
+        <TextCell value={awb.recipient_phone} onCommit={(v) => onPatch({ recipient_phone: v })} />
+      </DataRow>
+      <DataRow n={r()} label="Adresa destinatar" editable>
+        <TextCell value={awb.recipient_address} onCommit={(v) => onPatch({ recipient_address: v })} />
+      </DataRow>
 
       {/* One Factură section per attached invoice. Header is numbered
           when there's more than one so the user can pair each section
@@ -1446,5 +1468,58 @@ function SelectCell({
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * Free-text AWB cell — hand-correct an OCR'd identity/contact field (AWB
+ * number, sender, recipient, hub, content code, …). Commits on blur or Enter
+ * rather than per keystroke, so a long address isn't PUT to the server on
+ * every character; Escape reverts to the last committed value. Re-syncs to
+ * the prop when the pair changes underneath it (re-extraction, switching
+ * pairs) as long as the field isn't actively being edited. NONE of these
+ * fields feed pricing, so a commit persists the pair without a re-price.
+ */
+function TextCell({
+  value,
+  placeholder,
+  onCommit,
+}: {
+  value: string | null | undefined;
+  placeholder?: string;
+  onCommit: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  const editing = useRef(false);
+  useEffect(() => {
+    // Only overwrite the field with the incoming prop when the user isn't
+    // mid-edit, so a background re-sync never clobbers what's being typed.
+    if (!editing.current) setDraft(value ?? "");
+  }, [value]);
+  const commit = () => {
+    editing.current = false;
+    const next = draft.trim();
+    if (next !== (value ?? "")) onCommit(next);
+  };
+  return (
+    <input
+      type="text"
+      value={draft}
+      placeholder={placeholder ?? "—"}
+      onFocus={() => {
+        editing.current = true;
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        else if (e.key === "Escape") {
+          setDraft(value ?? "");
+          editing.current = false;
+          e.currentTarget.blur();
+        }
+      }}
+      className={`${EDIT_LOOK} block w-full cursor-text px-3 py-1 text-sm`}
+    />
   );
 }

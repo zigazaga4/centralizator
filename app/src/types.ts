@@ -696,6 +696,21 @@ export type PairPatch = {
   distance_extra_km?: number;
   num_deliveries?: number;
   delivery_date?: string;
+  /** Free-text AWB identity + contact fields, hand-corrected off the paper
+   *  when the OCR misread them. NONE of these feed pricing.ts, so editing
+   *  them persists the pair but never triggers a re-price — unlike the
+   *  weight/distance/deliveries/service fields above, which do. */
+  awb_number?: string;
+  service_text?: string;
+  shipment_type?: string | null;
+  content_code?: string | null;
+  hub_destination?: string | null;
+  sender_name?: string | null;
+  sender_phone?: string | null;
+  sender_address?: string | null;
+  recipient_name?: string | null;
+  recipient_phone?: string | null;
+  recipient_address?: string | null;
   /** Operator override: force this shipment to be treated as an ordinary
    *  (non-macara) delivery, or restore the detected macara classification.
    *  Set true to correct a Leroy Merlin macara mis-tag, false to revert.
