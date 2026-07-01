@@ -4,6 +4,8 @@ import { usePairImages } from "../lib/images";
 import { suggestPairs } from "../lib/api";
 import { Spinner } from "./Spinner";
 import { CollaboratorPickModal } from "./CollaboratorPickModal";
+import { SearchBar } from "./SearchBar";
+import { pairMatchesQuery } from "../lib/search";
 
 /**
  * Unpaired-document handling — the day's scans the server could not link
@@ -559,6 +561,12 @@ function PairPickModal({
   onPick: (pairId: string) => void;
   onCancel: () => void;
 }) {
+  // Filter the candidate pairs by the same AWB / recipient / invoice search
+  // the queue uses (lib/search). Empty query shows every pair; a query keeps
+  // only ready pairs whose text matches (pending pairs have nothing to match).
+  const [query, setQuery] = useState("");
+  const q = query.trim();
+  const shown = q ? pairs.filter((p) => pairMatchesQuery(p, query)) : pairs;
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-900/70 p-6"
@@ -578,14 +586,23 @@ function PairPickModal({
             Alege perechea — documentele se adaugă ca facturi și perechea se recalculează.
           </p>
         </header>
+        {pairs.length > 0 && (
+          <div className="border-b border-ink-200 bg-canvas-50 px-3 py-2">
+            <SearchBar value={query} onChange={setQuery} count={q ? shown.length : null} />
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto p-3">
           {pairs.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-ink-500">
               Nicio pereche existentă în această zi.
             </p>
+          ) : shown.length === 0 ? (
+            <p className="px-2 py-6 text-center text-sm text-ink-500">
+              Nicio pereche nu se potrivește căutării „{query}”.
+            </p>
           ) : (
             <ul className="flex flex-col gap-1.5">
-              {pairs.map((p) => {
+              {shown.map((p) => {
                 const awb = p.status.kind === "ready" ? p.status.edits.awb : null;
                 const invCount = p.status.kind === "ready" ? p.status.edits.invoices.length : 0;
                 return (
