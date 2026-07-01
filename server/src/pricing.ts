@@ -153,6 +153,14 @@ export interface PricingInput {
    *  it so it prices on the normal tariff + commission. Default false (use the
    *  detected classification). */
   macaraForceNormal?: boolean;
+  /** Operator override: treat this as a MACARA (crane) delivery even when
+   *  neither the AWB nor an invoice declared it. The mirror image of
+   *  `macaraForceNormal` — corrects the OTHER direction of a Leroy Merlin
+   *  mis-tag (or a vision-model miss) where a shipment that really went out
+   *  by crane got read as an ordinary delivery. No-op when macara was already
+   *  detected (use `macaraForceNormal` to override THAT direction instead).
+   *  Default false. */
+  macaraForceOn?: boolean;
   /** The operator's manual weekend switch for this pair. `true` applies the
    *  +11,90 weekend surcharge, anything else leaves it off. This is the ONLY
    *  thing that drives the surcharge — there is no date-based detection. The
@@ -181,6 +189,11 @@ export interface MacaraBreakdown {
    *  forced it to an ordinary delivery (Leroy Merlin mis-tagged it). When true,
    *  `isMacara` is false and every macara figure below is zeroed. */
   forcedNormal: boolean;
+  /** Operator override flag, the mirror image of `forcedNormal`: NEITHER the
+   *  AWB nor an invoice declared macara, but the operator forced it billed as
+   *  one anyway. When true, `isMacara` is true and macara is priced normally
+   *  (at least 1 palet, ceil(paleți/8) runs) even though `detected` is false. */
+  forcedOn: boolean;
   /** Macara named on the AWB "Serviciu" — the legitimate signal (no warning). */
   onAwb: boolean;
   /** Macara found on an invoice line. */
@@ -436,6 +449,9 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   // Operator override — force an ordinary (non-macara) delivery even when the
   // documents declared macara (Leroy Merlin mis-tags it sometimes).
   const macaraForceNormal = input.macaraForceNormal ?? false;
+  // Mirror override — force a MACARA delivery even when neither the AWB nor
+  // an invoice declared it (the other direction of the same mis-tag).
+  const macaraForceOn = input.macaraForceOn ?? false;
   // Primary macara breakdown — uses the pair's resolved dispatch store (or the
   // default table when unknown). This is the one the table/footer fall back to.
   const macaraRuns = Math.max(0, Math.floor(input.macaraRuns ?? 0));
@@ -447,6 +463,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     distanceKm,
     store: input.macaraStore ?? null,
     forceNormal: macaraForceNormal,
+    forceOn: macaraForceOn,
   });
   // Macara priced for EVERY city, so the UI can show the macara tariff per
   // city (Ploiești + Iași ERA on Table B, Iași Tudor + Constanța on Table A),
@@ -463,6 +480,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
         distanceKm,
         store: city,
         forceNormal: macaraForceNormal,
+        forceOn: macaraForceOn,
       }),
     ]),
   ) as Record<City, MacaraBreakdown>;
@@ -557,13 +575,20 @@ function computeMacara(args: {
   store: City | null;
   /** Operator override forcing an ordinary delivery despite detection. */
   forceNormal?: boolean;
+  /** Operator override forcing a macara delivery despite NO detection — the
+   *  mirror of `forceNormal`. Ignored when macara WAS detected (forceNormal
+   *  is the relevant override in that case). */
+  forceOn?: boolean;
 }): MacaraBreakdown {
   const { onAwb, onInvoice, distanceKm, store } = args;
   // Detection (what the documents say) vs. the EFFECTIVE classification (what
-  // we bill). The operator can force a detected macara back to normal.
+  // we bill). The operator can force a detected macara back to normal, OR
+  // force an undetected run INTO macara — exactly one of the two overrides
+  // ever applies, since each is gated on the opposite of `detected`.
   const detected = onAwb || onInvoice;
   const forcedNormal = (args.forceNormal ?? false) && detected;
-  const isMacara = detected && !forcedNormal;
+  const forcedOn = (args.forceOn ?? false) && !detected;
+  const isMacara = forcedOn || (detected && !forcedNormal);
   // Pick the rate table for the dispatch site (Table A: Iași Tudor +
   // Constanța; Table B: Ploiești + Iași ERA). Default A when undetermined.
   const table = store ? MACARA_TABLE_BY_CITY[store] : MACARA_DEFAULT_TABLE;
@@ -572,6 +597,7 @@ function computeMacara(args: {
       isMacara: false,
       detected,
       forcedNormal,
+      forcedOn: false, // isMacara would be true if this ever held
       // Preserve the raw detection + palet count so an override can be toggled
       // back to macara without losing what the documents said.
       onAwb,
@@ -623,6 +649,7 @@ function computeMacara(args: {
     isMacara: true,
     detected,
     forcedNormal: false,
+    forcedOn,
     onAwb,
     onInvoice,
     warning,

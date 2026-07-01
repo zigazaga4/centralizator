@@ -299,6 +299,10 @@ export const PricingRequestSchema = z.object({
   /** Operator override forcing an ordinary (non-macara) delivery even when
    *  macara was detected — corrects a Leroy Merlin mis-tag. Default false. */
   macara_force_normal: z.boolean().default(false),
+  /** Operator override forcing a MACARA delivery even when neither the AWB
+   *  nor an invoice declared it — the mirror of `macara_force_normal`, for
+   *  the other direction of the same mis-tag. Default false. */
+  macara_force_on: z.boolean().default(false),
   /** Operator override forcing the weekend surcharge ON regardless of the
    *  delivery date — set when the pair's filing day is marked a weekend.
    *  Default false (surcharge keys off the date). */

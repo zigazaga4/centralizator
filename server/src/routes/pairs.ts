@@ -394,8 +394,9 @@ export default async function pairRoutes(app: FastifyInstance) {
     });
 
     // 3) Re-price the source pair without that invoice. Reuse the already
-    //    resolved routing (no new Mapbox call) and carry the macara→normal
-    //    override forward so it survives the edit.
+    //    resolved routing (no new Mapbox call) and carry EITHER macara
+    //    override forward (macara→normal or normal→macara) so it survives
+    //    the edit.
     const newExtracted: Extracted = {
       ...status.edits,
       invoices: invoices.filter((_, i) => i !== invoiceIndex),
@@ -412,6 +413,7 @@ export default async function pairRoutes(app: FastifyInstance) {
         forceWeekend: getWeekendDay(pair.day) || (status.breakdown.weekendForced ?? false),
       }),
       macaraForceNormal: status.breakdown.macara?.forcedNormal ?? false,
+      macaraForceOn: status.breakdown.macara?.forcedOn ?? false,
     });
 
     // 4) Re-verify the remaining invoices. The old verification indexed the

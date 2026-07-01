@@ -814,7 +814,10 @@ export default function App() {
   /* ── Per-pair edit + debounced re-price ───────────────────────────── */
 
   const repricePair = useCallback(
-    async (id: string, override?: { macaraForceNormal?: boolean; forceWeekend?: boolean }) => {
+    async (
+      id: string,
+      override?: { macaraForceNormal?: boolean; macaraForceOn?: boolean; forceWeekend?: boolean },
+    ) => {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
       const { service, edits, breakdown } = pair.status;
@@ -845,6 +848,10 @@ export default function App() {
           // survives unrelated edits (weight, km, …).
           macara_force_normal:
             override?.macaraForceNormal ?? (breakdown.macara?.forcedNormal ?? false),
+          // The mirror override — an explicit value from the toggle wins,
+          // otherwise carry the persisted decision forward (same rule).
+          macara_force_on:
+            override?.macaraForceOn ?? (breakdown.macara?.forcedOn ?? false),
           // Weekend is a manual per-pair switch — never derived from a date.
           // An explicit value from the toggle wins; otherwise carry the
           // persisted flag forward so an unrelated edit (weight, km, …) doesn't
@@ -872,29 +879,44 @@ export default function App() {
       if (!cur || cur.status.kind !== "ready") return;
 
       const curAwb = cur.status.edits.awb;
-      // The macara→normal override is NOT an AWB field — it rides in the
-      // breakdown. Flip it optimistically so the toggle + the standard/macara
-      // sections switch instantly; the server recomputes the real totals on
-      // the immediate re-price below.
+      // The macara override — either direction — is NOT an AWB field, it
+      // rides in the breakdown. Flip it optimistically so the toggle + the
+      // standard/macara sections switch instantly; the server recomputes the
+      // real totals on the immediate re-price below.
       const macaraToggle = patch.macara_force_normal !== undefined;
+      const macaraOnToggle = patch.macara_force_on !== undefined;
       const force = !!patch.macara_force_normal;
+      const forceOn = !!patch.macara_force_on;
       const curBreakdown = cur.status.breakdown;
       const curMac = curBreakdown.macara;
       const detected = curMac
         ? curMac.detected ?? (curMac.onAwb || curMac.onInvoice)
         : false;
-      const nextBreakdown =
-        macaraToggle && curMac
-          ? {
-              ...curBreakdown,
-              macara: {
-                ...curMac,
-                forcedNormal: force && detected,
-                isMacara: detected && !force,
-                warning: force ? false : curMac.warning,
-              },
-            }
-          : curBreakdown;
+      let nextBreakdown = curBreakdown;
+      if (macaraToggle && curMac) {
+        // macara → normal (or undo): only meaningful when detected.
+        nextBreakdown = {
+          ...curBreakdown,
+          macara: {
+            ...curMac,
+            forcedNormal: force && detected,
+            isMacara: detected && !force,
+            warning: force ? false : curMac.warning,
+          },
+        };
+      } else if (macaraOnToggle && curMac) {
+        // normal → macara (or undo): only meaningful when NOT detected —
+        // the mirror of the branch above.
+        nextBreakdown = {
+          ...curBreakdown,
+          macara: {
+            ...curMac,
+            forcedOn: forceOn && !detected,
+            isMacara: detected || (forceOn && !detected),
+            warning: false,
+          },
+        };
+      }
 
       const weekendToggle = patch.force_weekend !== undefined;
       const weekendOn = !!patch.force_weekend;
@@ -940,6 +962,10 @@ export default function App() {
         // explicit override so the toggle never lags behind the totals.
         repriceTimers.current.delete(id);
         void repricePair(id, { macaraForceNormal: force });
+      } else if (macaraOnToggle) {
+        // Same for the mirror toggle (normal → macara).
+        repriceTimers.current.delete(id);
+        void repricePair(id, { macaraForceOn: forceOn });
       } else if (weekendToggle) {
         // Same for the weekend switch: a discrete click, re-price now with
         // the explicit flag so the +11,90 lands instantly.

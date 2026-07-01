@@ -800,6 +800,76 @@ describe("calculatePrice — macara (crane delivery), a separate track", () => {
     expect(r.macara.forcedNormal).toBe(false);
     expect(r.macara.total).toBe(0);
   });
+
+  // Mirror override: neither the AWB nor an invoice named macara, but the
+  // operator forces it billed as one anyway (the documents/vision model
+  // missed a real crane delivery). isMacara flips true and macara prices
+  // exactly like a genuinely-detected run (≥1 palet, ceil(paleți/8) runs).
+  it("macaraForceOn turns an undetected delivery into a macara run", () => {
+    const base = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+    });
+    const detectedMacara = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 3,
+    });
+    const forcedOn = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraPallets: 3, macaraForceOn: true,
+    });
+    // Sanity: without the override it is NOT macara.
+    expect(base.macara.isMacara).toBe(false);
+    // With the override it bills exactly like the genuinely-detected run —
+    // same palet count, same standard tariff being replaced by macara.
+    expect(forcedOn.macara.isMacara).toBe(true);
+    expect(forcedOn.macara.detected).toBe(false);
+    expect(forcedOn.macara.forcedNormal).toBe(false);
+    expect(forcedOn.macara.forcedOn).toBe(true);
+    expect(forcedOn.macara.warning).toBe(false);
+    expect(forcedOn.macara.pallets).toBe(3);
+    expect(forcedOn.macara.total).toBe(detectedMacara.macara.total);
+    // Every per-city macara figure is populated too.
+    expect(forcedOn.macaraByCity.Ploiesti.isMacara).toBe(true);
+    expect(forcedOn.macaraByCity.Ploiesti.forcedOn).toBe(true);
+    // Macara is a wholly SEPARATE, non-commissioned track (mirrors the
+    // forceNormal test): the standard carrierTotal keeps computing exactly
+    // the same regardless — only `macara.total` (0 vs populated) differs.
+    expect(forcedOn.carrierTotal).toBe(base.carrierTotal);
+    expect(forcedOn.carrierTotal).toBe(detectedMacara.carrierTotal);
+    expect(forcedOn.macara.total).toBeGreaterThan(0);
+    expect(base.macara.total).toBe(0);
+  });
+
+  // The override is inert when macara was ALREADY detected: forceNormal is
+  // the correct override for that direction, forceOn does nothing extra.
+  it("macaraForceOn is a no-op when macara was already detected", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraOnAwb: true, macaraPallets: 3, macaraForceOn: true,
+    });
+    expect(r.macara.isMacara).toBe(true);
+    expect(r.macara.detected).toBe(true);
+    // forcedOn only ever reflects an override applied to an UNDETECTED run.
+    expect(r.macara.forcedOn).toBe(false);
+  });
+
+  // Defaults to 1 palet (same rule as a genuinely-detected macara with no
+  // read count) when forced on with no palet count at all.
+  it("macaraForceOn with no palet count bills at least 1 palet, 1 run", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 100, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      macaraForceOn: true,
+    });
+    expect(r.macara.isMacara).toBe(true);
+    expect(r.macara.pallets).toBe(1);
+    expect(r.macara.runs).toBe(1);
+    expect(r.macara.total).toBeGreaterThan(0);
+  });
 });
 
 /** Local 2-dp round mirroring the engine, for assertions. */

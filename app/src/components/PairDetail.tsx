@@ -609,14 +609,14 @@ function Spreadsheet({
   // commission machinery and show the macara calc as the bottom line.
   const macara = breakdown.macara;
   const isMacara = !!macara?.isMacara;
-  // Macara→normal override. The toggle shows only when macara was detected on
-  // the documents (or already overridden), so it never clutters an ordinary
-  // delivery. `detected` is derived for breakdowns persisted before it existed.
+  // Macara override — works BOTH directions (macara→normal and normal→macara)
+  // so the toggle is always visible, like the Weekend switch below. `detected`
+  // is derived for breakdowns persisted before it existed.
   const macaraDetected = macara
     ? macara.detected ?? (macara.onAwb || macara.onInvoice)
     : false;
   const macaraForcedNormal = !!macara?.forcedNormal;
-  const showMacaraToggle = macaraDetected || macaraForcedNormal;
+  const macaraForcedOn = !!macara?.forcedOn;
 
   // Split for readability — the spreadsheet renders the AWB section
   // once, then loops through every invoice as its own section. Pricing
@@ -673,31 +673,37 @@ function Spreadsheet({
           onChange={(v) => onPatch({ service: v as Service })}
         />
       </DataRow>
-      {/* Macara override — only on pairs the documents flagged as macara.
-          Leroy Merlin sometimes mis-tags an ordinary shipment as macara; this
-          lets the operator flip it back to a normal delivery (standard tariff
-          + commission). Toggling it re-prices on the spot. */}
-      {showMacaraToggle && (
-        <DataRow
-          n={r()}
-          label="Livrare cu macara"
-          editable
-          hint={
-            macaraForcedNormal
-              ? "setat normal manual"
+      {/* Macara override — always available, both directions. Leroy Merlin
+          (or the vision model) sometimes mis-tags a shipment either way: a
+          normal delivery read as macara, or a real crane run read as normal.
+          Toggling it re-prices on the spot. */}
+      <DataRow
+        n={r()}
+        label="Livrare cu macara"
+        editable
+        hint={
+          macaraForcedNormal
+            ? "setat normal manual"
+            : macaraForcedOn
+              ? "setat macara manual"
               : macara?.warning
                 ? "doar pe factură"
                 : undefined
+        }
+      >
+        <ToggleCell
+          value={isMacara}
+          onLabel="DA · macara"
+          offLabel="NU · livrare normală"
+          onChange={(next) =>
+            onPatch(
+              macaraDetected
+                ? { macara_force_normal: !next }
+                : { macara_force_on: next },
+            )
           }
-        >
-          <ToggleCell
-            value={isMacara}
-            onLabel="DA · macara"
-            offLabel="NU · livrare normală"
-            onChange={(next) => onPatch({ macara_force_normal: !next })}
-          />
-        </DataRow>
-      )}
+        />
+      </DataRow>
       <DataRow n={r()} label="Greutate (kg)" editable>
         <NumberCell
           value={awb.weight_kg}

@@ -368,6 +368,9 @@ export interface MacaraBreakdown {
   /** Operator forced an ordinary delivery despite detection (Leroy Merlin
    *  mis-tag). Optional for older breakdowns; treat missing as false. */
   forcedNormal?: boolean;
+  /** Operator forced a MACARA delivery despite NO detection — the mirror of
+   *  `forcedNormal`. Optional for older breakdowns; treat missing as false. */
+  forcedOn?: boolean;
   onAwb: boolean;
   onInvoice: boolean;
   warning: boolean;
@@ -547,6 +550,11 @@ export interface PricingRequest {
    *  macara was detected — corrects a Leroy Merlin mis-tag. Carried across
    *  re-prices so the override sticks. Optional; default false. */
   macara_force_normal?: boolean;
+  /** Operator override forcing a MACARA delivery even when neither the AWB
+   *  nor an invoice declared it — the mirror of `macara_force_normal`.
+   *  Carried across re-prices so the override sticks. Optional; default
+   *  false. */
+  macara_force_on?: boolean;
   /** Operator override forcing the weekend surcharge ON regardless of the
    *  delivery date — set when the pair's filing day is marked a weekend.
    *  Optional; default false. */
@@ -674,6 +682,12 @@ export type PairPatch = {
    *  Set true to correct a Leroy Merlin macara mis-tag, false to revert.
    *  Not an AWB field — handled specially (immediate re-price, no debounce). */
   macara_force_normal?: boolean;
+  /** Operator override: force this shipment to be treated as a MACARA
+   *  delivery even though neither the AWB nor an invoice declared it, or
+   *  restore the detected (non-macara) classification. The mirror of
+   *  `macara_force_normal` for the opposite direction of the same mis-tag.
+   *  Not an AWB field — handled specially (immediate re-price, no debounce). */
+  macara_force_on?: boolean;
   /** Operator's manual weekend switch for THIS pair. true applies the +11,90
    *  weekend surcharge, false removes it. This is the ONLY thing that drives
    *  the surcharge — there is no date-based detection. Not an AWB field —
