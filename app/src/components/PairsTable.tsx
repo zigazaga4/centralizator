@@ -3,6 +3,7 @@ import {
   COLLABORATOR_LABEL,
   COLLABORATOR_SHORT_LABEL,
   primaryDispatchSite,
+  type Awb,
   type CityKey,
   type CityCommissionKey,
   type CollaboratorKey,
@@ -16,7 +17,7 @@ import {
 import { date, ron, ronBare } from "../lib/format";
 import { usePairImages } from "../lib/images";
 import { EDIT_LOOK } from "../lib/ui";
-import { ProductBadge } from "./ProductCheck";
+import { ProductBadge, hasMissingAwbData } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
@@ -321,6 +322,7 @@ function PairRow({
               >
                 {edits?.awb.awb_number || <Dash />}
               </span>
+              {hasMissingAwbData(edits?.awb) && <ManualAwbChip awb={edits!.awb} />}
               {breakdown?.macara?.isMacara && <MacaraChip warning={breakdown.macara.warning} />}
               {(breakdown?.bulkyTransports ?? 0) > 0 && (
                 <VoluminosChip
@@ -948,6 +950,30 @@ function MacaraChip({ warning }: { warning: boolean }) {
       }`}
     >
       {warning ? "⚠ macara" : "macara"}
+    </span>
+  );
+}
+
+/** Prominent "MANUAL" marker next to the AWB code for a "manual AWB" — a
+ *  courier template (e.g. a couriermanager proof-of-delivery slip) that does
+ *  not print the weight and/or the km, so the model had nothing to read and
+ *  fell back to 0 (weight_kg_missing / distance_extra_km_missing). The coral
+ *  chip makes it unmissable in the list so the operator fills the real value
+ *  off the paper document before trusting the price. */
+function ManualAwbChip({ awb }: { awb: Awb }) {
+  const missing = [
+    awb.weight_kg_missing ? "greutatea" : null,
+    awb.distance_extra_km_missing ? "distanța" : null,
+  ].filter(Boolean);
+  const list = missing.join(" și ");
+  return (
+    <span
+      title={`AWB manual — ${list} nu ${missing.length > 1 ? "sunt" : "e"} tipărit${
+        missing.length > 1 ? "e" : "ă"
+      } pe document (valoarea 0 e implicită). Verifică documentul fizic și completează câmpul.`}
+      className="shrink-0 whitespace-nowrap rounded bg-coral-600 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-canvas-50"
+    >
+      ⚠ manual
     </span>
   );
 }
