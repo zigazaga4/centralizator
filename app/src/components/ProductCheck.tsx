@@ -1,17 +1,30 @@
 import { useState, type ReactNode, type MouseEvent } from "react";
-import { CITY_COMMISSION_LABEL, type CheckStatus, type ItemCheck, type Routing, type Verification } from "../types";
+import { CITY_COMMISSION_LABEL, type Awb, type CheckStatus, type ItemCheck, type Routing, type Verification } from "../types";
 import { ron } from "../lib/format";
 import { RouteMapModal } from "./RouteMapModal";
 
+/** True when the AWB itself is missing a pricing-relevant field (the vision
+ *  model found no weight and/or km field printed on the document at all —
+ *  see `weight_kg_missing` / `distance_extra_km_missing`). Distinct from a
+ *  Leroy Merlin catalog mismatch or a Mapbox km disagreement: this means the
+ *  number shown is a 0 fallback, not a real reading, and pricing on it is
+ *  unverified until the operator fills in the real value from the paper AWB. */
+export function hasMissingAwbData(awb?: Awb): boolean {
+  return !!awb?.weight_kg_missing || !!awb?.distance_extra_km_missing;
+}
+
 /**
- * Does this pair deserve the warning icon? Two independent sources feed
+ * Does this pair deserve the warning icon? Three independent sources feed
  * the single alarm the operator watches:
- *   • a product discrepancy (size/weight vs leroymerlin.ro), and
+ *   • a product discrepancy (size/weight vs leroymerlin.ro),
  *   • a km discrepancy (our Mapbox shortest-road km vs the AWB's printed
- *     km) — the operator's rule is that ANY difference is flagged.
+ *     km) — the operator's rule is that ANY difference is flagged, and
+ *   • the AWB itself is missing weight and/or km (some templates, e.g. a
+ *     'couriermanager' proof-of-delivery slip, never print one of these
+ *     fields — the shown number is a 0 fallback, not a real reading).
  */
-export function hasAnyWarning(verification?: Verification, routing?: Routing): boolean {
-  return !!verification?.hasWarning || !!routing?.kmWarning;
+export function hasAnyWarning(verification?: Verification, routing?: Routing, awb?: Awb): boolean {
+  return !!verification?.hasWarning || !!routing?.kmWarning || hasMissingAwbData(awb);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -65,11 +78,14 @@ function StatusChip({ status, labelMap }: { status: CheckStatus; labelMap?: Part
 export function ProductBadge({
   verification,
   routing,
+  awb,
   verifying,
   pairId,
 }: {
   verification?: Verification;
   routing?: Routing;
+  /** AWB fields — surfaces weight_kg_missing / distance_extra_km_missing. */
+  awb?: Awb;
   verifying?: boolean;
   /** When given, the km box can open the route-map modal for this pair. */
   pairId?: string;
@@ -88,15 +104,17 @@ export function ProductBadge({
   }
 
   const kmWarn = !!routing?.kmWarning;
-  // Show the icon when there's anything to show — a product report to open
-  // or a km discrepancy to flag.
-  if (!verification && !kmWarn) return null;
+  const awbDataWarn = hasMissingAwbData(awb);
+  // Show the icon when there's anything to show — a product report to open,
+  // a km discrepancy, or missing AWB data to flag.
+  if (!verification && !kmWarn && !awbDataWarn) return null;
 
-  const warn = hasAnyWarning(verification, routing);
+  const warn = hasAnyWarning(verification, routing, awb);
   const title = warn
     ? [
         verification?.hasWarning ? "discrepanță produse (dimensiuni/greutate)" : null,
         kmWarn ? "diferență de km (AWB vs Mapbox)" : null,
+        awbDataWarn ? "date lipsă pe AWB (kg/km)" : null,
       ]
         .filter(Boolean)
         .join(" + ") + " — click pentru detalii"
@@ -149,11 +167,13 @@ export function ProductBadge({
 function ProductCheckDialog({
   verification,
   routing,
+  awb,
   pairId,
   onClose,
 }: {
   verification?: Verification;
   routing?: Routing;
+  awb?: Awb;
   pairId?: string;
   onClose: () => void;
 }) {
@@ -195,7 +215,7 @@ function ProductCheckDialog({
           </button>
         </div>
 
-        <ProductCheckSummary verification={verification} routing={routing} pairId={pairId} />
+        <ProductCheckSummary verification={verification} routing={routing} awb={awb} pairId={pairId} />
       </div>
     </div>
   );
@@ -206,22 +226,27 @@ function ProductCheckDialog({
 export function ProductCheckSummary({
   verification,
   routing,
+  awb,
   pairId,
 }: {
   verification?: Verification;
   routing?: Routing;
+  awb?: Awb;
   pairId?: string;
 }) {
   const v = verification;
   const prodWarn = !!v?.hasWarning;
   const kmWarn = !!routing?.kmWarning;
-  const anyWarn = prodWarn || kmWarn;
+  const awbDataWarn = hasMissingAwbData(awb);
+  const anyWarn = prodWarn || kmWarn || awbDataWarn;
   const prodAllGood = !!v && !v.hasWarning && v.items.some((it) => it.found);
 
-  // What the coral banner should call out — products, km, or both.
+  // What the coral banner should call out — products, km, missing data, any
+  // combination.
   const warnBits = [
     prodWarn ? "dimensiuni/greutate față de site" : null,
     kmWarn ? "km (AWB vs Mapbox)" : null,
+    awbDataWarn ? "date lipsă pe AWB (kg/km)" : null,
   ].filter(Boolean);
 
   return (
@@ -250,6 +275,12 @@ export function ProductCheckSummary({
           </span>
         </div>
       ) : null}
+
+      {/* Missing AWB data — the vision model found no weight and/or km field
+          printed on the document at all. Shown first: an unverified/fabricated
+          input is a more direct pricing risk than the km/product cross-checks
+          below it. */}
+      <MissingAwbDataCheck awb={awb} />
 
       {/* Km reconciliation — our Mapbox shortest-road km vs the AWB's printed
           km. Any gap is a warning per the operator's rule. */}
@@ -296,6 +327,42 @@ export function ProductCheckSummary({
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Missing-AWB-data box. Some AWB templates never print one of the two
+ * pricing-relevant fields at all — most notably a 'couriermanager'-branded
+ * proof-of-delivery slip, which has no 'Distanță extra (km)' field anywhere
+ * on the page. The vision model sets `weight_kg`/`distance_extra_km` to 0 in
+ * that case (a fallback, not a reading) and flags it via the matching
+ * `_missing` boolean. Rendered only when at least one is actually missing —
+ * an ordinary AWB with a real 0 (e.g. a genuinely short delivery) never
+ * shows this box, because `_missing` is false in that case.
+ */
+function MissingAwbDataCheck({ awb }: { awb?: Awb }) {
+  if (!hasMissingAwbData(awb)) return null;
+  const missing = [
+    awb?.weight_kg_missing ? "Greutate (kg)" : null,
+    awb?.distance_extra_km_missing ? "Distanță extra (km)" : null,
+  ].filter(Boolean) as string[];
+  return (
+    <div className="mb-4 rounded-lg border border-coral-300 bg-coral-50/60 px-4 py-3">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-600">
+          Date lipsă pe AWB
+        </span>
+        <StatusChip status="mismatch" labelMap={{ mismatch: "Nesigur" }} />
+      </div>
+      <p className="mt-1 text-sm text-ink-800">
+        {missing.join(" și ")} nu {missing.length > 1 ? "apar" : "apare"} tipărit{missing.length > 1 ? "e" : ""} pe
+        acest AWB — valoarea de mai sus (0) e o valoare implicită, nu o citire reală.
+      </p>
+      <p className="mt-1 text-xs text-ink-500">
+        Verifică documentul fizic (unele curieri, ex. un aviz de livrare "couriermanager", nu tipăresc deloc
+        acest câmp) și completează valoarea corectă mai sus — prețul se recalculează imediat.
+      </p>
     </div>
   );
 }

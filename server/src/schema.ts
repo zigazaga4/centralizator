@@ -107,8 +107,20 @@ export const AwbSchema = z.object({
   service_text: z.string().describe("Raw 'Serviciu' field from the AWB, e.g. 'Standard'."),
   shipment_type: z.string().optional().nullable().describe("AWB 'Expediţie' field, e.g. 'Colet'."),
   weight_kg: z.number().nonnegative(),
+  /** True when NO weight field is printed anywhere on the AWB (genuinely
+   *  absent from the document/template, not merely hard to read) — the
+   *  model sets `weight_kg` to 0 in that case and flags it here instead of
+   *  guessing, so the UI can warn the operator rather than silently
+   *  under-price the shipment. Optional/defaulted for older extractions. */
+  weight_kg_missing: z.boolean().optional().default(false),
   distance_extra_km: z.number().nonnegative()
     .describe("Hub-to-recipient km from the AWB's 'Distanţă extra (km)' field."),
+  /** Mirror of `weight_kg_missing` for the distance field. Some couriers
+   *  (e.g. a 'couriermanager' proof-of-delivery slip) never print a
+   *  'Distanță extra (km)' field at all — this distinguishes "genuinely
+   *  0 extra km" from "we don't actually know". Optional/defaulted for
+   *  older extractions. */
+  distance_extra_km_missing: z.boolean().optional().default(false),
   num_deliveries: z.number().int().positive().default(1)
     .describe("How many stops/parcels this AWB covers. Default 1; bump only if AWB shows e.g. 2/3 written as boxes."),
   content_code: z.string().optional().nullable(),

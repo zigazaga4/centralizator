@@ -170,8 +170,23 @@ export const awbSchema = {
     delivery_date: { type: "string", description: "AWB date, ISO YYYY-MM-DD." },
     service_text: { type: "string", description: "Raw 'Serviciu' value from the AWB ('Standard', 'Express', etc)." },
     shipment_type: { type: "string", description: "AWB 'Expediţie' value, e.g. 'Colet'." },
-    weight_kg: { type: "number", description: "AWB 'Greutate (kg)' value." },
-    distance_extra_km: { type: "number", description: "AWB 'Distanţă extra (km)' — total km from hub to recipient." },
+    weight_kg: { type: "number", description: "AWB 'Greutate (kg)' value. Set 0 when there is no such field printed anywhere on the AWB (see weight_kg_missing) — never guess a number." },
+    weight_kg_missing: {
+      type: "boolean",
+      description:
+        "True when NO weight field is printed ANYWHERE on the AWB (not merely hard to read — genuinely " +
+        "absent from this document/template). False whenever a real weight was read (even if it took a " +
+        "zoom). When true, weight_kg must be 0.",
+    },
+    distance_extra_km: { type: "number", description: "AWB 'Distanţă extra (km)' — total km from hub to recipient. Set 0 when there is no such field printed anywhere on the AWB (see distance_extra_km_missing) — never guess a distance." },
+    distance_extra_km_missing: {
+      type: "boolean",
+      description:
+        "True when NO 'Distanță extra (km)' field is printed ANYWHERE on the AWB (not merely hard to read " +
+        "— genuinely absent from this document/template; some couriers, e.g. a 'couriermanager' proof-of-" +
+        "delivery slip, never print this field at all). False whenever a real distance was read (even if it " +
+        "took a zoom). When true, distance_extra_km must be 0.",
+    },
     num_deliveries: { type: "integer", description: "Number of stops/parcels in this AWB (default 1; only larger when AWB shows e.g. '2/2')." },
     content_code: { type: "string", description: "AWB 'Continut' code (e.g. 'L07-26-63018')." },
     hub_destination: { type: "string", description: "AWB 'Hub destinatie' value." },
@@ -282,6 +297,15 @@ const SYSTEM_INSTRUCTION =
   "• num_deliveries defaults to 1. Only set it higher when there is a clearly PRINTED field on the AWB " +
   "indicating multiple deliveries (e.g. 'Numar livrari: 3'). Ignore handwritten marks like '2/2' or '1/2' — " +
   "those are package-of-N annotations, not delivery counts.\n" +
+  "• weight_kg_missing / distance_extra_km_missing: some AWB templates NEVER print one of these fields at " +
+  "all — most notably a 'couriermanager'-branded proof-of-delivery slip (Expeditor/Hub/Destinatar header, a " +
+  "single 'Tip: Standard, Colet, XXX.00 kg' line, a signature block reading 'Am primit expedierea intactă'), " +
+  "which has NO 'Distanță extra (km)' field anywhere on the page. When a field is small, faint, or blurry, " +
+  "call zoom_region FIRST and read the magnified crop — do not give up early. Only after confirming the field " +
+  "genuinely does not exist anywhere on the document (not just hard to read) set that field's number to 0 " +
+  "AND its matching _missing flag to true. NEVER invent, estimate, or guess a plausible-looking number for a " +
+  "field that is not printed — a fabricated 0 silently under-prices the shipment, which is worse than an " +
+  "honest 'missing' flag. Set the _missing flag to false whenever a real value was read, however small.\n" +
   "• invoice_number: strip OCR fragments like 'FACTURA', 'JRA', 'URA' from the front; keep only the actual " +
   "invoice number tokens (e.g. 'I26 M007 0072600052396').\n" +
   "• Dates must be ISO YYYY-MM-DD. Romanian invoices write dates as DD.MM.YYYY — convert correctly.\n" +

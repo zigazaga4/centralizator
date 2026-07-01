@@ -331,6 +331,7 @@ function PairRow({
               <ProductBadge
                 verification={status.kind === "ready" ? status.verification : undefined}
                 routing={status.kind === "ready" ? status.routing : undefined}
+                awb={edits?.awb}
                 verifying={verifying}
                 pairId={pair.id}
               />

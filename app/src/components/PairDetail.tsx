@@ -4,6 +4,7 @@ import {
   CITY_COMMISSION_LABEL,
   COLLABORATOR_LABEL,
   primaryDispatchSite,
+  type Awb,
   type CityKey,
   type CollaboratorKey,
   type Extracted,
@@ -19,7 +20,7 @@ import {
 import { date, ron } from "../lib/format";
 import { usePairImages } from "../lib/images";
 import { EDIT_LOOK } from "../lib/ui";
-import { ProductBadge, ProductCheckSummary, hasAnyWarning } from "./ProductCheck";
+import { ProductBadge, ProductCheckSummary, hasAnyWarning, hasMissingAwbData } from "./ProductCheck";
 
 const SERVICES: Service[] = ["Express", "Premium", "Prestabilita"];
 
@@ -79,6 +80,7 @@ export function PairDetail({
   const status = pair.status;
   const verification = status.kind === "ready" ? status.verification : undefined;
   const routing = status.kind === "ready" ? status.routing : undefined;
+  const awbForCheck = status.kind === "ready" ? status.edits.awb : undefined;
   const title =
     status.kind === "ready"
       ? `Pereche #${index + 1} · AWB ${status.edits.awb.awb_number}`
@@ -100,6 +102,7 @@ export function PairDetail({
         status={status}
         verification={verification}
         routing={routing}
+        awb={awbForCheck}
         verifying={verifying}
         pairId={pair.id}
         onBack={onBack}
@@ -131,13 +134,13 @@ export function PairDetail({
                 onDetachInvoice={onDetachInvoice}
                 imageCount={imageCount}
               />
-              {(verification || routing) && (
+              {(verification || routing || hasMissingAwbData(awbForCheck)) && (
                 <div className="overflow-hidden rounded-xl border border-ink-200 bg-canvas-50 shadow-sm">
                   <div className="flex items-center justify-between border-b border-ink-200 bg-canvas-200/60 px-4 py-2">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-coral-700">
                       Verificare produse + km
                     </span>
-                    {hasAnyWarning(verification, routing) ? (
+                    {hasAnyWarning(verification, routing, awbForCheck) ? (
                       <span className="rounded bg-coral-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-coral-700">
                         Discrepanță
                       </span>
@@ -147,7 +150,7 @@ export function PairDetail({
                       </span>
                     )}
                   </div>
-                  <ProductCheckSummary verification={verification} routing={routing} pairId={pair.id} />
+                  <ProductCheckSummary verification={verification} routing={routing} awb={awbForCheck} pairId={pair.id} />
                 </div>
               )}
             </>
@@ -167,6 +170,7 @@ function DetailHeader({
   status,
   verification,
   routing,
+  awb,
   verifying,
   pairId,
   onBack,
@@ -176,6 +180,7 @@ function DetailHeader({
   status: PairStatus;
   verification?: Verification;
   routing?: Routing;
+  awb?: Awb;
   verifying?: boolean;
   pairId?: string;
   onBack: () => void;
@@ -206,7 +211,7 @@ function DetailHeader({
         </button>
         <h2 className="text-lg font-semibold tracking-tight text-ink-900">{title}</h2>
         <StatusBadge status={status} />
-        <ProductBadge verification={verification} routing={routing} verifying={verifying} pairId={pairId} />
+        <ProductBadge verification={verification} routing={routing} awb={awb} verifying={verifying} pairId={pairId} />
       </div>
       <div className="flex items-center gap-2">
         <button
@@ -704,7 +709,12 @@ function Spreadsheet({
           }
         />
       </DataRow>
-      <DataRow n={r()} label="Greutate (kg)" editable>
+      <DataRow
+        n={r()}
+        label="Greutate (kg)"
+        editable
+        hint={awb.weight_kg_missing ? "lipsă pe AWB — verifică documentul" : undefined}
+      >
         <NumberCell
           value={awb.weight_kg}
           step={0.01}
@@ -712,7 +722,12 @@ function Spreadsheet({
           onChange={(v) => onPatch({ weight_kg: v })}
         />
       </DataRow>
-      <DataRow n={r()} label="Distanță extra (km)" editable hint={kmHint}>
+      <DataRow
+        n={r()}
+        label="Distanță extra (km)"
+        editable
+        hint={awb.distance_extra_km_missing ? "lipsă pe AWB — verifică documentul" : kmHint}
+      >
         <NumberCell
           value={awb.distance_extra_km}
           step={1}

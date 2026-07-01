@@ -75,7 +75,16 @@ export interface Awb {
   service_text: string;
   shipment_type?: string | null;
   weight_kg: number;
+  /** True when NO weight field is printed anywhere on the AWB (genuinely
+   *  absent from the document/template, not just hard to read) — `weight_kg`
+   *  is 0 in that case, a fallback rather than a real reading. Optional for
+   *  older extractions predating this flag. */
+  weight_kg_missing?: boolean;
   distance_extra_km: number;
+  /** Mirror of `weight_kg_missing` for the distance field. Some couriers
+   *  (e.g. a 'couriermanager' proof-of-delivery slip) never print a
+   *  'Distanță extra (km)' field at all. Optional for older extractions. */
+  distance_extra_km_missing?: boolean;
   num_deliveries: number;
   content_code?: string | null;
   hub_destination?: string | null;

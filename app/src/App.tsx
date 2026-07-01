@@ -941,8 +941,15 @@ export default function App() {
           awb: {
             ...curAwb,
             weight_kg: patch.weight_kg ?? curAwb.weight_kg,
+            // A manual edit means the operator read the real value off the
+            // paper AWB, so the "fabricated 0" warning no longer applies —
+            // clear it the moment the field is actually typed in.
+            weight_kg_missing:
+              patch.weight_kg !== undefined ? false : curAwb.weight_kg_missing,
             distance_extra_km:
               patch.distance_extra_km ?? curAwb.distance_extra_km,
+            distance_extra_km_missing:
+              patch.distance_extra_km !== undefined ? false : curAwb.distance_extra_km_missing,
             num_deliveries: patch.num_deliveries ?? curAwb.num_deliveries,
             delivery_date: patch.delivery_date ?? curAwb.delivery_date,
           },
