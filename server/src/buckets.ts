@@ -55,6 +55,44 @@ export function distanceTariffEscalates(awbKm: number, mapboxKm: number): boolea
 }
 
 /**
+ * The price-relevant WEIGHT tier of a shipment: its base weight bucket plus,
+ * above 1200 kg, the number of extra-1000 kg increments (each adds an
+ * increment-row tariff and a truck round — see pricing.ts). Two weights that
+ * map to the same tier bill identically on the weight axis.
+ */
+export function weightTariffTier(weightKg: number): string {
+  if (!Number.isFinite(weightKg) || weightKg < 0) return "invalid";
+  const b = weightBucket(weightKg);
+  // Mirror pricing.ts exactly: a >1200 kg order bills off the 800-1200 kg base
+  // ROW plus one increment per full/partial extra 1000 kg over 1200. So the
+  // price-relevant tier is (base row, increment count). Written this way, 1200
+  // kg (0 increments) collapses to the same tier as 1199 kg — same tariff, no
+  // false alarm across the boundary.
+  const baseRow = b === ">1200kg" ? "800-1200kg" : b;
+  const increments = b === ">1200kg" ? Math.ceil((weightKg - 1200) / 1000) : 0;
+  return `${baseRow}+${increments}`;
+}
+
+/**
+ * Would swapping the AWB's declared weight for the catalog-estimated weight
+ * change the tariff? This is the weight analogue of distanceTariffEscalates:
+ * a weight gap only matters when it moves the price, i.e. the two weights fall
+ * in DIFFERENT weight tiers (a different base bucket, or a different >1200 kg
+ * increment count). A difference that stays inside one tier bills the same and
+ * is not flagged.
+ *
+ * Symmetric on purpose (unlike the km rule): the billed weight is always the
+ * AWB's, but a catalog estimate in either a higher OR a lower tier means the
+ * declared weight is priced in the wrong bracket, so both directions deserve
+ * the flag. (ops 2026-07-01)
+ */
+export function weightTariffChanges(awbKg: number, estimatedKg: number): boolean {
+  if (!Number.isFinite(awbKg) || !Number.isFinite(estimatedKg)) return false;
+  if (awbKg < 0 || estimatedKg < 0) return false;
+  return weightTariffTier(awbKg) !== weightTariffTier(estimatedKg);
+}
+
+/**
  * Romanian weekend = Saturday (6) or Sunday (0).
  * Accepts either a Date or an ISO-style `YYYY-MM-DD` string. Uses the
  * UTC weekday — calendar days don't shift across CET/CEST boundaries

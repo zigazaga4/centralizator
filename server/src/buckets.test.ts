@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { distanceBucket, distanceTariffEscalates } from "./buckets.js";
+import {
+  distanceBucket,
+  distanceTariffEscalates,
+  weightTariffTier,
+  weightTariffChanges,
+} from "./buckets.js";
 
 describe("distanceTariffEscalates — the km-alert rule (2026-06-24)", () => {
   // The operator only wants a km alert when the routed distance would change
@@ -41,5 +46,66 @@ describe("distanceTariffEscalates — the km-alert rule (2026-06-24)", () => {
   it("is safe on non-finite inputs", () => {
     expect(distanceTariffEscalates(NaN, 30)).toBe(false);
     expect(distanceTariffEscalates(20, Infinity)).toBe(false);
+  });
+});
+
+describe("weightTariffChanges — the weight-alert rule (2026-07-01)", () => {
+  // A weight gap only alarms when it would move the price: the AWB weight and
+  // the catalog estimate must fall in different weight-tariff tiers.
+
+  it("tier is the base row (+0) up to 1200 kg", () => {
+    expect(weightTariffTier(100)).toBe("0-200kg+0");
+    expect(weightTariffTier(650)).toBe("500-800kg+0");
+    expect(weightTariffTier(1000)).toBe("800-1200kg+0");
+  });
+
+  it("tier adds the >1200 kg increment count above 1200 kg", () => {
+    // exactly 1200 = 0 increments = same tier as the 800-1200 kg row (no
+    // false alarm across the boundary).
+    expect(weightTariffTier(1199)).toBe("800-1200kg+0");
+    expect(weightTariffTier(1200)).toBe("800-1200kg+0");
+    expect(weightTariffTier(1500)).toBe("800-1200kg+1"); // ceil((1500-1200)/1000)=1
+    expect(weightTariffTier(2200)).toBe("800-1200kg+1");
+    expect(weightTariffTier(2201)).toBe("800-1200kg+2");
+  });
+
+  it("no alarm when both weights sit in the SAME tier (100 vs 150, both 0-200)", () => {
+    expect(weightTariffChanges(100, 150)).toBe(false);
+  });
+
+  it("no alarm across the 1200 kg boundary at 0 increments (1199 vs 1200)", () => {
+    expect(weightTariffChanges(1199, 1200)).toBe(false);
+  });
+
+  it("no alarm for a big gap that stays in one tier (210 vs 490, both 200-500)", () => {
+    expect(weightTariffTier(210)).toBe("200-500kg+0");
+    expect(weightTariffTier(490)).toBe("200-500kg+0");
+    expect(weightTariffChanges(210, 490)).toBe(false); // ~57% gap, same tariff tier
+  });
+
+  it("ALARM when the estimate crosses a base bucket (190 vs 260: 0-200 → 200-500)", () => {
+    expect(weightTariffChanges(190, 260)).toBe(true);
+  });
+
+  it("ALARM in EITHER direction (symmetric)", () => {
+    expect(weightTariffChanges(260, 190)).toBe(true);
+    expect(weightTariffChanges(190, 260)).toBe(true);
+  });
+
+  it("ALARM when the >1200 kg increment count differs (1500 vs 2500)", () => {
+    expect(weightTariffTier(1500)).toBe("800-1200kg+1");
+    expect(weightTariffTier(2500)).toBe("800-1200kg+2");
+    expect(weightTariffChanges(1500, 2500)).toBe(true);
+  });
+
+  it("no alarm crossing 1200 from below into the first increment only when tier changes", () => {
+    // 1100 (800-1200kg) vs 1300 (>1200kg+1) — different tiers → alarm.
+    expect(weightTariffChanges(1100, 1300)).toBe(true);
+  });
+
+  it("is safe on non-finite / negative inputs", () => {
+    expect(weightTariffChanges(NaN, 300)).toBe(false);
+    expect(weightTariffChanges(300, Infinity)).toBe(false);
+    expect(weightTariffChanges(-5, 300)).toBe(false);
   });
 });

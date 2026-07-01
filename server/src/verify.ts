@@ -3,14 +3,18 @@
  * Leroy Merlin product page and decide whether the pair deserves a
  * warning icon.
  *
- * Per the operator's rule the warning fires ONLY on:
- *   • a SIZE mismatch  — invoice line size vs. site product size, or
- *   • a WEIGHT mismatch — AWB declared weight vs. the sum of catalog
- *     weights × quantity (only when every line is weighable, so a
- *     partial estimate never false-alarms).
+ * Per the operator's rule the warning fires ONLY when a discrepancy would
+ * actually MOVE THE PRICE under our tariff:
+ *   • a WEIGHT mismatch — the AWB's declared weight and the catalog estimate
+ *     (sum of catalog weight × quantity, only when every line is weighable so
+ *     a partial estimate never false-alarms) fall in DIFFERENT weight-tariff
+ *     tiers: a different base bucket, or a different >1200 kg increment count.
+ *     A gap that stays inside one tier bills identically and never alarms.
  *
- * Everything else (code not found, name, brand, price, link) is captured
- * for the dialog but never raises the alarm.
+ * Dimensions are NOT a pricing input in our engine (only weight and distance
+ * move the tariff), so a SIZE mismatch is captured for the dialog per item but
+ * never raises the alarm. Everything else (code not found, name, brand, price,
+ * link) is likewise shown but never alarms.
  *
  * The network side is bounded and resilient:
  *   • a per-call memo dedupes repeated codes,
@@ -29,14 +33,11 @@ import {
   type LmProduct,
 } from "./leroymerlin.js";
 import { getCachedLmProduct, putCachedLmProduct } from "./db.js";
+import { weightTariffChanges } from "./buckets.js";
 import type { Extracted, ItemCheck, Verification } from "./schema.js";
 
 /** Max simultaneous ScrapingDog resolutions (search+scrape) per pair. */
 const VERIFY_CONCURRENCY = Number(process.env.VERIFY_CONCURRENCY ?? 4);
-/** Weight is flagged only past this relative gap (30 %), and only with
- *  full coverage — unit ambiguity (buc vs m²) makes a tighter band noisy. */
-const WEIGHT_TOLERANCE = Number(process.env.VERIFY_WEIGHT_TOLERANCE ?? 0.3);
-
 /** The code we search by: internal reference first, then EAN. Returns
  *  null when the line carries neither — we don't guess from the name
  *  alone (a name search can resolve to the wrong product and produce a
@@ -189,12 +190,20 @@ export async function verifyShipment(extracted: Extracted): Promise<Verification
 
   let weightStatus: Verification["weightStatus"] = "unknown";
   if (weightCoverage === "full" && estimatedWeightKg && estimatedWeightKg > 0 && awbWeightKg > 0) {
-    const rel = Math.abs(awbWeightKg - estimatedWeightKg) / Math.max(awbWeightKg, estimatedWeightKg);
-    weightStatus = rel > WEIGHT_TOLERANCE ? "mismatch" : "match";
+    // Only a gap that would MOVE THE PRICE counts: the declared AWB weight and
+    // the catalog estimate must fall in different weight-tariff tiers (a
+    // different base bucket, or a different >1200 kg increment count). A
+    // difference that bills the same tier never alarms — the km-warning rule
+    // (2026-06-24) applied to weight. (ops 2026-07-01)
+    weightStatus = weightTariffChanges(awbWeightKg, estimatedWeightKg) ? "mismatch" : "match";
   }
 
   const items = checks.map((c) => c.check);
-  const hasWarning = items.some((c) => c.sizeStatus === "mismatch") || weightStatus === "mismatch";
+  // Size (dimensions) is NOT a pricing input — only weight and distance move
+  // the tariff — so a per-item size mismatch is shown in the dialog but never
+  // raises the pair-level alarm. The pair warns solely on a price-moving weight
+  // gap. (ops 2026-07-01; mirrors the km-warning rule)
+  const hasWarning = weightStatus === "mismatch";
 
   const notFound = items.filter((c) => c.query && !c.found).length;
   const note =
