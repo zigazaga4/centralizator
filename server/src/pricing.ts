@@ -128,6 +128,12 @@ export interface PricingInput {
    *  "Standard descărcare" service). 0 when no unloading. The >1200 kg
    *  multiplier (one extra unloading per extra transport) is applied here. */
   unloadingUnits?: number;
+  /** Operator-added unloading fees, ON TOP OF `unloadingUnits`, set by hand
+   *  via the "+ descărcare" stepper — for a shipment the invoice(s) didn't
+   *  bill it on but the operator knows a real unloading happened (or
+   *  correcting an under-count). Carried across re-prices and preserved when
+   *  an invoice is detached, exactly like `unloadingUnits` itself. Default 0. */
+  unloadingManualExtra?: number;
   /** Macara (crane delivery) named on the AWB "Serviciu" field — the
    *  legitimate signal that this is a macara run. Default false. */
   macaraOnAwb?: boolean;
@@ -277,11 +283,17 @@ export interface PricingBreakdown {
   incrementCost: number;
   /** Weekend surcharge (0 or 11.90). */
   weekendSurcharge: number;
-  /** Standard unloading fees detected on the shipment (the base count,
-   *  before the >1200 kg multiplier). 0 when no unloading applies. */
+  /** Standard unloading fees DETECTED on the shipment (the base count from
+   *  the invoice(s)/AWB, before the >1200 kg multiplier and before the
+   *  operator's manual add). 0 when no unloading was detected. */
   unloadingUnits: number;
-  /** Total unloading fees billed = unloadingUnits + (weight > 1200 kg ?
-   *  weightIncrements : 0). One extra unloading per extra transport. */
+  /** Operator-added unloading fees on top of `unloadingUnits`, echoed back so
+   *  the UI's stepper shows the right count and a re-price carries it
+   *  forward. 0 when the operator never touched it. */
+  unloadingManualExtra: number;
+  /** Total unloading fees billed = (unloadingUnits + unloadingManualExtra) +
+   *  (weight > 1200 kg ? weightIncrements : 0). One extra unloading per
+   *  extra transport. */
   unloadingCount: number;
   /** Unloading tax in RON WITH VAT = unloadingCount × 210. COMPLETELY
    *  separate: not commissioned and NOT folded into any total (carrier,
@@ -350,6 +362,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const { service, weightKg, distanceKm } = input;
   const bulkyUnits = Math.max(0, Math.floor(input.bulkyUnits ?? 0));
   const unloadingUnits = Math.max(0, Math.floor(input.unloadingUnits ?? 0));
+  const unloadingManualExtra = Math.max(0, Math.floor(input.unloadingManualExtra ?? 0));
 
   // num_deliveries no longer drives pricing. Per ops 2026-06-25 the increments
   // are WEIGHT-based ONLY: an AWB is one delivery to one recipient, and the
@@ -425,12 +438,14 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const weekendSurcharge = weekend ? WEEKEND_SURCHARGE : 0;
 
   // Unloading fee ("descărcare") — a SEPARATE flat tax, not commissioned.
-  // Base count is what the invoice/AWB billed; when the unloaded shipment is
-  // over 1200 kg it rides on more than one transport, and the operator adds
-  // one more unloading per extra transport (= weightIncrements). Zero when no
-  // unloading applies.
-  const unloadingExtra = unloadingUnits > 0 && weightKg > 1200 ? weightIncrements : 0;
-  const unloadingCount = unloadingUnits > 0 ? unloadingUnits + unloadingExtra : 0;
+  // Base count is what the invoice/AWB billed, PLUS whatever the operator
+  // added by hand (unloadingManualExtra); when the unloaded shipment is over
+  // 1200 kg it rides on more than one transport, and the operator adds one
+  // more unloading per extra transport (= weightIncrements). Zero when
+  // neither the detection nor the manual add billed anything.
+  const unloadingTotal = unloadingUnits + unloadingManualExtra;
+  const unloadingExtra = unloadingTotal > 0 && weightKg > 1200 ? weightIncrements : 0;
+  const unloadingCount = unloadingTotal > 0 ? unloadingTotal + unloadingExtra : 0;
   // The descărcare fee is bonused per the pair's dispatch store: Iași Tudor
   // adds +11,4% on top of the 210 RON (→ 233,94), every other city bills the
   // flat 210 (factor 0). Keyed off the resolved dispatch store.
@@ -542,6 +557,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     incrementCost,
     weekendSurcharge,
     unloadingUnits,
+    unloadingManualExtra,
     unloadingCount,
     unloadingTax,
     unloadingTaxNet,

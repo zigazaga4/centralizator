@@ -335,6 +335,7 @@ function PairRow({
                 verifying={verifying}
                 pairId={pair.id}
               />
+              <DescarcareStepper breakdown={breakdown} onPatch={onPatch} />
             </div>
             <InvoiceLine edits={edits} />
             {edits?.awb.recipient_name && (
@@ -965,6 +966,71 @@ function VoluminosChip({ units, transports }: { units: number; transports: numbe
       className="shrink-0 whitespace-nowrap rounded bg-coral-600 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-canvas-50"
     >
       {`⚠ voluminos ×${transports}`}
+    </span>
+  );
+}
+
+/**
+ * Descărcare ("+ / −") stepper — lets the operator add unloading fees to a
+ * pair by hand, on top of whatever the invoice(s) already billed. Always
+ * shown (unlike the macara/voluminos chips, which only appear when their
+ * rule fired): the whole point is to let the operator ADD a fee the
+ * documents never carried, so a pill gated on "already > 0" would make that
+ * impossible from the queue row. Muted at 0, coral once active. "−" only
+ * ever removes what the OPERATOR added (`unloadingManualExtra`) — it can
+ * never erase a real invoice-detected count.
+ */
+function DescarcareStepper({
+  breakdown,
+  onPatch,
+}: {
+  breakdown: PricingBreakdown | null;
+  onPatch: (patch: PairPatch) => void;
+}) {
+  if (!breakdown) return null;
+  const manualExtra = breakdown.unloadingManualExtra ?? 0;
+  const detected = breakdown.unloadingUnits;
+  const total = breakdown.unloadingCount;
+  const bump = (delta: number) => onPatch({ unloading_manual_extra: Math.max(0, manualExtra + delta) });
+  return (
+    <span
+      className={`inline-flex shrink-0 items-stretch overflow-hidden rounded border text-[9px] font-bold uppercase tracking-wide ${
+        total > 0 ? "border-coral-300 bg-coral-50" : "border-ink-200 bg-canvas-50"
+      }`}
+      title={`Descărcare: ${detected} detectată${detected === 1 ? "" : "e"} din factură + ${manualExtra} adăugată${
+        manualExtra === 1 ? "" : "e"
+      } manual = ${total} total`}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          stop(e);
+          bump(-1);
+        }}
+        onMouseDown={stop}
+        disabled={manualExtra <= 0}
+        title="Scade o descărcare adăugată manual"
+        aria-label="Scade o descărcare"
+        className="px-1 py-0.5 text-ink-500 transition hover:bg-coral-100 hover:text-coral-700 disabled:cursor-not-allowed disabled:text-ink-300 disabled:hover:bg-transparent"
+      >
+        −
+      </button>
+      <span className={`flex items-center px-1 ${total > 0 ? "text-coral-700" : "text-ink-400"}`}>
+        desc. {total}
+      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          stop(e);
+          bump(1);
+        }}
+        onMouseDown={stop}
+        title="Adaugă o descărcare"
+        aria-label="Adaugă o descărcare"
+        className="px-1 py-0.5 text-ink-500 transition hover:bg-coral-100 hover:text-coral-700"
+      >
+        +
+      </button>
     </span>
   );
 }

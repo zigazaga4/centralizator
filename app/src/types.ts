@@ -425,9 +425,15 @@ export interface PricingBreakdown {
    *  the per-km surcharge. Optional like `bulkyUnits`. */
   bulkyTransports?: number;
   /** Standard unloading fees detected on the shipment (base count, before
-   *  the >1200 kg multiplier). 0 when no unloading applies. */
+   *  the >1200 kg multiplier and before the operator's manual add). 0 when
+   *  no unloading was detected. */
   unloadingUnits: number;
-  /** Total unloading fees billed (incl. the >1200 kg multiplier). */
+  /** Operator-added unloading fees on top of `unloadingUnits`, set by hand
+   *  via the "+ descărcare" stepper. Optional: breakdowns persisted before
+   *  this existed don't carry it — read through `?? 0`. */
+  unloadingManualExtra?: number;
+  /** Total unloading fees billed (incl. the >1200 kg multiplier and the
+   *  manual add). */
   unloadingCount: number;
   /** Unloading tax in RON WITH VAT = unloadingCount × 210. COMPLETELY
    *  separate: not commissioned and NOT folded into any total — reported on
@@ -543,6 +549,10 @@ export interface PricingRequest {
    *  so the unloading tax survives a re-price. The >1200 kg multiplier is
    *  re-applied server-side. Optional; defaults to 0. */
   unloading_units?: number;
+  /** Operator-added unloading fees on top of `unloading_units`, set by hand
+   *  via the "+ descărcare" stepper. Carried across re-prices so the add
+   *  sticks. Optional; defaults to 0. */
+  unloading_manual_extra?: number;
   /** Macara signals carried across live edits so the separate macara
    *  breakdown + warning survive a re-price. Paleți are not user-editable
    *  here, so they ride along unchanged. Optional; default "no macara". */
@@ -702,6 +712,11 @@ export type PairPatch = {
    *  the surcharge — there is no date-based detection. Not an AWB field —
    *  handled like the macara toggle (immediate re-price, no debounce). */
   force_weekend?: boolean;
+  /** Operator-added unloading ("descărcare") fee count for THIS pair, set by
+   *  the "+ / −" stepper — the new ABSOLUTE value, on top of whatever the
+   *  invoice(s) already billed. Not an AWB field — handled like the macara
+   *  toggle (immediate re-price, no debounce). */
+  unloading_manual_extra?: number;
 };
 
 /* ──────────────────────────────────────────────────────────────────────

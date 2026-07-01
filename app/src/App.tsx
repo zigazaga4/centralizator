@@ -816,7 +816,12 @@ export default function App() {
   const repricePair = useCallback(
     async (
       id: string,
-      override?: { macaraForceNormal?: boolean; macaraForceOn?: boolean; forceWeekend?: boolean },
+      override?: {
+        macaraForceNormal?: boolean;
+        macaraForceOn?: boolean;
+        forceWeekend?: boolean;
+        unloadingManualExtra?: number;
+      },
     ) => {
       const pair = pairsRef.current.find((p) => p.id === id);
       if (!pair || pair.status.kind !== "ready") return;
@@ -834,6 +839,12 @@ export default function App() {
           // (not user-editable here), so a live re-price must preserve it or
           // the separate unloading tax would silently vanish.
           unloading_units: breakdown.unloadingUnits,
+          // The operator's manual "+ descărcare" add: an explicit value from
+          // the stepper wins; otherwise carry the persisted count forward so
+          // it survives unrelated edits (weight, km, …) — same rule as the
+          // macara/weekend overrides above.
+          unloading_manual_extra:
+            override?.unloadingManualExtra ?? (breakdown.unloadingManualExtra ?? 0),
           // Same for macara: detected from the AWB/invoice at extraction time
           // (not editable here), so carry the signals forward or the separate
           // macara line + warning would vanish on the first edit. `?.` guards
@@ -929,13 +940,27 @@ export default function App() {
         ? { ...nextBreakdown, weekend: weekendOn, weekendForced: weekendOn }
         : nextBreakdown;
 
+      // The "+ / −" descărcare stepper sends the new ABSOLUTE manual count.
+      // Flip it optimistically along with a naive total (ignoring the >1200 kg
+      // multiplier for this brief instant); the immediate re-price below
+      // recomputes the real unloadingCount/unloadingTax server-side.
+      const unloadingToggle = patch.unloading_manual_extra !== undefined;
+      const newUnloadingExtra = Math.max(0, Math.floor(patch.unloading_manual_extra ?? 0));
+      const nextBreakdownUnl = unloadingToggle
+        ? {
+            ...nextBreakdownWk,
+            unloadingManualExtra: newUnloadingExtra,
+            unloadingCount: (nextBreakdownWk.unloadingUnits ?? 0) + newUnloadingExtra,
+          }
+        : nextBreakdownWk;
+
       // Spread the prior ready status so store / routing / verification
       // survive a hand-edit; only service + the edited AWB fields (+ the
-      // optimistic macara flip) change.
+      // optimistic macara/unloading flip) change.
       const nextStatus: PairStatus = {
         ...cur.status,
         service: patch.service ?? cur.status.service,
-        breakdown: nextBreakdownWk,
+        breakdown: nextBreakdownUnl,
         edits: {
           ...cur.status.edits,
           awb: {
@@ -978,6 +1003,11 @@ export default function App() {
         // the explicit flag so the +11,90 lands instantly.
         repriceTimers.current.delete(id);
         void repricePair(id, { forceWeekend: weekendOn });
+      } else if (unloadingToggle) {
+        // Same for the descărcare stepper: a discrete +/- click, re-price
+        // now with the explicit count so the fee lands instantly.
+        repriceTimers.current.delete(id);
+        void repricePair(id, { unloadingManualExtra: newUnloadingExtra });
       } else {
         repriceTimers.current.set(
           id,

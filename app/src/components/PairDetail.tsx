@@ -950,25 +950,38 @@ function Spreadsheet({
         />
       )}
       {/* Unloading tax ("descărcare") — a SEPARATE flat fee (210 RON cu TVA
-          each, 177.69 fără TVA), not commissioned. Shown whenever a
-          qualifying unloading was detected; muted "—" otherwise. */}
-      {breakdown.unloadingTax > 0 ? (
-        <DataRow
-          n={r()}
-          label={`Taxă descărcare (${breakdown.unloadingCount} × 210 lei cu TVA)`}
-          value={ron(breakdown.unloadingTax)}
-          numeric
-          hint={breakdown.unloadingCount > breakdown.unloadingUnits ? "+1 / transport >1200 kg" : "taxă separată"}
-        />
-      ) : (
-        <DataRow
-          n={r()}
-          label="Taxă descărcare"
-          value="— · fără descărcare"
-          numeric
-          muted
-        />
-      )}
+          each, 177.69 fără TVA), not commissioned. The value shows whenever a
+          qualifying unloading applies (detected OR manually added); the
+          stepper is ALWAYS there so the operator can add a fee the invoice
+          never billed. */}
+      <DataRow
+        n={r()}
+        label={
+          breakdown.unloadingCount > 0
+            ? `Taxă descărcare (${breakdown.unloadingCount} × 210 lei cu TVA)`
+            : "Taxă descărcare"
+        }
+        editable
+        hint={
+          breakdown.unloadingCount > breakdown.unloadingUnits + (breakdown.unloadingManualExtra ?? 0)
+            ? "+1 / transport >1200 kg"
+            : (breakdown.unloadingManualExtra ?? 0) > 0
+              ? "include adăugare manuală"
+              : breakdown.unloadingTax > 0
+                ? "taxă separată"
+                : undefined
+        }
+      >
+        <div className="flex w-full items-center justify-end gap-3 px-3 py-1">
+          <span className={`tabular-nums ${breakdown.unloadingTax > 0 ? "text-ink-900" : "text-ink-400"}`}>
+            {breakdown.unloadingTax > 0 ? ron(breakdown.unloadingTax) : "— · fără descărcare"}
+          </span>
+          <DescarcareStepper
+            manualExtra={breakdown.unloadingManualExtra ?? 0}
+            onPatch={onPatch}
+          />
+        </div>
+      </DataRow>
 
       {/* Carrier subtotal — what Stalexone (transportator) gets. The
           shared base every city and collaborator total grosses up
@@ -1243,6 +1256,51 @@ function ItemRow({ n, item }: { n: number; item: Invoice["items"][number] }) {
 }
 
 /* ─── Editable cell primitives ──────────────────────────────────────── */
+
+/**
+ * Descărcare ("+ / −") stepper — lets the operator add unloading fees to
+ * this pair by hand, on top of whatever the invoice(s) already billed.
+ * "−" only ever removes what the OPERATOR added — it can never erase a
+ * real invoice-detected count, so it's disabled at 0.
+ */
+function DescarcareStepper({
+  manualExtra,
+  onPatch,
+}: {
+  manualExtra: number;
+  onPatch: (patch: PairPatch) => void;
+}) {
+  const bump = (delta: number) => onPatch({ unloading_manual_extra: Math.max(0, manualExtra + delta) });
+  return (
+    <span className="inline-flex shrink-0 items-stretch overflow-hidden rounded-md border border-ink-300 bg-canvas-50 text-sm">
+      <button
+        type="button"
+        onClick={() => bump(-1)}
+        disabled={manualExtra <= 0}
+        title="Scade o descărcare adăugată manual"
+        aria-label="Scade o descărcare"
+        className="px-2 py-0.5 text-ink-600 transition hover:bg-coral-100 hover:text-coral-700 disabled:cursor-not-allowed disabled:text-ink-300 disabled:hover:bg-transparent"
+      >
+        −
+      </button>
+      <span
+        className="flex min-w-[2.5rem] items-center justify-center border-x border-ink-200 px-2 tabular-nums text-ink-700"
+        title="Descărcări adăugate manual"
+      >
+        +{manualExtra}
+      </span>
+      <button
+        type="button"
+        onClick={() => bump(1)}
+        title="Adaugă o descărcare"
+        aria-label="Adaugă o descărcare"
+        className="px-2 py-0.5 text-ink-600 transition hover:bg-coral-100 hover:text-coral-700"
+      >
+        +
+      </button>
+    </span>
+  );
+}
 
 function NumberCell({
   value,

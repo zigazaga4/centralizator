@@ -578,6 +578,60 @@ describe("calculatePrice — unloading tax (descărcare)", () => {
     });
     expect(constanta.unloadingTax).toBe(210);
   });
+
+  // Operator-added unloading (the "+ descărcare" stepper), independent of
+  // whatever the invoice(s) billed. Stacks ON TOP of unloadingUnits.
+  it("unloadingManualExtra adds fees on top of the detected count", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingUnits: 1, unloadingManualExtra: 2,
+    });
+    expect(r.unloadingUnits).toBe(1); // detected count echoed back unchanged
+    expect(r.unloadingManualExtra).toBe(2);
+    expect(r.unloadingCount).toBe(3); // 1 detected + 2 manual
+    expect(r.unloadingTax).toBe(630);
+    expect(r.unloadingTaxNet).toBe(round2(3 * 177.69));
+  });
+
+  // A pair with NO invoice-detected unloading can still get one purely from
+  // the manual stepper — the operator adding a fee the invoice never billed.
+  it("unloadingManualExtra alone (no detected unloading) still bills", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingManualExtra: 1,
+    });
+    expect(r.unloadingUnits).toBe(0);
+    expect(r.unloadingManualExtra).toBe(1);
+    expect(r.unloadingCount).toBe(1);
+    expect(r.unloadingTax).toBe(210);
+  });
+
+  // The manual add participates in the >1200 kg multiplier exactly like the
+  // detected count does — it's just more of the same "unloading total".
+  it("unloadingManualExtra also gets the >1200 kg multiplier", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 2500, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingManualExtra: 1,
+    });
+    expect(r.weightIncrements).toBe(2);
+    expect(r.unloadingCount).toBe(3); // 1 total (0 detected + 1 manual) + 2 extra
+    expect(r.unloadingTax).toBe(630);
+  });
+
+  // Zero manual extra (the default / untouched pair) behaves byte-for-byte
+  // like before the feature existed.
+  it("unloadingManualExtra defaults to 0 and changes nothing", () => {
+    const r = calculatePrice({
+      service: "Express", weightKg: 600, distanceKm: 5,
+      numDeliveries: 1, deliveryDate: "2026-05-18",
+      unloadingUnits: 1,
+    });
+    expect(r.unloadingManualExtra).toBe(0);
+    expect(r.unloadingCount).toBe(1);
+  });
 });
 
 describe("calculatePrice — macara (crane delivery), a separate track", () => {

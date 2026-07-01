@@ -291,6 +291,12 @@ export const PricingRequestSchema = z.object({
    */
   unloading_units: z.number().int().nonnegative().default(0),
   /**
+   * Operator-added unloading fees on top of `unloading_units`, set by hand via
+   * the "+ descărcare" stepper. Carried across re-prices and preserved when an
+   * invoice is detached, exactly like `unloading_units`. Default 0.
+   */
+  unloading_manual_extra: z.number().int().nonnegative().default(0),
+  /**
    * Macara (crane delivery) signals, preserved across live edits so the
    * separate macara breakdown survives a re-price. `macara_on_awb` = the AWB
    * Serviciu names macara; `macara_on_invoice` = a macara line is on an

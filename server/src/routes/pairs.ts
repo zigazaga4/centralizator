@@ -395,8 +395,9 @@ export default async function pairRoutes(app: FastifyInstance) {
 
     // 3) Re-price the source pair without that invoice. Reuse the already
     //    resolved routing (no new Mapbox call) and carry EITHER macara
-    //    override forward (macara→normal or normal→macara) so it survives
-    //    the edit.
+    //    override forward (macara→normal or normal→macara), plus the
+    //    operator's manual descărcare add, so none of it is silently
+    //    dropped by the edit.
     const newExtracted: Extracted = {
       ...status.edits,
       invoices: invoices.filter((_, i) => i !== invoiceIndex),
@@ -414,6 +415,7 @@ export default async function pairRoutes(app: FastifyInstance) {
       }),
       macaraForceNormal: status.breakdown.macara?.forcedNormal ?? false,
       macaraForceOn: status.breakdown.macara?.forcedOn ?? false,
+      unloadingManualExtra: status.breakdown.unloadingManualExtra ?? 0,
     });
 
     // 4) Re-verify the remaining invoices. The old verification indexed the

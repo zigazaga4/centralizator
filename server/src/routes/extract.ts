@@ -101,7 +101,7 @@ export default async function extractRoutes(app: FastifyInstance) {
     }
     const {
       service, weight_kg, distance_km, num_deliveries, delivery_date,
-      bulky_units, has_other_products, unloading_units,
+      bulky_units, has_other_products, unloading_units, unloading_manual_extra,
       macara_on_awb, macara_on_invoice, macara_pallets, macara_runs, macara_store,
       macara_force_normal, macara_force_on, force_weekend,
     } = parsed.data;
@@ -115,6 +115,7 @@ export default async function extractRoutes(app: FastifyInstance) {
         bulkyUnits: bulky_units,
         hasOtherProducts: has_other_products,
         unloadingUnits: unloading_units,
+        unloadingManualExtra: unloading_manual_extra,
         macaraOnAwb: macara_on_awb,
         macaraOnInvoice: macara_on_invoice,
         macaraPallets: macara_pallets,
