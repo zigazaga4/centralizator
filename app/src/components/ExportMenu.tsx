@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CITY_LABEL,
   COLLABORATOR_KEYS,
-  COLLABORATOR_LABEL,
-  COLLABORATOR_SHORT_LABEL,
+  collaboratorLabel,
+  collaboratorShortLabel,
+  getCustomCollaborators,
   type CityKey,
-  type CollaboratorKey,
   type Pair,
 } from "../types";
 import {
@@ -39,7 +39,7 @@ interface Props {
    *  pairs uploaded without an assignment. Forwarded as-is to
    *  `lib/export`. `null` means the city has no collaborator roster
    *  (Constanța). */
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   /** Disabled when there's nothing to export (no ready pair yet). */
   disabled: boolean;
 }
@@ -56,7 +56,7 @@ const LS_SETTINGS = "centralizator.exportSettings";
  *  collaborator, so combined with `statement` defaulting to ON the
  *  modal opens ready to generate that partner's decont — the decont is
  *  the default export, per the operator's working rule. */
-function readStoredSettings(fallbackCollaborator: CollaboratorKey | null): ExportSettings {
+function readStoredSettings(fallbackCollaborator: string | null): ExportSettings {
   try {
     const raw = localStorage.getItem(LS_SETTINGS);
     if (!raw) {
@@ -280,10 +280,10 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
                     active={settings.scope === "all"}
                     onClick={() => setScope("all")}
                   />
-                  {COLLABORATOR_KEYS.map((k) => (
+                  {[...COLLABORATOR_KEYS, ...getCustomCollaborators().map((c) => c.key)].map((k) => (
                     <ScopeChip
                       key={k}
-                      label={COLLABORATOR_LABEL[k]}
+                      label={collaboratorLabel(k)}
                       count={scopeCount(k)}
                       active={settings.scope === k}
                       onClick={() => setScope(k)}
@@ -320,7 +320,7 @@ export function ExportMenu({ pairs, day, city, collaborator, disabled }: Props) 
                     label="Generează decont pentru colaborator"
                     hint={
                       scopeIsCollab
-                        ? `Fiecare rând arată doar tariful de bază al transportului; bonusul ${COLLABORATOR_SHORT_LABEL[settings.scope as CollaboratorKey]} se aplică o singură dată, la final, sub total.`
+                        ? `Fiecare rând arată doar tariful de bază al transportului; bonusul ${collaboratorShortLabel(settings.scope)} se aplică o singură dată, la final, sub total.`
                         : "Alege un colaborator la «Perechi incluse» pentru a putea genera decontul lui."
                     }
                     checked={statementOn}

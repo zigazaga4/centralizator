@@ -94,7 +94,6 @@ import {
   type DistanceBucket,
   type MacaraDistanceBucket,
   type City,
-  type Collaborator,
 } from "./tariffs.js";
 import { weightBucket, distanceBucket } from "./buckets.js";
 
@@ -137,6 +136,12 @@ export interface PricingInput {
    *  correcting an under-count). Carried across re-prices and preserved when
    *  an invoice is detached, exactly like `unloadingUnits` itself. Default 0. */
   unloadingManualExtra?: number;
+  /** User-created collaborators (beyond the built-in COLLABORATORS roster) to
+   *  ALSO materialise a payout row for. Each is `{ key, pct }`; `pct` 0 = no
+   *  bonus (the Constanța default, so the total equals the pure carrier total).
+   *  The pure engine never reads the DB — the server injects these from its
+   *  collaborator registry. Default none. */
+  extraCollaborators?: { key: string; pct: number }[];
   /** Macara (crane delivery) named on the AWB "Serviciu" field — the
    *  legitimate signal that this is a macara run. Default false. */
   macaraOnAwb?: boolean;
@@ -336,8 +341,10 @@ export interface PricingBreakdown {
    *  then the flat km cost added on top. */
   cityCommissions: Record<City, CityCommission>;
   /** Per-collaborator bonus. The matching `total` is the collaborator-facing
-   *  price — commissionBase grossed up by pct, then the flat km cost on top. */
-  collaboratorPrices: Record<Collaborator, CollaboratorPrice>;
+   *  price — commissionBase grossed up by pct, then the flat km cost on top.
+   *  Keyed by string (not the `Collaborator` union) because user-created
+   *  collaborators add their own keys on top of the built-in roster. */
+  collaboratorPrices: Record<string, CollaboratorPrice>;
 }
 
 export interface CityCommission {
@@ -543,14 +550,21 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     }),
   ) as Record<City, CityCommission>;
 
+  // Built-in roster + any user-created collaborators (0% for Constanța, so
+  // their total equals the pure carrier total). A custom key that duplicated a
+  // built-in would be de-duped here (last wins), but the create route forbids
+  // that collision.
+  const collaboratorRates: [string, number][] = [
+    ...COLLABORATORS.map((c) => [c, COLLABORATOR_BONUS_BY_NAME[c]] as [string, number]),
+    ...(input.extraCollaborators ?? []).map((c) => [c.key, c.pct] as [string, number]),
+  ];
   const collaboratorPrices = Object.fromEntries(
-    COLLABORATORS.map((c) => {
-      const pct = COLLABORATOR_BONUS_BY_NAME[c];
+    collaboratorRates.map(([key, pct]) => {
       const bonus = round2(commissionBase * pct);
       const total = round2(commissionBase + bonus + extraKmCost);
-      return [c, { pct, bonus, total }];
+      return [key, { pct, bonus, total }];
     }),
-  ) as Record<Collaborator, CollaboratorPrice>;
+  ) as Record<string, CollaboratorPrice>;
 
   return {
     weightBucket: wBucket,

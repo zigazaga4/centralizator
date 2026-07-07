@@ -1,12 +1,11 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 import {
-  COLLABORATOR_LABEL,
-  COLLABORATOR_SHORT_LABEL,
+  collaboratorLabel,
+  collaboratorShortLabel,
   primaryDispatchSite,
   type Awb,
   type CityKey,
   type CityCommissionKey,
-  type CollaboratorKey,
   type Extracted,
   type Pair,
   type PairPatch,
@@ -64,7 +63,7 @@ interface Props {
    *  colab.) and its footer sum. `null` means "no collaborator"
    *  (Constanța is the only city in that situation today) — the
    *  column renders "—" and the sum is skipped. */
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   onPatchPair: (id: string, patch: PairPatch) => void;
   onRemovePair: (id: string) => void;
   /** Opens the per-pair detail page. The row is the click target — form
@@ -162,7 +161,7 @@ export function PairsTable({
 
 /* ─── Header ────────────────────────────────────────────────────────── */
 
-function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
+function Header({ collaborator }: { collaborator: string | null }) {
   // 11 columns. The penultimate one (Plată colab.) needs special
   // rendering — it's a two-line header so the collaborator's name fits
   // even when it's the longest ("Vic Dinamic") without forcing the
@@ -207,13 +206,13 @@ function Header({ collaborator }: { collaborator: CollaboratorKey | null }) {
         className="flex flex-col items-end justify-center border-r border-ink-300 px-2 py-1 leading-tight"
         title={
           collaborator
-            ? `Plată colaborator: ${COLLABORATOR_LABEL[collaborator]}`
+            ? `Plată colaborator: ${collaboratorLabel(collaborator)}`
             : "Constanța · fără colaborator"
         }
       >
         <span>Plată colab.</span>
         <span className="text-[9px] font-medium normal-case tracking-normal text-ink-500">
-          {collaborator ? COLLABORATOR_SHORT_LABEL[collaborator] : "—"}
+          {collaborator ? collaboratorShortLabel(collaborator) : "—"}
         </span>
       </div>
       <div className="px-2 py-2 text-center" />
@@ -236,7 +235,7 @@ function PairRow({
   index: number;
   pair: Pair;
   site: CityCommissionKey;
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   onPatch: (patch: PairPatch) => void;
   onRemove: () => void;
   onSelect: () => void;
@@ -504,7 +503,7 @@ function SumRow({
 }: {
   sumCity: number;
   sumCollab: number;
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   readyCount: number;
   totalCount: number;
 }) {
@@ -642,7 +641,7 @@ function CollaboratorTotalCell({
   assigned,
 }: {
   breakdown: PricingBreakdown | null;
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   assigned?: boolean;
 }) {
   // Macara runs pay no collaborator bonus (EMV Macara = preț întreg / Macara
@@ -680,8 +679,8 @@ function CollaboratorTotalCell({
       className="flex flex-col items-end justify-center border-r border-ink-100 bg-coral-50/60 px-3 py-2 text-right"
       title={
         (row
-          ? `${COLLABORATOR_LABEL[collaborator]} · bonus ${ron(row.bonus)} (${(row.pct * 100).toFixed(1)} %)`
-          : COLLABORATOR_LABEL[collaborator]) +
+          ? `${collaboratorLabel(collaborator)} · bonus ${ron(row.bonus)} (${(row.pct * 100).toFixed(1)} %)`
+          : collaboratorLabel(collaborator)) +
         (assigned ? " · alocat la încărcare" : "")
       }
     >
@@ -690,7 +689,7 @@ function CollaboratorTotalCell({
       </span>
       {assigned && (
         <span className="text-[9px] font-semibold uppercase tracking-wider text-coral-600/70">
-          {COLLABORATOR_SHORT_LABEL[collaborator]}
+          {collaboratorShortLabel(collaborator)}
         </span>
       )}
     </div>

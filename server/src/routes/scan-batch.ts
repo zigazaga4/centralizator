@@ -28,7 +28,7 @@ import { assembleExtracted, priceExtracted } from "../pipeline.js";
 import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
 import { getWeekendDay, insertPair, persistPairStatus, signalExtracting, type UnpairedDocType } from "../db.js";
-import { COLLABORATORS, type Collaborator } from "../tariffs.js";
+import { extraCollaboratorInputs, isKnownCollaborator } from "../collaborators.js";
 
 const ACCEPTED_MIME = new Set([
   "image/jpeg",
@@ -91,7 +91,7 @@ async function processGroup(
   all: BatchImage[],
   docs: DocInfo[],
   day: string,
-  collaborator: Collaborator | null,
+  collaborator: string | null,
   log: FastifyBaseLogger,
 ): Promise<void> {
   const id = randomUUID();
@@ -143,7 +143,7 @@ async function processGroup(
       .map((i) => docs[i]?.invoiceRaw)
       .filter((r): r is Record<string, unknown> => r != null);
     const assembled = assembleExtracted(anchorDoc?.awbRaw ?? null, invoiceRaws, day);
-    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await priceExtracted(assembled, day, getWeekendDay(day));
+    const { extracted, resolvedService, serviceFallback, breakdown, routing } = await priceExtracted(assembled, day, getWeekendDay(day), extraCollaboratorInputs());
     persistPairStatus(id, {
       kind: "ready",
       service: resolvedService,
@@ -187,7 +187,7 @@ export async function processBatch(
   batchId: string,
   allImages: BatchImage[],
   day: string,
-  collaborator: Collaborator | null,
+  collaborator: string | null,
   log: FastifyBaseLogger,
 ): Promise<void> {
   try {
@@ -299,7 +299,7 @@ export default async function scanBatchRoutes(app: FastifyInstance) {
     // Optional `collaborator` form field: the partner the user picked in
     // the upload flow (phone modal / desktop modal). Validated against
     // the canonical roster; anything else (including "direct") → null.
-    let collaborator: Collaborator | null = null;
+    let collaborator: string | null = null;
 
     for await (const part of req.parts()) {
       if (part.type === "field") {
@@ -309,9 +309,9 @@ export default async function scanBatchRoutes(app: FastifyInstance) {
         if (
           part.fieldname === "collaborator" &&
           typeof part.value === "string" &&
-          (COLLABORATORS as readonly string[]).includes(part.value)
+          isKnownCollaborator(part.value)
         ) {
-          collaborator = part.value as Collaborator;
+          collaborator = part.value;
         }
         continue;
       }

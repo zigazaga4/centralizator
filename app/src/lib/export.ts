@@ -1,10 +1,9 @@
 import {
   CITY_COMMISSION_LABEL,
-  COLLABORATOR_SHORT_LABEL,
+  collaboratorShortLabel,
   primaryDispatchSite,
   type CityKey,
   type CityCommissionKey,
-  type CollaboratorKey,
   type Pair,
 } from "../types";
 import { date as fmtDate, ron as fmtRon } from "./format";
@@ -55,7 +54,7 @@ const FIRM_NAME = "Ambient Intermed";
 /** Which pairs the file includes. "all" = every pair handed in;
  *  "direct" = only pairs uploaded without a collaborator; a
  *  CollaboratorKey = only that partner's pairs. */
-export type ExportScope = CollaboratorKey | "direct" | "all";
+export type ExportScope = string | "direct" | "all";
 
 /** The knobs of the export-settings modal. Persisted in localStorage
  *  by ExportMenu; every exporter receives them through ExportOptions
@@ -147,7 +146,7 @@ interface Row {
 
 /** The three bottom lines of a collaborator statement (decont). */
 export interface StatementSummary {
-  collaborator: CollaboratorKey;
+  collaborator: string;
   /** Compact display label of the partner. */
   label: string;
   /** Bonus rate (0.25 = 25%) — display only; sums come from the rows. */
@@ -232,15 +231,15 @@ export function pairsToRows(
   // unassigned-row fallback is the scope partner too, never a header
   // pick, so a "Toate perechile" export never attributes legacy pairs
   // to one collaborator.
-  const scopeCollab: CollaboratorKey | null =
+  const scopeCollab: string | null =
     settingsIn.scope !== "all" && settingsIn.scope !== "direct" ? settingsIn.scope : null;
   const stmtOn = settingsIn.statement && scopeCollab !== null;
   const settings = normalizeSettings(settingsIn, stmtOn);
-  const anchor: CollaboratorKey | null = scopeCollab;
-  const stmtCollab: CollaboratorKey | null = stmtOn ? scopeCollab : null;
+  const anchor: string | null = scopeCollab;
+  const stmtCollab: string | null = stmtOn ? scopeCollab : null;
 
   const rows: Row[] = [];
-  const effSeen = new Set<CollaboratorKey>();
+  const effSeen = new Set<string>();
   let cityRunningTotal = 0;
   let collabRunningTotal = 0;
   let collabSeen = false;
@@ -260,7 +259,7 @@ export function pairsToRows(
     // Decont mode prices every row against the statement collaborator;
     // otherwise the row pays its own assignment, falling back to the
     // scope/header pick (same rule as the in-app payout column).
-    const eff: CollaboratorKey | null = settings.statement
+    const eff: string | null = settings.statement
       ? stmtCollab
       : (p.collaborator ?? anchor);
     const collabRow = eff !== null ? breakdown.collaboratorPrices[eff] : undefined;
@@ -305,7 +304,7 @@ export function pairsToRows(
   const effList = [...effSeen];
   const collabHeader =
     effList.length === 1
-      ? `Plată ${COLLABORATOR_SHORT_LABEL[effList[0]!]}`
+      ? `Plată ${collaboratorShortLabel(effList[0]!)}`
       : effList.length > 1
         ? "Plată colab."
         : null;
@@ -314,7 +313,7 @@ export function pairsToRows(
     settings.statement && stmtCollab !== null
       ? {
           collaborator: stmtCollab,
-          label: COLLABORATOR_SHORT_LABEL[stmtCollab],
+          label: collaboratorShortLabel(stmtCollab),
           pct: stmtPct ?? 0,
           baseTotal: baseRunningTotal,
           commission: bonusRunningTotal,
@@ -457,7 +456,7 @@ function fmtPct(pct: number): string {
 function scopeNote(s: ExportSettings): string | null {
   if (s.scope === "all") return null;
   if (s.scope === "direct") return "Perechi: directe (fără colaborator)";
-  return `Perechi: ${COLLABORATOR_SHORT_LABEL[s.scope]}${s.includeUnassigned ? " + nealocate" : ""}`;
+  return `Perechi: ${collaboratorShortLabel(s.scope)}${s.includeUnassigned ? " + nealocate" : ""}`;
 }
 
 /** The three decont bottom lines, shared by every exporter: base

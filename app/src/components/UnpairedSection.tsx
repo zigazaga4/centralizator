@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { CollaboratorKey, Pair, UnpairedDocType } from "../types";
+import type { Pair, UnpairedDocType } from "../types";
 import { usePairImages } from "../lib/images";
 import { suggestPairs } from "../lib/api";
 import { Spinner } from "./Spinner";
@@ -83,7 +83,7 @@ interface ModalProps {
   /** Build a real pair from these orphan rows (≥2) under the chosen
    *  collaborator. Resolves true when the pair was created (the source
    *  rows are gone by then). */
-  onPair: (ids: string[], collaborator: CollaboratorKey | null) => Promise<boolean>;
+  onPair: (ids: string[], collaborator: string | null) => Promise<boolean>;
   /** Existing (non-unpaired) pairs of the day the selected orphans can be
    *  attached to. */
   existingPairs: Pair[];
@@ -122,7 +122,7 @@ export function UnpairedModal({ items, onClose, onRemove, onPair, existingPairs,
   const [pendingSend, setPendingSend] = useState<{
     kind: "manual" | "ocr";
     groups: string[][];
-    initial: CollaboratorKey | null;
+    initial: string | null;
   } | null>(null);
 
   // Drop selections + suggestion members whose rows disappeared
@@ -176,7 +176,7 @@ export function UnpairedModal({ items, onClose, onRemove, onPair, existingPairs,
   /** Collaborator inherited from a set of orphan rows: the first
    *  non-null assignment (every orphan of a batch carries the same one,
    *  stamped at upload). Null when none of them was assigned. */
-  const inheritedCollaborator = (ids: string[]): CollaboratorKey | null => {
+  const inheritedCollaborator = (ids: string[]): string | null => {
     for (const id of ids) {
       const p = items.find((x) => x.id === id);
       if (p?.collaborator) return p.collaborator;
@@ -272,7 +272,7 @@ export function UnpairedModal({ items, onClose, onRemove, onPair, existingPairs,
    *  the chosen collaborator, all in parallel. Only NOW do they appear
    *  in the queue/excel view; a failed group keeps its rows and stays
    *  listed for a retry. */
-  const confirmSend = async (collaborator: CollaboratorKey | null) => {
+  const confirmSend = async (collaborator: string | null) => {
     if (!pendingSend) return;
     const { kind, groups } = pendingSend;
     setPendingSend(null);

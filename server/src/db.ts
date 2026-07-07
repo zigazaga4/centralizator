@@ -44,7 +44,7 @@ import { publishPairEvent } from "./events.js";
 import type { Extracted, Verification, Routing, StoreKey } from "./schema.js";
 import type { LmProduct } from "./leroymerlin.js";
 import type { PricingBreakdown } from "./pricing.js";
-import type { Collaborator, Service } from "./tariffs.js";
+import type { Service } from "./tariffs.js";
 
 /* ──────────────────────────────────────────────────────────────────────
  * File location
@@ -186,6 +186,25 @@ const MIGRATIONS: { version: number; up: string }[] = [
       );
     `,
   },
+  {
+    // v6 — user-created collaborators (Constanța-only for now).
+    //   The built-in roster (tariffs.ts COLLABORATORS) stays hardcoded; this
+    //   table holds ONLY the ones the operator adds at runtime. `key` is a
+    //   generated machine slug (unique, never colliding with a built-in),
+    //   `label` is the display name, `city` scopes it to a dispatch series
+    //   (Constanța today), `bonus_pct` is the per-collaborator commission
+    //   (0 for Constanța — the firm's city commission is the only markup).
+    version: 6,
+    up: `
+      CREATE TABLE IF NOT EXISTS collaborators (
+        key        TEXT    PRIMARY KEY,
+        label      TEXT    NOT NULL,
+        city       TEXT    NOT NULL,
+        bonus_pct  REAL    NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -269,7 +288,7 @@ export interface PairWire {
   updatedAt: number;
   /** Collaborator this pair was filed to AT UPLOAD TIME (the courier picks
    *  one in the scan flow). `null` = direct / legacy pair. */
-  collaborator: Collaborator | null;
+  collaborator: string | null;
   status: PairStatus;
   images: PairImageWire[];
 }
@@ -293,7 +312,7 @@ export interface PairLightWire {
   createdAt: number;
   updatedAt: number;
   /** Same upload-time collaborator assignment as PairWire. */
-  collaborator: Collaborator | null;
+  collaborator: string | null;
   status: PairStatus;
   images: PairImageMetaWire[];
 }
@@ -312,7 +331,7 @@ interface PairRow {
   verification_json: string | null;
   store: StoreKey | null;
   routing_json: string | null;
-  collaborator: Collaborator | null;
+  collaborator: string | null;
 }
 
 interface ImageRow {
@@ -430,6 +449,14 @@ const stmt = {
        ON CONFLICT(day) DO UPDATE SET force_weekend = @force`,
   ),
   deleteWeekendDay: db.prepare(`DELETE FROM day_flags WHERE day = ?`),
+  selectCollaborators: db.prepare<[], CollaboratorRow>(
+    `SELECT key, label, city, bonus_pct, created_at FROM collaborators ORDER BY created_at`,
+  ),
+  insertCollaborator: db.prepare(
+    `INSERT INTO collaborators (key, label, city, bonus_pct, created_at)
+     VALUES (@key, @label, @city, @bonus_pct, @created_at)`,
+  ),
+  deleteCollaborator: db.prepare(`DELETE FROM collaborators WHERE key = ?`),
   selectLmProduct: db.prepare<[string], LmProductRow>(
     `SELECT query, found, url, name, brand, price_buc, weight_kg, area_m2, dims_mm, fetched_at
        FROM lm_products WHERE query = ?`,
@@ -621,8 +648,9 @@ export interface InsertPairInput {
   id: string;
   day: string;
   /** Collaborator picked in the upload flow — stamped once at insert,
-   *  never changed by a status transition. Omit/null = direct. */
-  collaborator?: Collaborator | null;
+   *  never changed by a status transition. Omit/null = direct. A built-in
+   *  roster key OR a user-created collaborator key (hence plain string). */
+  collaborator?: string | null;
   /** Optional initial status — defaults to "pending". "extracting" is
    *  silently coerced to "pending" because we don't persist that state. */
   status?: PairStatus;
@@ -827,6 +855,62 @@ export function setWeekendDay(day: string, force: boolean): void {
   } else {
     stmt.deleteWeekendDay.run(day);
   }
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * User-created collaborators (Constanța-only for now). The built-in roster
+ * lives in tariffs.ts; this table holds ONLY the ones the operator adds at
+ * runtime. The in-memory registry (collaborators.ts) reads through these.
+ * ────────────────────────────────────────────────────────────────────── */
+
+export interface CustomCollaborator {
+  key: string;
+  label: string;
+  city: string;
+  bonusPct: number;
+  createdAt: number;
+}
+
+interface CollaboratorRow {
+  key: string;
+  label: string;
+  city: string;
+  bonus_pct: number;
+  created_at: number;
+}
+
+/** Every user-created collaborator, oldest first. */
+export function listCollaborators(): CustomCollaborator[] {
+  return stmt.selectCollaborators.all().map((r) => ({
+    key: r.key,
+    label: r.label,
+    city: r.city,
+    bonusPct: r.bonus_pct,
+    createdAt: r.created_at,
+  }));
+}
+
+/** Insert a new collaborator. Throws on a duplicate key (PRIMARY KEY). */
+export function insertCollaborator(input: {
+  key: string;
+  label: string;
+  city: string;
+  bonusPct: number;
+}): CustomCollaborator {
+  const createdAt = Date.now();
+  stmt.insertCollaborator.run({
+    key: input.key,
+    label: input.label,
+    city: input.city,
+    bonus_pct: input.bonusPct,
+    created_at: createdAt,
+  });
+  return { ...input, createdAt };
+}
+
+/** Delete a user-created collaborator by key. Returns false if none matched. */
+export function deleteCollaborator(key: string): boolean {
+  return stmt.deleteCollaborator.run(key).changes > 0;
 }
 
 /** Clear the entire queue (every day, every pair). The route layer

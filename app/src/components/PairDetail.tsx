@@ -2,11 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CITY_COMMISSION_KEYS,
   CITY_COMMISSION_LABEL,
-  COLLABORATOR_LABEL,
+  collaboratorLabel,
   primaryDispatchSite,
   type Awb,
   type CityKey,
-  type CollaboratorKey,
   type Extracted,
   type Invoice,
   type Pair,
@@ -36,7 +35,7 @@ interface Props {
    *  shows ONLY this collaborator's payout row + bottom-line total.
    *  `null` means the picked city has no collaborator (Constanța) —
    *  the per-collaborator section is hidden entirely in that case. */
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   /** True while this pair's Leroy Merlin product check is in flight. */
   verifying?: boolean;
   onPatch: (patch: PairPatch) => void;
@@ -578,7 +577,7 @@ function Spreadsheet({
   breakdown: PricingBreakdown;
   routing?: Routing;
   city: CityKey;
-  collaborator: CollaboratorKey | null;
+  collaborator: string | null;
   onPatch: (patch: PairPatch) => void;
   onDetachInvoice?: (invoiceIndex: number) => Promise<void> | void;
   /** Number of stored images. An invoice WITHOUT a dedicated photo (index
@@ -1053,7 +1052,7 @@ function Spreadsheet({
           <Section title="Plată colaborator" />
           <DataRow
             n={r()}
-            label={COLLABORATOR_LABEL[collaborator]}
+            label={collaboratorLabel(collaborator)}
             value={`${(collabRow.pct * 100).toFixed(1)} % · bonus ${ron(collabRow.bonus)} → ${ron(collabRow.total)}`}
             numeric
           />
@@ -1077,7 +1076,7 @@ function Spreadsheet({
       {collaborator && collabRow && (
         <TotalRow
           n={r()}
-          label={`PLATĂ COLABORATOR · ${COLLABORATOR_LABEL[collaborator]}`}
+          label={`PLATĂ COLABORATOR · ${collaboratorLabel(collaborator)}`}
           value={ron(collabRow.total)}
         />
       )}

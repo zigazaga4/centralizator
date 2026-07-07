@@ -264,6 +264,69 @@ export const COLLABORATORS_BY_CITY: Record<CityKey, readonly CollaboratorKey[]> 
   ],
 };
 
+/* ──────────────────────────────────────────────────────────────────────
+ * User-created collaborators (Constanța-only today).
+ *
+ * The built-in roster above is static; the operator can also add partners
+ * at runtime (server table `collaborators`). We keep them in a tiny
+ * module-level registry so every surface — the header dropdown AND the
+ * non-React `export.ts` — can resolve a custom key's label without
+ * prop-drilling. App.tsx fetches them once at startup and calls
+ * `setCustomCollaborators`; the label/roster helpers below fall back to the
+ * static maps first, then this registry, then the raw key (never blank).
+ * ────────────────────────────────────────────────────────────────────── */
+
+/** A collaborator the operator created at runtime (mirrors the server row). */
+export interface CustomCollaborator {
+  key: string;
+  label: string;
+  city: CityKey | string;
+  bonusPct: number;
+  createdAt: number;
+}
+
+let customCollaboratorRegistry: CustomCollaborator[] = [];
+
+/** Replace the in-memory custom-collaborator registry (called after the
+ *  startup fetch and after every create/delete). */
+export function setCustomCollaborators(list: CustomCollaborator[]): void {
+  customCollaboratorRegistry = list;
+}
+
+/** The current custom collaborators (all cities). */
+export function getCustomCollaborators(): CustomCollaborator[] {
+  return customCollaboratorRegistry;
+}
+
+/** Full display label for any collaborator key — built-in OR user-created.
+ *  Falls back to the key itself so a row is never blank. */
+export function collaboratorLabel(key: string): string {
+  return (
+    COLLABORATOR_LABEL[key as CollaboratorKey] ??
+    customCollaboratorRegistry.find((c) => c.key === key)?.label ??
+    key
+  );
+}
+
+/** Short display label (custom collaborators have no separate short form, so
+ *  their full label is used). */
+export function collaboratorShortLabel(key: string): string {
+  return (
+    COLLABORATOR_SHORT_LABEL[key as CollaboratorKey] ??
+    customCollaboratorRegistry.find((c) => c.key === key)?.label ??
+    key
+  );
+}
+
+/** Every collaborator key available for a city: the built-in roster plus any
+ *  user-created ones scoped to that city. */
+export function collaboratorsForCity(city: CityKey): string[] {
+  return [
+    ...COLLABORATORS_BY_CITY[city],
+    ...customCollaboratorRegistry.filter((c) => c.city === city).map((c) => c.key),
+  ];
+}
+
 /**
  * First collaborator for a city — the default selection when the
  * user changes city. Returns `null` only for a city with an empty
@@ -281,11 +344,12 @@ export function defaultCollaboratorFor(city: CityKey): CollaboratorKey | null {
  * Ploiești partner — is selected forces a reset to EMV).
  */
 export function isCollaboratorValidForCity(
-  collaborator: CollaboratorKey | null,
+  collaborator: string | null,
   city: CityKey,
 ): boolean {
-  if (collaborator === null) return COLLABORATORS_BY_CITY[city].length === 0;
-  return (COLLABORATORS_BY_CITY[city] as readonly CollaboratorKey[]).includes(collaborator);
+  const roster = collaboratorsForCity(city);
+  if (collaborator === null) return roster.length === 0;
+  return roster.includes(collaborator);
 }
 
 /** Ordered city options for the dropdown. */
@@ -479,7 +543,7 @@ export interface PricingBreakdown {
    * dropdown and the table + detail page show that one's total.
    * Math is server-side: `total = carrierTotal × (1 + pct)`.
    */
-  collaboratorPrices: Record<CollaboratorKey, CollaboratorPriceRow>;
+  collaboratorPrices: Record<string, CollaboratorPriceRow>;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -657,8 +721,9 @@ export interface Pair {
    * FILTERS the queue by this assignment, and the payout column shows
    * THIS collaborator's total. `null`/absent = direct or a legacy pair
    * from before the column existed (shown under every collaborator).
+   * A built-in roster key OR a user-created collaborator key (plain string).
    */
-  collaborator?: CollaboratorKey | null;
+  collaborator?: string | null;
   /**
    * Filing day in local-TZ ISO form (`YYYY-MM-DD`). The user organises
    * the queue by day — one tab per day, like an Excel workbook — so

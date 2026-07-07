@@ -13,6 +13,7 @@ import { type ImageInput } from "../gemini.js";
 import { calculatePrice, type PricingBreakdown } from "../pricing.js";
 import { type Service } from "../tariffs.js";
 import { extractAndPrice, PipelineError, todayFilingDay } from "../pipeline.js";
+import { extraCollaboratorInputs } from "../collaborators.js";
 import {
   PricingRequestSchema,
   type Extracted,
@@ -80,7 +81,7 @@ export default async function extractRoutes(app: FastifyInstance) {
 
     try {
       const { extracted, resolvedService, serviceFallback, breakdown, routing } =
-        await extractAndPrice(images, todayFilingDay());
+        await extractAndPrice(images, todayFilingDay(), undefined, extraCollaboratorInputs());
       const body: ExtractResponse = { extracted, resolvedService, serviceFallback, breakdown, routing };
       return reply.send(body);
     } catch (err) {
@@ -124,6 +125,10 @@ export default async function extractRoutes(app: FastifyInstance) {
         macaraForceNormal: macara_force_normal,
         macaraForceOn: macara_force_on,
         forceWeekend: force_weekend,
+        // Materialise a payout row for every user-created collaborator too, so
+        // a re-price after edits keeps them (the built-in roster is always
+        // priced). The client never sends these — they come from the registry.
+        extraCollaborators: extraCollaboratorInputs(),
       });
       return reply.send({ breakdown });
     } catch (err) {

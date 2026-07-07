@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import {
   COLLABORATOR_KEYS,
-  COLLABORATOR_LABEL,
-  type CollaboratorKey,
+  collaboratorLabel,
+  getCustomCollaborators,
 } from "../types";
 import { CollaboratorPickModal } from "./CollaboratorPickModal";
 
@@ -13,7 +13,7 @@ interface Props {
    *  The collaborator is the one picked in the upload modal — every pair
    *  the batch produces is stamped with it. Resolves true when the
    *  upload was accepted. */
-  onScan: (images: File[], collaborator: CollaboratorKey | null) => Promise<boolean>;
+  onScan: (images: File[], collaborator: string | null) => Promise<boolean>;
   /** Whether to render the big hero variant (empty state) or the compact bar. */
   hero?: boolean;
 }
@@ -26,11 +26,15 @@ const MAX_IMAGES = 120;
  *  preselected next time so the common case is one click on "Trimite". */
 const LS_UPLOAD_COLLABORATOR = "centralizator.uploadCollaborator";
 
-function readStoredCollaborator(): CollaboratorKey | null {
+function readStoredCollaborator(): string | null {
   try {
     const s = localStorage.getItem(LS_UPLOAD_COLLABORATOR);
-    if (s && (COLLABORATOR_KEYS as readonly string[]).includes(s)) {
-      return s as CollaboratorKey;
+    if (
+      s &&
+      ((COLLABORATOR_KEYS as readonly string[]).includes(s) ||
+        getCustomCollaborators().some((c) => c.key === s))
+    ) {
+      return s;
     }
   } catch {
     /* localStorage may be disabled — fall through. */
@@ -89,7 +93,7 @@ export function PairAddCard({ onScan, hero }: Props) {
   /** The actual upload — fired by the modal's confirm with the chosen
    *  collaborator. Saves the choice as next time's default. */
   const doSend = useCallback(
-    (imgs: File[], collaborator: CollaboratorKey | null) => {
+    (imgs: File[], collaborator: string | null) => {
       setPending(null);
       try {
         if (collaborator) localStorage.setItem(LS_UPLOAD_COLLABORATOR, collaborator);
@@ -105,7 +109,7 @@ export function PairAddCard({ onScan, hero }: Props) {
               ? {
                   kind: "ok",
                   text: `${imgs.length} imagine${imgs.length === 1 ? "" : "i"} trimise pentru ${
-                    collaborator ? COLLABORATOR_LABEL[collaborator] : "plată directă (fără colaborator)"
+                    collaborator ? collaboratorLabel(collaborator) : "plată directă (fără colaborator)"
                   } — fiecare imagine este citită separat, apoi împerecheată după destinatar; perechile apar automat în tabel.`,
                 }
               : {

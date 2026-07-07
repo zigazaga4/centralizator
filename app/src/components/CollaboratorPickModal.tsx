@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { COLLABORATOR_KEYS, COLLABORATOR_LABEL, type CollaboratorKey } from "../types";
+import { COLLABORATOR_KEYS, collaboratorLabel, getCustomCollaborators } from "../types";
 
 /**
  * Collaborator picker modal — the single "whose documents/pairs are
@@ -27,9 +27,9 @@ interface Props {
   confirmLabel: string;
   /** Preselected option — the remembered/inherited collaborator, or
    *  null for "Direct (fără colaborator)". */
-  initial?: CollaboratorKey | null;
+  initial?: string | null;
   onCancel: () => void;
-  onConfirm: (collaborator: CollaboratorKey | null) => void;
+  onConfirm: (collaborator: string | null) => void;
 }
 
 export function CollaboratorPickModal({
@@ -40,9 +40,9 @@ export function CollaboratorPickModal({
   onCancel,
   onConfirm,
 }: Props) {
-  const [choice, setChoice] = useState<CollaboratorKey | null>(initial);
+  const [choice, setChoice] = useState<string | null>(initial);
 
-  const option = (key: CollaboratorKey | null, label: string) => {
+  const option = (key: string | null, label: string) => {
     const active = choice === key;
     return (
       <button
@@ -101,7 +101,9 @@ export function CollaboratorPickModal({
         </div>
 
         <div className="mt-4 space-y-2">
-          {COLLABORATOR_KEYS.map((k) => option(k, COLLABORATOR_LABEL[k]))}
+          {[...COLLABORATOR_KEYS, ...getCustomCollaborators().map((c) => c.key)].map((k) =>
+            option(k, collaboratorLabel(k)),
+          )}
           {option(null, "Direct (fără colaborator)")}
         </div>
 

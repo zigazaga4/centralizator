@@ -45,7 +45,7 @@ import {
   type PairStatus,
 } from "../db.js";
 import { suggestPairs, SUGGEST_MAX_IMAGES } from "../classify.js";
-import { COLLABORATORS, type Collaborator } from "../tariffs.js";
+import { extraCollaboratorInputs, isKnownCollaborator } from "../collaborators.js";
 import { ExtractedSchema, VerificationSchema, RoutingSchema, StoreKeySchema } from "../schema.js";
 import type { Extracted, Routing } from "../schema.js";
 import { buildPricingInput, extractAndPrice } from "../pipeline.js";
@@ -101,7 +101,8 @@ export const NewPairSchema = z.object({
   /** Upload-time collaborator assignment. The manual-pairing flow sends
    *  the orphan docs' inherited collaborator; omitted/null = direct. */
   collaborator: z
-    .enum(COLLABORATORS as readonly [Collaborator, ...Collaborator[]])
+    .string()
+    .refine(isKnownCollaborator, { message: "Colaborator necunoscut." })
     .nullable()
     .optional(),
   images: z.array(ImageWireSchema).min(1).max(12),
@@ -412,6 +413,8 @@ export default async function pairRoutes(app: FastifyInstance) {
         // Keep the day's weekend override (or the pair's own forced flag) so
         // detaching an invoice never silently drops the surcharge.
         forceWeekend: getWeekendDay(pair.day) || (status.breakdown.weekendForced ?? false),
+        // Keep every user-created collaborator's payout row on the re-price.
+        extraCollaborators: extraCollaboratorInputs(),
       }),
       macaraForceNormal: status.breakdown.macara?.forcedNormal ?? false,
       macaraForceOn: status.breakdown.macara?.forcedOn ?? false,
@@ -533,6 +536,7 @@ export default async function pairRoutes(app: FastifyInstance) {
         images.map((i) => ({ data: i.bytes, mimeType: i.mimeType })),
         target.day,
         forceWeekend,
+        extraCollaboratorInputs(),
       );
     } catch (err) {
       req.log.error({ err, pair: req.params.id }, "attach: re-extract/price failed");
@@ -598,7 +602,7 @@ export default async function pairRoutes(app: FastifyInstance) {
 
     // Pull each orphan's photo into memory, grouped by collaborator (the
     // pairing pipeline stamps ONE collaborator per run), then drop the rows.
-    const groups = new Map<string, { collaborator: Collaborator | null; images: BatchImage[] }>();
+    const groups = new Map<string, { collaborator: string | null; images: BatchImage[] }>();
     for (const o of orphans) {
       const img = getPairImage(o.id, 0);
       if (!img) continue;

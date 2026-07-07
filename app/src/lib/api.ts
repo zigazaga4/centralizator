@@ -1,4 +1,4 @@
-import type { CollaboratorKey, CompareReport, Extracted, ExtractResponse, Pair, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
+import type { CompareReport, CustomCollaborator, Extracted, ExtractResponse, Pair, PairSuggestion, PricingBreakdown, PricingRequest, Verification } from "../types";
 import { wirePairToClient, type WirePair } from "./db";
 
 /**
@@ -59,7 +59,7 @@ export async function extractAndPrice(images: File[]): Promise<ExtractResponse> 
 export async function scanBatch(
   images: File[],
   day: string,
-  collaborator: CollaboratorKey | null = null,
+  collaborator: string | null = null,
 ): Promise<{ batchId: string; imageCount: number }> {
   if (images.length < 1) throw new Error("scanBatch needs at least one image.");
   const form = new FormData();
@@ -261,6 +261,48 @@ export async function setWeekendDay(day: string, force: boolean): Promise<void> 
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`set weekend day failed (${res.status}): ${body}`);
+  }
+}
+
+/* ── User-created collaborators (Constanța-only today) ───────────────── */
+
+/** The operator's runtime-added collaborators (the built-in roster is static
+ *  in types.ts and NOT returned here). */
+export async function listCollaborators(): Promise<CustomCollaborator[]> {
+  const res = await fetch(`${BASE}/collaborators`, { headers: authHeaders() });
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`list collaborators failed (${res.status})`);
+  const data = (await res.json()) as { collaborators?: CustomCollaborator[] };
+  return data.collaborators ?? [];
+}
+
+/** Create a new collaborator from an operator-typed name (Constanța-only). */
+export async function createCollaborator(
+  label: string,
+  city = "Constanta",
+): Promise<CustomCollaborator> {
+  const res = await fetch(`${BASE}/collaborators`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ label, city }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`create collaborator failed (${res.status}): ${body}`);
+  }
+  const data = (await res.json()) as { collaborator: CustomCollaborator };
+  return data.collaborator;
+}
+
+/** Remove a user-created collaborator by key. */
+export async function deleteCollaborator(key: string): Promise<void> {
+  const res = await fetch(`${BASE}/collaborators/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`delete collaborator failed (${res.status}): ${body}`);
   }
 }
 

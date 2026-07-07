@@ -23,7 +23,9 @@ import verifyRoutes from "./routes/verify.js";
 import scanBatchRoutes from "./routes/scan-batch.js";
 import eventRoutes from "./routes/events.js";
 import compareRoutes from "./routes/compare.js";
+import collaboratorRoutes from "./routes/collaborators.js";
 import { closeDb } from "./db.js";
+import { loadCollaborators } from "./collaborators.js";
 
 const HOST = process.env.HOST ?? "127.0.0.1";
 const PORT_SCAN_START = 3000;
@@ -183,6 +185,11 @@ await app.register(verifyRoutes);
 await app.register(scanBatchRoutes);
 await app.register(eventRoutes);
 await app.register(compareRoutes);
+await app.register(collaboratorRoutes);
+
+// Prime the user-created-collaborator registry from the DB before serving so
+// pricing + validation see them from the first request.
+loadCollaborators();
 
 /**
  * Race-free port probe — open a throw-away TCP server on the candidate

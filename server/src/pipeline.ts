@@ -239,6 +239,10 @@ export function buildPricingInput(
     macaraStore: PricingInput["macaraStore"];
     /** Operator's per-day weekend override (force the surcharge ON). */
     forceWeekend?: boolean;
+    /** User-created collaborators to also price (from the server's registry).
+     *  Undefined/empty in the pure paths (tests, offline reprice without a
+     *  registry) — the built-in roster is always priced regardless. */
+    extraCollaborators?: { key: string; pct: number }[];
   },
 ): PricingInput {
   const { bulkyUnits, hasOtherProducts } = summariseBulky(extracted);
@@ -250,6 +254,7 @@ export function buildPricingInput(
     numDeliveries: extracted.awb.num_deliveries ?? 1,
     deliveryDate: opts.weekendBasis,
     forceWeekend: opts.forceWeekend,
+    extraCollaborators: opts.extraCollaborators,
     bulkyUnits,
     hasOtherProducts,
     unloadingUnits: summariseUnloading(extracted),
@@ -272,6 +277,7 @@ export async function extractAndPrice(
   images: ImageInput[],
   filingDay?: string,
   forceWeekend?: boolean,
+  extraCollaborators?: { key: string; pct: number }[],
 ): Promise<ExtractAndPriceResult> {
   let extracted: Extracted;
   try {
@@ -279,7 +285,7 @@ export async function extractAndPrice(
   } catch (err) {
     throw new PipelineError("vision", (err as Error).message);
   }
-  return priceExtracted(extracted, filingDay, forceWeekend);
+  return priceExtracted(extracted, filingDay, forceWeekend, extraCollaborators);
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -350,6 +356,7 @@ export async function priceExtracted(
   extracted: Extracted,
   filingDay?: string,
   forceWeekend?: boolean,
+  extraCollaborators?: { key: string; pct: number }[],
 ): Promise<ExtractAndPriceResult> {
   const { service, serviceFallback } = resolveService(extracted.awb.service_text);
 
@@ -381,6 +388,7 @@ export async function priceExtracted(
         // Per-day operator override: when the filing day is marked a weekend,
         // every pair priced under it carries the surcharge regardless of date.
         forceWeekend,
+        extraCollaborators,
       }),
     );
   } catch (err) {

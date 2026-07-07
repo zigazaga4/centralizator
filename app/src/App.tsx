@@ -11,9 +11,11 @@ import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
 import {
   attachToPair as attachToPairApi,
+  createCollaborator as createCollaboratorApi,
   detachInvoice as detachInvoiceApi,
   dismantlePair as dismantlePairApi,
   extractAndPrice,
+  listCollaborators,
   reprice,
   retryUnpaired as retryUnpairedApi,
   scanBatch,
@@ -33,14 +35,15 @@ import { pairMatchesQuery } from "./lib/search";
 import {
   CITY_KEYS,
   CITY_LABEL,
-  COLLABORATOR_KEYS,
-  COLLABORATOR_LABEL,
-  COLLABORATORS_BY_CITY,
+  collaboratorLabel,
+  collaboratorsForCity,
   defaultCollaboratorFor,
+  getCustomCollaborators,
   isCollaboratorValidForCity,
   primaryDispatchSite,
+  setCustomCollaborators,
   type CityKey,
-  type CollaboratorKey,
+  type CustomCollaborator,
   type Extracted,
   type Pair,
   type PairPatch,
@@ -202,22 +205,45 @@ export default function App() {
    * we fall back to the city's first collaborator (or `null` for
    * Constanța, which means "direct, no partner").
    */
-  const [selectedCollaborator, setSelectedCollaborator] = useState<CollaboratorKey | null>(() => {
+  const [selectedCollaborator, setSelectedCollaborator] = useState<string | null>(() => {
     const city = readEnumLS(LS_SELECTED_CITY, CITY_KEYS, "Ploiesti");
-    const stored = (() => {
-      try {
-        const s = localStorage.getItem(LS_SELECTED_COLLABORATOR);
-        if (s && (COLLABORATOR_KEYS as readonly string[]).includes(s)) {
-          return s as CollaboratorKey;
-        }
-      } catch {
-        /* fall through */
-      }
-      return null;
-    })();
-    if (stored && isCollaboratorValidForCity(stored, city)) return stored;
+    try {
+      // Accept the stored key as-is (built-in OR user-created). Custom keys
+      // aren't known until the roster loads async, so validation happens in
+      // the reconcile effect below once `collabsLoaded` flips.
+      const s = localStorage.getItem(LS_SELECTED_COLLABORATOR);
+      if (s) return s;
+    } catch {
+      /* fall through */
+    }
     return defaultCollaboratorFor(city);
   });
+
+  /** User-created collaborators. State drives re-renders; the authoritative
+   *  copy lives in the types.ts registry so non-React surfaces (export.ts)
+   *  can resolve labels too. `collabsLoaded` gates the reconcile effect so a
+   *  persisted custom selection isn't wiped before the roster arrives. */
+  const [, setCustomCollabs] = useState<CustomCollaborator[]>([]);
+  const [collabsLoaded, setCollabsLoaded] = useState(false);
+  useEffect(() => {
+    listCollaborators()
+      .then((list) => {
+        setCustomCollaborators(list);
+        setCustomCollabs(list);
+      })
+      .catch(() => {
+        /* offline / older server: the built-in roster still works */
+      })
+      .finally(() => setCollabsLoaded(true));
+  }, []);
+
+  const handleCreateCollaborator = useCallback(async (label: string): Promise<string> => {
+    const created = await createCollaboratorApi(label);
+    const next = [...getCustomCollaborators(), created];
+    setCustomCollaborators(next);
+    setCustomCollabs(next);
+    return created.key;
+  }, []);
 
   useEffect(() => {
     try {
@@ -250,13 +276,16 @@ export default function App() {
    * infinite ping-pong with `setSelectedCollaborator`).
    */
   useEffect(() => {
+    // Wait for the custom roster before reconciling, so a persisted custom
+    // collaborator isn't wiped on mount before its key is known.
+    if (!collabsLoaded) return;
     setSelectedCollaborator((cur) =>
       isCollaboratorValidForCity(cur, selectedCity)
         ? cur
         : defaultCollaboratorFor(selectedCity),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCity]);
+  }, [selectedCity, collabsLoaded]);
 
   /* ── Active centralizator (store) ─────────────────────────────────── */
 
@@ -605,7 +634,7 @@ export default function App() {
    * "tomorrow's tab" files under tomorrow without an extra click.
    */
   const scanImages = useCallback(
-    async (files: File[], collaborator: CollaboratorKey | null): Promise<boolean> => {
+    async (files: File[], collaborator: string | null): Promise<boolean> => {
       try {
         await scanBatch(files, selectedDay, collaborator);
         return true;
@@ -1158,7 +1187,7 @@ export default function App() {
    * assignment as the pair enters the queue.
    */
   const pairManually = useCallback(
-    async (ids: string[], collaborator: CollaboratorKey | null): Promise<boolean> => {
+    async (ids: string[], collaborator: string | null): Promise<boolean> => {
       const docs = ids
         .map((id) => pairsRef.current.find((p) => p.id === id))
         .filter((p): p is Pair => !!p && p.status.kind === "unpaired");
@@ -1473,6 +1502,7 @@ export default function App() {
               city={selectedCity}
               value={selectedCollaborator}
               onChange={setSelectedCollaborator}
+              onCreate={handleCreateCollaborator}
             />
           </div>
 
@@ -1821,13 +1851,41 @@ function CollaboratorSelect({
   city,
   value,
   onChange,
+  onCreate,
 }: {
   city: CityKey;
-  value: CollaboratorKey | null;
-  onChange: (next: CollaboratorKey | null) => void;
+  value: string | null;
+  onChange: (next: string | null) => void;
+  /** Create a collaborator from a typed name; resolves to its new key. */
+  onCreate: (label: string) => Promise<string>;
 }) {
-  const options = COLLABORATORS_BY_CITY[city];
+  const options = collaboratorsForCity(city);
   const empty = options.length === 0;
+  // Creating partners is Constanța-only for now (the other series carry
+  // fixed, negotiated rosters).
+  const canCreate = city === "Constanta";
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    const label = name.trim();
+    if (!label || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const key = await onCreate(label);
+      onChange(key);
+      setName("");
+      setAdding(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <label
       className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-ink-500"
@@ -1845,16 +1903,72 @@ function CollaboratorSelect({
       ) : (
         <select
           value={value ?? ""}
-          onChange={(e) => onChange((e.target.value || null) as CollaboratorKey | null)}
+          onChange={(e) => onChange(e.target.value || null)}
           className="rounded-md border border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm font-medium normal-case tracking-normal text-ink-800 outline-none transition hover:border-coral-400 focus:border-coral-400 focus:ring-2 focus:ring-coral-200"
         >
           {options.map((o) => (
             <option key={o} value={o}>
-              {COLLABORATOR_LABEL[o]}
+              {collaboratorLabel(o)}
             </option>
           ))}
         </select>
       )}
+      {canCreate &&
+        (adding ? (
+          <span className="inline-flex items-center gap-1" title={error ?? undefined}>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (error) setError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submit();
+                else if (e.key === "Escape") {
+                  setAdding(false);
+                  setName("");
+                  setError(null);
+                }
+              }}
+              placeholder="Nume colaborator"
+              disabled={busy}
+              className={`w-40 rounded-md border bg-canvas-50 px-2 py-1.5 text-sm font-medium normal-case tracking-normal text-ink-800 outline-none focus:ring-2 focus:ring-coral-200 ${
+                error ? "border-coral-500" : "border-ink-300 focus:border-coral-400"
+              }`}
+            />
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={busy || !name.trim()}
+              title="Salvează colaboratorul"
+              className="rounded-md border border-coral-400 bg-coral-50 px-2 py-1.5 text-sm font-semibold text-coral-700 transition hover:bg-coral-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              OK
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAdding(false);
+                setName("");
+                setError(null);
+              }}
+              title="Anulează"
+              className="rounded-md border border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm text-ink-500 transition hover:text-ink-800"
+            >
+              ✕
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            title="Adaugă un colaborator nou (Constanța)"
+            className="rounded-md border border-dashed border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm font-semibold leading-none text-ink-500 transition hover:border-coral-400 hover:text-coral-700"
+          >
+            ＋
+          </button>
+        ))}
     </label>
   );
 }

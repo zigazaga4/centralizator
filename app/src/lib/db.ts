@@ -26,7 +26,7 @@
  * pair queue in App.tsx for what's recoverable on the next request.
  */
 
-import type { CollaboratorKey, Extracted, Pair, PairImageRef, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
+import type { Extracted, Pair, PairImageRef, PairStatus, PricingBreakdown, Routing, Service, StoreKey, Verification } from "../types";
 
 /**
  * Vite proxies /api/* to the Fastify server during dev. In a packaged
@@ -87,8 +87,9 @@ export interface WirePair {
   createdAt: number;
   updatedAt: number;
   /** Upload-time collaborator assignment (see `Pair.collaborator`).
-   *  Optional so a pre-v4 server payload still decodes. */
-  collaborator?: CollaboratorKey | null;
+   *  Optional so a pre-v4 server payload still decodes. A built-in roster key
+   *  OR a user-created collaborator key (plain string). */
+  collaborator?: string | null;
   status: WireStatus;
   images: WireImage[];
 }
