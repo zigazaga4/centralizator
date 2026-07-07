@@ -864,6 +864,14 @@ export default function App() {
           distance_km: edits.awb.distance_extra_km,
           num_deliveries: edits.awb.num_deliveries,
           delivery_date: edits.awb.delivery_date,
+          // Carry the bulky (polistiren / vată) count + the "other products"
+          // flag forward — both are derived from the INVOICE, not editable
+          // here. Without this a live re-price (e.g. after the operator fixes
+          // kg/km on a manual AWB) resets bulky_units to 0 and the polystyrene
+          // transports silently vanish. Same rule as the unloading/macara
+          // signals below.
+          bulky_units: breakdown.bulkyUnits ?? 0,
+          has_other_products: breakdown.hasOtherProducts ?? false,
           // Carry the unloading count forward — it's derived from the invoice
           // (not user-editable here), so a live re-price must preserve it or
           // the separate unloading tax would silently vanish.

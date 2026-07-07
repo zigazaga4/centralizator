@@ -488,6 +488,10 @@ export interface PricingBreakdown {
    *  extra transport bills one increment tariff plus its own round of
    *  the per-km surcharge. Optional like `bulkyUnits`. */
   bulkyTransports?: number;
+  /** Whether a real (non-bulky, non-service) product also shared the truck.
+   *  Carried forward on a live re-price so the bulky base-transport credit is
+   *  recomputed against the right flag. Optional for older breakdowns. */
+  hasOtherProducts?: boolean;
   /** Standard unloading fees detected on the shipment (base count, before
    *  the >1200 kg multiplier and before the operator's manual add). 0 when
    *  no unloading was detected. */
@@ -609,6 +613,14 @@ export interface PricingRequest {
   distance_km: number;
   num_deliveries: number;
   delivery_date: string;
+  /** Bulky-but-light unit count (polistiren / vată), derived from the invoice
+   *  and carried across live edits so the extra-transport surcharge survives a
+   *  re-price. Optional; defaults to 0. */
+  bulky_units?: number;
+  /** Whether a real (non-bulky, non-service) product also shares the truck.
+   *  Drives the bulky base-transport credit; carried across live edits.
+   *  Optional; defaults to false. */
+  has_other_products?: boolean;
   /** Standard unloading fees on the shipment, preserved across live edits
    *  so the unloading tax survives a re-price. The >1200 kg multiplier is
    *  re-applied server-side. Optional; defaults to 0. */

@@ -270,6 +270,11 @@ export interface PricingBreakdown {
    *  then one per started block of 24 (24 → 1, 25 → 2). Each adds one
    *  increment tariff and one round of the per-km surcharge. */
   bulkyTransports: number;
+  /** Whether a REAL (non-bulky, non-service) product also shared the truck.
+   *  Persisted so a stateless live re-price (POST /price, driven by a UI edit)
+   *  can carry it forward alongside `bulkyUnits` — without it, editing kg/km
+   *  would recompute the bulky base-transport credit against the wrong flag. */
+  hasOtherProducts: boolean;
   /** Whether the weekend surcharge was applied. */
   weekend: boolean;
   /** True when the weekend surcharge was forced ON by the operator (manual
@@ -576,6 +581,7 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     rounds,
     bulkyUnits,
     bulkyTransports,
+    hasOtherProducts,
     weekend,
     weekendForced,
     baseTariff: round2(baseTariff),
