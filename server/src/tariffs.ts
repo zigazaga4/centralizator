@@ -198,14 +198,19 @@ export const EXTRA_KM_THRESHOLD = 50;
 
 /**
  * Bulky-but-light goods (polystyrene / mineral wool) fill a truck by
- * volume, not by weight. Ops rule 2026-06-11: the ONLY qualifying
- * criteria is the piece count, 24 bulky pieces per transport. Each extra
- * transport is charged like a real extra trip, one increment tariff plus
- * another round of the per-km surcharge.
+ * volume, not by weight: 24 bulky pieces per transport. Each EXTRA transport
+ * is charged like a real extra trip, one increment tariff plus another round
+ * of the per-km surcharge.
  *
- * Below 24 pieces nothing is charged. From 24 up, one extra transport per
- * started block of 24, regardless of what else is on the truck:
- *   23 → 0,  24 → 1,  25 → 2,  48 → 2,  49 → 3.
+ * Below 24 pieces nothing extra is charged. From 24 up, the extra count
+ * depends on whether a real (non-service) product also shares the truck
+ * (ops rule 2026-07-07): if the shipment is ONLY bulky goods, the first block
+ * of 24 rides in the standard transport already in the base tariff, so only
+ * the excess blocks bill; if another product shares the truck, it takes the
+ * base transport and every started block of 24 bills:
+ *   pieces:            23   24   25   48   49
+ *   only bulky:         0    0    1    1    2
+ *   with other goods:   0    1    2    2    3
  */
 export const BULKY_UNITS_PER_TRANSPORT = 24;
 

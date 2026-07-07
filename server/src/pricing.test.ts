@@ -354,11 +354,12 @@ describe("calculatePrice — LEROY doc rates (VAT included)", () => {
   });
 });
 
-// Bulky-but-light goods (polystyrene / mineral wool). Ops rule 2026-06-11:
-// the ONLY qualifying criteria is the piece count — 24 bulky pieces per
-// transport. Below 24 pieces nothing is charged; from 24 up, one extra
-// transport per started block of 24 (24 → 1, 25 → 2), regardless of what
-// else shares the truck. Each extra transport is a real trip → +1
+// Bulky-but-light goods (polystyrene / mineral wool). Ops rule 2026-07-07:
+// 24 bulky pieces per transport. The FIRST block of 24 rides in the standard
+// transport already in baseTariff when the shipment is ONLY bulky goods (the
+// store's LIVRARE/DESCARCARE service lines are NOT "other products"); when a
+// real product shares the truck it takes that base transport and every
+// started block of 24 bills. Each extra transport is a real trip → +1
 // increment tariff AND +1 round of the per-km surcharge.
 describe("calculatePrice — bulky goods (polystyrene / vata) extra transports", () => {
   // Under the 24-piece threshold → no surcharge at all, even on a mixed
@@ -394,30 +395,77 @@ describe("calculatePrice — bulky goods (polystyrene / vata) extra transports",
     expect(r.carrierTotal).toBe(24.20);
   });
 
-  // Exactly 24 pieces → 1 extra transport, mixed or not.
-  // increment "Express / >1200kg / 0-15 km" = 54.50.
-  //   base 24.20 + 54.50 = 78.70.
-  it("24 bulky units → 1 extra transport at the increment tariff", () => {
-    for (const hasOtherProducts of [false, true]) {
-      const r = calculatePrice({
-        service: "Express",
-        weightKg: 100,
-        distanceKm: 5,
-        numDeliveries: 1,
-        deliveryDate: "2026-06-01",
-        bulkyUnits: 24,
-        hasOtherProducts,
-      });
-      expect(r.bulkyTransports).toBe(1);
-      expect(r.incrementTariff).toBe(54.50);
-      expect(r.incrementCost).toBe(54.50);
-      expect(r.carrierTotal).toBe(78.70);
-    }
+  // ONLY polystyrene: the first 24 ride in the standard transport already in
+  // baseTariff, so 24 pieces owe nothing extra.
+  it("24 bulky units, only bulky → 0 extra (rides in the base transport)", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 24,
+      hasOtherProducts: false,
+    });
+    expect(r.bulkyTransports).toBe(0);
+    expect(r.incrementCost).toBe(0);
+    expect(r.carrierTotal).toBe(24.20);
   });
 
-  // 25 pieces → the transport calculation applies twice: 2 extra
-  // transports.  base 24.20 + 2 × 54.50 = 133.20.
-  it("25 bulky units → 2 extra transports", () => {
+  // Another product shares the truck → it takes the base transport, so the
+  // block of 24 polystyrene bills as 1 extra. increment 54.50; 24.20 + 54.50.
+  it("24 bulky units + other goods → 1 extra transport", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 24,
+      hasOtherProducts: true,
+    });
+    expect(r.bulkyTransports).toBe(1);
+    expect(r.incrementTariff).toBe(54.50);
+    expect(r.incrementCost).toBe(54.50);
+    expect(r.carrierTotal).toBe(78.70);
+  });
+
+  // The reported case (AWB 4206554): 48 XPS boards, nothing else but the
+  // store's LIVRARE line → 2 blocks − 1 base-transport credit = 1 extra.
+  it("48 bulky units, only bulky → 1 extra transport", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 48,
+      hasOtherProducts: false,
+    });
+    expect(r.bulkyTransports).toBe(1);
+    expect(r.incrementCost).toBe(54.50);
+    expect(r.carrierTotal).toBe(78.70);
+  });
+
+  // Same 48 boards but with a real product also on the truck → 2 extra.
+  it("48 bulky units + other goods → 2 extra transports", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 48,
+      hasOtherProducts: true,
+    });
+    expect(r.bulkyTransports).toBe(2);
+    expect(r.incrementCost).toBe(109.00); // 2 × 54.50
+    expect(r.carrierTotal).toBe(133.20);
+  });
+
+  // 25 pieces, only bulky → ceil(25/24)=2 blocks − 1 base credit = 1 extra.
+  //   base 24.20 + 54.50 = 78.70.
+  it("25 bulky units, only bulky → 1 extra transport", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 100,
@@ -427,14 +475,14 @@ describe("calculatePrice — bulky goods (polystyrene / vata) extra transports",
       bulkyUnits: 25,
       hasOtherProducts: false,
     });
-    expect(r.bulkyTransports).toBe(2);
-    expect(r.incrementCost).toBe(109.00); // 2 × 54.50
-    expect(r.carrierTotal).toBe(133.20);
+    expect(r.bulkyTransports).toBe(1);
+    expect(r.incrementCost).toBe(54.50);
+    expect(r.carrierTotal).toBe(78.70);
   });
 
-  // 49 pieces → ceil(49/24) = 3 extra transports.
+  // 49 pieces + other goods → ceil(49/24) = 3 extra transports.
   //   base 24.20 + 3 × 54.50 = 187.70.
-  it("49 bulky units → 3 extra transports", () => {
+  it("49 bulky units + other goods → 3 extra transports", () => {
     const r = calculatePrice({
       service: "Express",
       weightKg: 100,
@@ -449,13 +497,30 @@ describe("calculatePrice — bulky goods (polystyrene / vata) extra transports",
     expect(r.carrierTotal).toBe(187.70);
   });
 
+  // 49 pieces, only bulky → 3 blocks − 1 base-transport credit = 2 extra.
+  //   base 24.20 + 2 × 54.50 = 133.20.
+  it("49 bulky units, only bulky → 2 extra transports", () => {
+    const r = calculatePrice({
+      service: "Express",
+      weightKg: 100,
+      distanceKm: 5,
+      numDeliveries: 1,
+      deliveryDate: "2026-06-01",
+      bulkyUnits: 49,
+      hasOtherProducts: false,
+    });
+    expect(r.bulkyTransports).toBe(2);
+    expect(r.incrementCost).toBe(109.00); // 2 × 54.50
+    expect(r.carrierTotal).toBe(133.20);
+  });
+
   // Bulky transport ALSO multiplies the per-km surcharge on the >50 km
-  // tier. 25 units (2 extra transports), 81 km, weekday.
-  //   base    = BASE_TARIFFS[Express / 0-200kg / >50 km]   = 48.40
+  // tier. 25 units only bulky → 1 extra transport; 81 km, weekday.
+  //   base    = BASE_TARIFFS[Express / 0-200kg / >50 km]      = 48.40
   //   incr    = INCREMENT_TARIFFS[Express / >1200kg / >50 km] = 124.66
-  //   extraKm = 31 × 1.90 × 2 × (1 round×1 deliv + 2 bulky) = 31×1.90×2×3 = 353.40
-  //   commissionBase = 48.40 + 2 × 124.66 = 297.72   (km NOT included)
-  //   carrier        = 297.72 + 353.40 = 651.12
+  //   extraKm = 31 × 1.90 × 2 × (1 round + 1 bulky) = 31×1.90×2×2 = 235.60
+  //   commissionBase = 48.40 + 1 × 124.66 = 173.06   (km NOT included)
+  //   carrier        = 173.06 + 235.60 = 408.66
   it("bulky transports add rounds of per-km surcharge on >50 km", () => {
     const r = calculatePrice({
       service: "Express",
@@ -466,13 +531,13 @@ describe("calculatePrice — bulky goods (polystyrene / vata) extra transports",
       bulkyUnits: 25,
       hasOtherProducts: false,
     });
-    expect(r.bulkyTransports).toBe(2);
+    expect(r.bulkyTransports).toBe(1);
     expect(r.baseTariff).toBe(48.40);
     expect(r.extraKm).toBe(31);
-    expect(r.incrementCost).toBe(249.32);
-    expect(r.extraKmCost).toBe(353.40);
-    expect(r.commissionBase).toBe(297.72);
-    expect(r.carrierTotal).toBe(651.12);
+    expect(r.incrementCost).toBe(124.66);
+    expect(r.extraKmCost).toBe(235.60);
+    expect(r.commissionBase).toBe(173.06);
+    expect(r.carrierTotal).toBe(408.66);
   });
 
   // No bulky goods → engine behaves exactly as before (regression guard).

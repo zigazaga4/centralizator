@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summariseMacara } from "./pipeline.js";
+import { summariseBulky, summariseMacara } from "./pipeline.js";
 import { ExtractedSchema, type Extracted } from "./schema.js";
 
 /**
@@ -10,7 +10,7 @@ import { ExtractedSchema, type Extracted } from "./schema.js";
 function makeExtracted(opts: {
   serviceText?: string;
   macaraPallets?: number;
-  items?: { name: string; quantity: number }[];
+  items?: { name: string; quantity: number; is_bulky?: boolean }[];
 }): Extracted {
   return ExtractedSchema.parse({
     awb: {
@@ -32,6 +32,7 @@ function makeExtracted(opts: {
           unit: "buc",
           unit_price_net: 0,
           value_net: 0,
+          is_bulky: it.is_bulky ?? false,
         })),
       },
     ],
@@ -121,5 +122,53 @@ describe("summariseMacara — palet count drives the per-palet unload fee", () =
     );
     expect(r.pallets).toBe(4); // descărcare wins, NOT 4 + 4
     expect(r.runs).toBe(1);
+  });
+});
+
+describe("summariseBulky — bulky units + real-vs-service other-products flag", () => {
+  // The reported case (AWB 4206554): 48 XPS boards + the store's own LIVRARE
+  // line, nothing else. The LIVRARE line is a service charge, NOT a good, so
+  // hasOtherProducts must be false → the pricing engine keeps the base credit.
+  it("a LIVRARE line alongside polystyrene is NOT an 'other product'", () => {
+    const r = summariseBulky(
+      makeExtracted({
+        items: [
+          { name: "POLISTIREN EXTRUDAT GIAS XPS 50MM 5,8MP", quantity: 48, is_bulky: true },
+          { name: "LIVRARE STANDARD 15-20KM/1T/6M3", quantity: 2 },
+        ],
+      }),
+    );
+    expect(r.bulkyUnits).toBe(48);
+    expect(r.hasOtherProducts).toBe(false);
+  });
+
+  // DESCARCARE / TRANSPORT / MANIPULARE lines are service charges too.
+  it("treats DESCARCARE and TRANSPORT lines as services, not goods", () => {
+    const r = summariseBulky(
+      makeExtracted({
+        items: [
+          { name: "VATA MINERALA BAZALTICA 100MM", quantity: 30, is_bulky: true },
+          { name: "DESCARCARE PALET M07", quantity: 3 },
+          { name: "TRANSPORT MARFA", quantity: 1 },
+        ],
+      }),
+    );
+    expect(r.bulkyUnits).toBe(30);
+    expect(r.hasOtherProducts).toBe(false);
+  });
+
+  // A REAL product on the truck flips the flag — and "DIBLU MONTAJ PERCUTIE"
+  // must count as a real product (guards against a naive /montaj/ match).
+  it("a real product (incl. DIBLU MONTAJ) sets hasOtherProducts", () => {
+    const r = summariseBulky(
+      makeExtracted({
+        items: [
+          { name: "POLISTIREN EXTRUDAT XPS 50MM", quantity: 48, is_bulky: true },
+          { name: "DIBLU MONTAJ PERCUTIE 6*60MM 50BUC", quantity: 2 },
+        ],
+      }),
+    );
+    expect(r.bulkyUnits).toBe(48);
+    expect(r.hasOtherProducts).toBe(true);
   });
 });

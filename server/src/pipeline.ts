@@ -184,13 +184,35 @@ export function summariseMacara(
   return { onAwb, onInvoice, pallets, runs };
 }
 
+/**
+ * The store's own service/charge lines (its LIVRARE delivery fee, DESCARCARE
+ * unloading, manipulare/încărcare handling) are NOT physical goods on the
+ * truck, so they must not count as "another product" for the bulky
+ * base-transport rule. Same name-based signal the macara path uses for
+ * "LIVRARE …" lines. Diacritics are stripped before the test.
+ * NB: "montaj" is deliberately NOT here — "DIBLU MONTAJ PERCUTIE" is a real
+ * product line, not a mounting service.
+ */
+const SERVICE_LINE_RE = /livrare|transport|manipulare|descarcare|incarcare/;
+
 export function summariseBulky(extracted: Extracted): { bulkyUnits: number; hasOtherProducts: boolean } {
   let bulkyUnits = 0;
   let hasOtherProducts = false;
   for (const invoice of extracted.invoices) {
     for (const item of invoice.items) {
-      if (item.is_bulky) bulkyUnits += item.quantity;
-      else hasOtherProducts = true;
+      if (item.is_bulky) {
+        bulkyUnits += item.quantity;
+        continue;
+      }
+      const name = (item.name ?? "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "");
+      // Skip the store's delivery/unloading/handling lines: a pure-polystyrene
+      // shipment whose only other line is its own LIVRARE charge is still
+      // "only bulky", and must keep its base-transport credit.
+      if (SERVICE_LINE_RE.test(name)) continue;
+      hasOtherProducts = true;
     }
   }
   return { bulkyUnits: Math.round(bulkyUnits), hasOtherProducts };

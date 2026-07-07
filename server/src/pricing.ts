@@ -118,10 +118,13 @@ export interface PricingInput {
    *  across every invoice on this AWB. Drives the extra-transport
    *  surcharge. Default 0 (no bulky goods). */
   bulkyUnits?: number;
-  /** Whether the invoice(s) also carry non-bulky products. ACCEPTED for
-   *  wire compatibility but NO LONGER affects the price: per the ops rule
-   *  of 2026-06-11 the bulky surcharge depends ONLY on the piece count
-   *  (24 pieces per transport), mixed or not. Default false. */
+  /** Whether the invoice(s) also carry a REAL non-bulky product (the store's
+   *  own LIVRARE/DESCARCARE service lines don't count — see summariseBulky).
+   *  Ops rule 2026-07-07: this drives the bulky base-transport credit. When
+   *  false (pure-bulky shipment) the first block of 24 pieces rides in the
+   *  standard transport already in baseTariff, so only the excess blocks bill
+   *  as extra runs; when true, every bulky block is an extra run. Default
+   *  false. */
   hasOtherProducts?: boolean;
   /** Count of standard unloading fees ("descărcare", 177.69 net / 210 gross)
    *  billed on the shipment — detected from the invoice(s) (or the AWB's
@@ -361,6 +364,9 @@ export interface CollaboratorPrice {
 export function calculatePrice(input: PricingInput): PricingBreakdown {
   const { service, weightKg, distanceKm } = input;
   const bulkyUnits = Math.max(0, Math.floor(input.bulkyUnits ?? 0));
+  // Whether a real (non-bulky, non-service) product also rides the truck.
+  // Drives the bulky base-transport credit below.
+  const hasOtherProducts = input.hasOtherProducts === true;
   const unloadingUnits = Math.max(0, Math.floor(input.unloadingUnits ?? 0));
   const unloadingManualExtra = Math.max(0, Math.floor(input.unloadingManualExtra ?? 0));
 
@@ -400,14 +406,21 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
   const rounds = 1 + weightIncrements;
 
   // Bulky-but-light goods (polystyrene / mineral wool) fill the truck by
-  // volume regardless of weight. The ONLY qualifying criteria is the piece
-  // count: 24 bulky pieces per transport. Below 24 pieces nothing is
-  // charged; 24 pieces → 1 extra transport; 25 → the calculation applies
-  // twice → 2. Whether other products share the truck is irrelevant.
-  // Ops rule 2026-06-11.
-  const bulkyTransports = bulkyUnits >= BULKY_UNITS_PER_TRANSPORT
+  // volume regardless of weight: 24 pieces per transport. The FIRST block of
+  // 24 rides in the STANDARD transport already priced into baseTariff — but
+  // only when the shipment is nothing but bulky goods (the store's own
+  // LIVRARE/DESCARCARE service lines don't count as goods; see
+  // summariseBulky). When another REAL product shares the truck, it occupies
+  // that base transport and every bulky block bills as its own extra run:
+  //   only bulky:   24 → 0 extra, 48 → 1 extra, 49 → 2 extra
+  //   mixed goods:  24 → 1 extra, 48 → 2 extra, 49 → 3 extra
+  // Ops rule 2026-07-07, restoring the base-transport credit the 2026-06-11
+  // piece-count-only rule had dropped for pure-bulky shipments.
+  const bulkyBlocks = bulkyUnits >= BULKY_UNITS_PER_TRANSPORT
     ? Math.ceil(bulkyUnits / BULKY_UNITS_PER_TRANSPORT)
     : 0;
+  const bulkyTransports =
+    bulkyBlocks === 0 ? 0 : hasOtherProducts ? bulkyBlocks : bulkyBlocks - 1;
 
   // Extra-km surcharge only for the >50 km tier; the (km - 50) overage
   // is charged at PER_KM_SURCHARGE × 2 (round trip). The weight rounds scale
