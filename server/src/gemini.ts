@@ -166,7 +166,7 @@ export const awbSchema = {
   type: "object",
   description: "The single AWB (waybill) for this pair.",
   properties: {
-    awb_number: { type: "string", description: "AWB barcode number (e.g. '007209914')." },
+    awb_number: { type: "string", description: "AWB barcode number from the courier waybill LABEL (e.g. '007209914'). NEVER a product 'Referință'/'EAN' barcode from an invoice line, nor a suffix of one (e.g. EAN 3276007318029 → NOT '007318029'), and never the 13-digit FACTURĂ header number. If there is no courier label, leave empty." },
     delivery_date: { type: "string", description: "AWB date, ISO YYYY-MM-DD." },
     service_text: { type: "string", description: "Raw 'Serviciu' value from the AWB ('Standard', 'Express', etc)." },
     shipment_type: { type: "string", description: "AWB 'Expediţie' value, e.g. 'Colet'." },
@@ -277,7 +277,9 @@ const SYSTEM_INSTRUCTION =
   "    'Greutate (kg)', 'Distanță extra (km)', 'Serviciu', 'Continut', 'Expeditor', 'Destinatar', " +
   "    and often a courier brand such as 'couriermanager'.\n" +
   "  - Invoice: A4 landscape or portrait; header reads 'FACTURĂ' / 'FACTURA' (sometimes 'DUPLICAT'); " +
-  "    has a Furnizor + Cumpărător block, a line-items table, and totals (Total fără TVA / TVA / Total).\n" +
+  "    has a Furnizor + Cumpărător block, a line-items table, and totals (Total fără TVA / TVA / Total). " +
+  "    Its product lines carry 13-digit 'Referință'/'EAN' barcodes — those are PRODUCT codes, never an " +
+  "    awb_number (not even a tail of one). An invoice with no separate courier label has NO awb_number.\n" +
   "  - The AWB label may be SMALL, rotated, photographed at an angle, partly wet/blurry, or laid ON TOP " +
   "    of an invoice so it covers only a corner of the photo. If a single photo shows BOTH a courier " +
   "    label AND invoice content, the courier label IS the AWB: read every AWB field from that label " +

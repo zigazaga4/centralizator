@@ -153,7 +153,9 @@ const SYSTEM_INSTRUCTION =
   "  • AWB label: barcode + a 9-digit number (007…), 'Expeditor', 'Destinatar', 'Serviciu', 'Greutate (kg)', " +
   "often branded 'couriermanager'.\n" +
   "  • Invoice: an A4 page headed 'FACTURĂ' / 'FACTURA' (sometimes 'DUPLICAT') with Furnizor + Cumparator " +
-  "blocks, a 'Comandă' number, a 13-digit header number, line items and totals.\n" +
+  "blocks, a 'Comandă' number, a 13-digit header number, line items and totals. Its product table has a " +
+  "'Referință' / 'EAN' column of 13-digit PRODUCT barcodes (e.g. 3276007318029) — those are product codes, " +
+  "NEVER AWB numbers, and neither a code nor any tail of it (e.g. 007318029) is ever an awb_number.\n" +
   "Documents may be ROTATED or UPSIDE DOWN — orient each one mentally before reading it.\n" +
   "Report the facts with the tools:\n" +
   "  • call report_awb once for EACH courier label you can see, filling every field you can read. Decide " +
@@ -172,7 +174,11 @@ const SYSTEM_INSTRUCTION =
   "curl/fold — a partly-off-frame label is a stray background label (stray=true), not this photo's AWB. A photo " +
   "has AT MOST ONE own label: the one whose big AWB number+barcode is upright and fully inside the frame. If no " +
   "label's number is fully and uprightly visible, the photo has NO own label — report only the invoice. " +
-  "The 13-digit FACTURĂ header number is never an awb_number. recipient_name/buyer_name is " +
+  "The 13-digit FACTURĂ header number is never an awb_number, and NEITHER is any product 'Referință'/'EAN' " +
+  "barcode from an invoice line, nor a suffix of one: an awb_number appears ONLY on a courier waybill LABEL " +
+  "(its own barcode + Expeditor/Destinatar/Serviciu block), NEVER inside an invoice's product table. An " +
+  "invoice page that has no such courier label in the frame has NO awb_number — report ONLY the invoice " +
+  "(report_invoice) and do NOT call report_awb. recipient_name/buyer_name is " +
   "the actual person or company receiving/buying — never the Furnizor store, never the courier, never numeric " +
   "codes. Dates ISO YYYY-MM-DD (Romanian DD.MM.YYYY converts). Amounts in RON without thousand separators.\n" +
   "Reply ONLY with tool calls, never in prose.";
