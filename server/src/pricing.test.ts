@@ -20,13 +20,14 @@ describe("weightBucket", () => {
 });
 
 describe("distanceBucket", () => {
-  it("maps km to the right bucket", () => {
+  it("maps km to the right bucket (boundaries upper-inclusive → lower bracket)", () => {
     expect(distanceBucket(0)).toBe("0-15 km");
     expect(distanceBucket(3)).toBe("0-15 km");
-    expect(distanceBucket(15)).toBe("15-20 km");
-    expect(distanceBucket(20)).toBe("20-30 km");
-    expect(distanceBucket(30)).toBe("30-50 km");
-    expect(distanceBucket(50)).toBe(">50 km");
+    expect(distanceBucket(15)).toBe("0-15 km");
+    expect(distanceBucket(20)).toBe("15-20 km");
+    expect(distanceBucket(30)).toBe("20-30 km");
+    expect(distanceBucket(50)).toBe("30-50 km");
+    expect(distanceBucket(50.01)).toBe(">50 km");
     expect(distanceBucket(101)).toBe(">50 km");
   });
 });

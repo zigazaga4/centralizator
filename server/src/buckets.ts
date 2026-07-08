@@ -19,18 +19,22 @@ export function weightBucket(weightKg: number): WeightBucket {
 }
 
 /**
- * Distance (km) → discrete distance bucket. Same lower-inclusive,
- * upper-exclusive convention as the weight bucket. Anything > 50 km
- * lands in the ">50 km" bucket which also triggers per-km surcharge.
+ * Distance (km) → discrete distance bucket. Boundaries are upper-INCLUSIVE:
+ * a value that lands exactly on a bracket edge takes the LOWER (cheaper)
+ * bracket — 15 → "0-15", 20 → "15-20", 30 → "20-30", 50 → "30-50". This
+ * matches the courier's own bracketing (courier manager bills 30 km as
+ * "20-30 km"), so the operator never pays a higher bracket than they were
+ * paid for (ops rule 2026-07-07). Anything strictly above 50 km lands in the
+ * ">50 km" bucket, which also triggers the per-km surcharge.
  */
 export function distanceBucket(distanceKm: number): DistanceBucket {
   if (!Number.isFinite(distanceKm) || distanceKm < 0) {
     throw new RangeError(`distanceKm must be a non-negative finite number, got ${distanceKm}`);
   }
-  if (distanceKm < 15)  return "0-15 km";
-  if (distanceKm < 20)  return "15-20 km";
-  if (distanceKm < 30)  return "20-30 km";
-  if (distanceKm < 50)  return "30-50 km";
+  if (distanceKm <= 15)  return "0-15 km";
+  if (distanceKm <= 20)  return "15-20 km";
+  if (distanceKm <= 30)  return "20-30 km";
+  if (distanceKm <= 50)  return "30-50 km";
   return ">50 km";
 }
 

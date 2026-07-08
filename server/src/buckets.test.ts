@@ -49,6 +49,30 @@ describe("distanceTariffEscalates — the km-alert rule (2026-06-24)", () => {
   });
 });
 
+describe("distanceBucket — boundaries are upper-inclusive (ops 2026-07-07)", () => {
+  // A distance exactly on a bracket edge takes the LOWER (cheaper) bracket, so
+  // the operator never bills a higher bracket than the courier paid them for.
+  it("an exact boundary lands in the lower bracket", () => {
+    expect(distanceBucket(15)).toBe("0-15 km");
+    expect(distanceBucket(20)).toBe("15-20 km");
+    expect(distanceBucket(30)).toBe("20-30 km"); // the reported case
+    expect(distanceBucket(50)).toBe("30-50 km");
+  });
+
+  it("just above a boundary steps up to the next bracket", () => {
+    expect(distanceBucket(15.01)).toBe("15-20 km");
+    expect(distanceBucket(20.01)).toBe("20-30 km");
+    expect(distanceBucket(30.01)).toBe("30-50 km");
+    expect(distanceBucket(50.01)).toBe(">50 km");
+  });
+
+  it("0 km and mid-bracket values", () => {
+    expect(distanceBucket(0)).toBe("0-15 km");
+    expect(distanceBucket(25)).toBe("20-30 km");
+    expect(distanceBucket(1000)).toBe(">50 km");
+  });
+});
+
 describe("weightTariffChanges — the weight-alert rule (2026-07-01)", () => {
   // A weight gap only alarms when it would move the price: the AWB weight and
   // the catalog estimate must fall in different weight-tariff tiers.
