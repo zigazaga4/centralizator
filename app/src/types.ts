@@ -286,6 +286,9 @@ export interface CustomCollaborator {
 }
 
 let customCollaboratorRegistry: CustomCollaborator[] = [];
+/** Effective commission bonus (fraction) per collaborator key — built-in
+ *  defaults plus the operator's overrides, as served by GET /collaborators. */
+let collaboratorBonusRegistry: Record<string, number> = {};
 
 /** Replace the in-memory custom-collaborator registry (called after the
  *  startup fetch and after every create/delete). */
@@ -296,6 +299,21 @@ export function setCustomCollaborators(list: CustomCollaborator[]): void {
 /** The current custom collaborators (all cities). */
 export function getCustomCollaborators(): CustomCollaborator[] {
   return customCollaboratorRegistry;
+}
+
+/** Replace the effective-bonus map (fractions), from GET /collaborators. */
+export function setCollaboratorBonuses(map: Record<string, number>): void {
+  collaboratorBonusRegistry = map;
+}
+
+/** Effective commission bonus (fraction) for a collaborator; 0 if unknown. */
+export function collaboratorBonusPct(key: string): number {
+  return collaboratorBonusRegistry[key] ?? 0;
+}
+
+/** Is this a built-in roster key (vs a user-created collaborator)? */
+export function isBuiltinCollaborator(key: string): boolean {
+  return (COLLABORATOR_KEYS as readonly string[]).includes(key);
 }
 
 /** Full display label for any collaborator key — built-in OR user-created.

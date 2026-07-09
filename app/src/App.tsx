@@ -7,16 +7,19 @@ import { PairsTable } from "./components/PairsTable";
 import { SearchBar } from "./components/SearchBar";
 import { UnpairedAlert, UnpairedModal } from "./components/UnpairedSection";
 import { PairDetail } from "./components/PairDetail";
+import { CollaboratorManageModal } from "./components/CollaboratorManageModal";
 import { Spinner } from "./components/Spinner";
 import { UpdateBanner } from "./components/UpdateBanner";
 import {
   attachToPair as attachToPairApi,
   createCollaborator as createCollaboratorApi,
+  deleteCollaborator as deleteCollaboratorApi,
   detachInvoice as detachInvoiceApi,
   dismantlePair as dismantlePairApi,
   extractAndPrice,
   listCollaborators,
   reprice,
+  setCollaboratorBonus as setCollaboratorBonusApi,
   retryUnpaired as retryUnpairedApi,
   scanBatch,
   verifyProducts,
@@ -38,9 +41,9 @@ import {
   collaboratorLabel,
   collaboratorsForCity,
   defaultCollaboratorFor,
-  getCustomCollaborators,
   isCollaboratorValidForCity,
   primaryDispatchSite,
+  setCollaboratorBonuses,
   setCustomCollaborators,
   type CityKey,
   type CustomCollaborator,
@@ -219,31 +222,30 @@ export default function App() {
     return defaultCollaboratorFor(city);
   });
 
-  /** User-created collaborators. State drives re-renders; the authoritative
-   *  copy lives in the types.ts registry so non-React surfaces (export.ts)
-   *  can resolve labels too. `collabsLoaded` gates the reconcile effect so a
-   *  persisted custom selection isn't wiped before the roster arrives. */
+  /** User-created collaborators + effective bonuses. State drives re-renders;
+   *  the authoritative copies live in the types.ts registry so non-React
+   *  surfaces (export.ts) resolve labels too. `collabsLoaded` gates the
+   *  reconcile effect so a persisted custom selection isn't wiped before the
+   *  roster arrives. The mutation handlers live below `commit` (they refresh
+   *  the pair queue too). */
   const [, setCustomCollabs] = useState<CustomCollaborator[]>([]);
   const [collabsLoaded, setCollabsLoaded] = useState(false);
+  const [managingCollaborators, setManagingCollaborators] = useState(false);
+
+  const refreshCollaborators = useCallback(async () => {
+    const { collaborators, bonuses } = await listCollaborators();
+    setCustomCollaborators(collaborators);
+    setCollaboratorBonuses(bonuses);
+    setCustomCollabs(collaborators);
+  }, []);
+
   useEffect(() => {
-    listCollaborators()
-      .then((list) => {
-        setCustomCollaborators(list);
-        setCustomCollabs(list);
-      })
+    refreshCollaborators()
       .catch(() => {
         /* offline / older server: the built-in roster still works */
       })
       .finally(() => setCollabsLoaded(true));
-  }, []);
-
-  const handleCreateCollaborator = useCallback(async (label: string): Promise<string> => {
-    const created = await createCollaboratorApi(label);
-    const next = [...getCustomCollaborators(), created];
-    setCustomCollaborators(next);
-    setCustomCollabs(next);
-    return created.key;
-  }, []);
+  }, [refreshCollaborators]);
 
   useEffect(() => {
     try {
@@ -392,6 +394,45 @@ export default function App() {
     pairsRef.current = next;
     setPairs(next);
   }, []);
+
+  /** Re-pull the whole queue from the server (used after the server re-prices
+   *  the queue behind our back, e.g. a collaborator bonus change). */
+  const refreshPairs = useCallback(async () => {
+    try {
+      commit(await loadAllPairs());
+    } catch (err) {
+      console.error("Failed to refresh pairs after a collaborator change:", err);
+    }
+  }, [commit]);
+
+  /** Any collaborator create/edit/delete re-prices the ready queue server-side,
+   *  so re-fetch the roster AND the pairs to reflect the new payouts. */
+  const afterCollaboratorChange = useCallback(async () => {
+    await refreshCollaborators();
+    await refreshPairs();
+  }, [refreshCollaborators, refreshPairs]);
+
+  const handleCreateCollaborator = useCallback(
+    async (label: string, bonusPct: number) => {
+      await createCollaboratorApi(label, selectedCity, bonusPct);
+      await afterCollaboratorChange();
+    },
+    [selectedCity, afterCollaboratorChange],
+  );
+  const handleSetCollaboratorBonus = useCallback(
+    async (key: string, bonusPct: number) => {
+      await setCollaboratorBonusApi(key, bonusPct, collaboratorLabel(key), selectedCity);
+      await afterCollaboratorChange();
+    },
+    [selectedCity, afterCollaboratorChange],
+  );
+  const handleDeleteCollaborator = useCallback(
+    async (key: string) => {
+      await deleteCollaboratorApi(key);
+      await afterCollaboratorChange();
+    },
+    [afterCollaboratorChange],
+  );
 
   /* ── Hydrate from SQLite on first mount ───────────────────────────── */
 
@@ -1510,7 +1551,7 @@ export default function App() {
               city={selectedCity}
               value={selectedCollaborator}
               onChange={setSelectedCollaborator}
-              onCreate={handleCreateCollaborator}
+              onManage={() => setManagingCollaborators(true)}
             />
           </div>
 
@@ -1637,6 +1678,15 @@ export default function App() {
                 existingPairs={attachTargets}
                 onAttach={attachToPair}
                 onRetry={() => retryUnpaired(selectedDay)}
+              />
+            )}
+            {managingCollaborators && (
+              <CollaboratorManageModal
+                city={selectedCity}
+                onCreate={handleCreateCollaborator}
+                onSetBonus={handleSetCollaboratorBonus}
+                onDelete={handleDeleteCollaborator}
+                onClose={() => setManagingCollaborators(false)}
               />
             )}
             {/* Search the day's pairs. Only useful once there's something to
@@ -1859,41 +1909,16 @@ function CollaboratorSelect({
   city,
   value,
   onChange,
-  onCreate,
+  onManage,
 }: {
   city: CityKey;
   value: string | null;
   onChange: (next: string | null) => void;
-  /** Create a collaborator from a typed name; resolves to its new key. */
-  onCreate: (label: string) => Promise<string>;
+  /** Open the manage-collaborators modal (add / edit commission / delete). */
+  onManage: () => void;
 }) {
   const options = collaboratorsForCity(city);
   const empty = options.length === 0;
-  // Creating partners is Constanța-only for now (the other series carry
-  // fixed, negotiated rosters).
-  const canCreate = city === "Constanta";
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async () => {
-    const label = name.trim();
-    if (!label || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const key = await onCreate(label);
-      onChange(key);
-      setName("");
-      setAdding(false);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <label
       className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-ink-500"
@@ -1921,62 +1946,17 @@ function CollaboratorSelect({
           ))}
         </select>
       )}
-      {canCreate &&
-        (adding ? (
-          <span className="inline-flex items-center gap-1" title={error ?? undefined}>
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                if (error) setError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void submit();
-                else if (e.key === "Escape") {
-                  setAdding(false);
-                  setName("");
-                  setError(null);
-                }
-              }}
-              placeholder="Nume colaborator"
-              disabled={busy}
-              className={`w-40 rounded-md border bg-canvas-50 px-2 py-1.5 text-sm font-medium normal-case tracking-normal text-ink-800 outline-none focus:ring-2 focus:ring-coral-200 ${
-                error ? "border-coral-500" : "border-ink-300 focus:border-coral-400"
-              }`}
-            />
-            <button
-              type="button"
-              onClick={() => void submit()}
-              disabled={busy || !name.trim()}
-              title="Salvează colaboratorul"
-              className="rounded-md border border-coral-400 bg-coral-50 px-2 py-1.5 text-sm font-semibold text-coral-700 transition hover:bg-coral-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              OK
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAdding(false);
-                setName("");
-                setError(null);
-              }}
-              title="Anulează"
-              className="rounded-md border border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm text-ink-500 transition hover:text-ink-800"
-            >
-              ✕
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            title="Adaugă un colaborator nou (Constanța)"
-            className="rounded-md border border-dashed border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm font-semibold leading-none text-ink-500 transition hover:border-coral-400 hover:text-coral-700"
-          >
-            ＋
-          </button>
-        ))}
+      {/* Manage: add a collaborator or edit any partner's commission %, for
+          EVERY city. Opens the manage modal. */}
+      <button
+        type="button"
+        onClick={onManage}
+        title="Gestionează colaboratorii (adaugă / editează comisionul)"
+        aria-label="Gestionează colaboratorii"
+        className="rounded-md border border-dashed border-ink-300 bg-canvas-50 px-2 py-1.5 text-sm font-semibold leading-none text-ink-500 transition hover:border-coral-400 hover:text-coral-700"
+      >
+        ＋
+      </button>
     </label>
   );
 }

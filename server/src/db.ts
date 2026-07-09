@@ -457,6 +457,19 @@ const stmt = {
      VALUES (@key, @label, @city, @bonus_pct, @created_at)`,
   ),
   deleteCollaborator: db.prepare(`DELETE FROM collaborators WHERE key = ?`),
+  upsertCollaboratorBonus: db.prepare(
+    `INSERT INTO collaborators (key, label, city, bonus_pct, created_at)
+     VALUES (@key, @label, @city, @bonus_pct, @created_at)
+     ON CONFLICT(key) DO UPDATE SET bonus_pct = excluded.bonus_pct`,
+  ),
+  selectReadyPricingRows: db.prepare<[], ReadyPricingRow>(
+    `SELECT id, day, service, edits_json, breakdown_json, store, routing_json
+       FROM pairs
+      WHERE status_kind = 'ready' AND edits_json IS NOT NULL AND service IS NOT NULL`,
+  ),
+  updateBreakdownJson: db.prepare(
+    `UPDATE pairs SET breakdown_json = @b, updated_at = @t WHERE id = @id`,
+  ),
   selectLmProduct: db.prepare<[string], LmProductRow>(
     `SELECT query, found, url, name, brand, price_buc, weight_kg, area_m2, dims_mm, fetched_at
        FROM lm_products WHERE query = ?`,
@@ -911,6 +924,44 @@ export function insertCollaborator(input: {
 /** Delete a user-created collaborator by key. Returns false if none matched. */
 export function deleteCollaborator(key: string): boolean {
   return stmt.deleteCollaborator.run(key).changes > 0;
+}
+
+/** Set a collaborator's bonus by key: inserts a row if none exists (a built-in
+ *  being overridden the first time), otherwise updates only its bonus_pct
+ *  (label/city preserved). */
+export function setCollaboratorBonus(input: {
+  key: string;
+  label: string;
+  city: string;
+  bonusPct: number;
+}): void {
+  stmt.upsertCollaboratorBonus.run({
+    key: input.key,
+    label: input.label,
+    city: input.city,
+    bonus_pct: input.bonusPct,
+    created_at: Date.now(),
+  });
+}
+
+/** Raw pricing inputs for every ready pair — used by the bulk re-price after a
+ *  collaborator/bonus change so existing breakdowns pick up the new roster. */
+export interface ReadyPricingRow {
+  id: string;
+  day: string;
+  service: Service | null;
+  edits_json: string | null;
+  breakdown_json: string | null;
+  store: StoreKey | null;
+  routing_json: string | null;
+}
+export function readyPairPricingRows(): ReadyPricingRow[] {
+  return stmt.selectReadyPricingRows.all();
+}
+/** Overwrite just a pair's breakdown JSON (a targeted re-price, no status
+ *  transition or image load). */
+export function updatePairBreakdownJson(id: string, breakdownJson: string): void {
+  stmt.updateBreakdownJson.run({ id, b: breakdownJson, t: Date.now() });
 }
 
 /** Clear the entire queue (every day, every pair). The route layer

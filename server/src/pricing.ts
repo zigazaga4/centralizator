@@ -555,10 +555,11 @@ export function calculatePrice(input: PricingInput): PricingBreakdown {
     }),
   ) as Record<City, CityCommission>;
 
-  // Built-in roster + any user-created collaborators (0% for Constanța, so
-  // their total equals the pure carrier total). A custom key that duplicated a
-  // built-in would be de-duped here (last wins), but the create route forbids
-  // that collision.
+  // Built-in roster first, then the stored collaborator rows. Object.fromEntries
+  // de-dupes last-wins, so a row for a BUILT-IN key overrides that built-in's
+  // bonus (the operator raised its commission) and a row for a NEW key adds a
+  // custom collaborator — one mechanism drives both. extraCollaborators is
+  // injected by the routes from the collaborator registry.
   const collaboratorRates: [string, number][] = [
     ...COLLABORATORS.map((c) => [c, COLLABORATOR_BONUS_BY_NAME[c]] as [string, number]),
     ...(input.extraCollaborators ?? []).map((c) => [c.key, c.pct] as [string, number]),

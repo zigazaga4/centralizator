@@ -264,27 +264,35 @@ export async function setWeekendDay(day: string, force: boolean): Promise<void> 
   }
 }
 
-/* ── User-created collaborators (Constanța-only today) ───────────────── */
+/* ── Collaborators + commission bonuses (every city) ─────────────────── */
 
-/** The operator's runtime-added collaborators (the built-in roster is static
- *  in types.ts and NOT returned here). */
-export async function listCollaborators(): Promise<CustomCollaborator[]> {
+/** The operator's runtime-added collaborators PLUS the effective bonus for
+ *  every collaborator (built-in defaults + overrides), keyed by key. */
+export async function listCollaborators(): Promise<{
+  collaborators: CustomCollaborator[];
+  bonuses: Record<string, number>;
+}> {
   const res = await fetch(`${BASE}/collaborators`, { headers: authHeaders() });
-  if (res.status === 404) return [];
+  if (res.status === 404) return { collaborators: [], bonuses: {} };
   if (!res.ok) throw new Error(`list collaborators failed (${res.status})`);
-  const data = (await res.json()) as { collaborators?: CustomCollaborator[] };
-  return data.collaborators ?? [];
+  const data = (await res.json()) as {
+    collaborators?: CustomCollaborator[];
+    bonuses?: Record<string, number>;
+  };
+  return { collaborators: data.collaborators ?? [], bonuses: data.bonuses ?? {} };
 }
 
-/** Create a new collaborator from an operator-typed name (Constanța-only). */
+/** Create a new collaborator (any city) with an optional starting bonus
+ *  (fraction, 0.25 = 25%). */
 export async function createCollaborator(
   label: string,
-  city = "Constanta",
+  city: string,
+  bonusPct = 0,
 ): Promise<CustomCollaborator> {
   const res = await fetch(`${BASE}/collaborators`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ label, city }),
+    body: JSON.stringify({ label, city, bonusPct }),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -294,7 +302,27 @@ export async function createCollaborator(
   return data.collaborator;
 }
 
-/** Remove a user-created collaborator by key. */
+/** Set a collaborator's commission bonus (fraction). Works for a built-in or a
+ *  custom one; `label`/`city` complete the row when a built-in is first
+ *  overridden. The server re-prices the whole ready queue. */
+export async function setCollaboratorBonus(
+  key: string,
+  bonusPct: number,
+  label: string,
+  city: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/collaborators/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ bonusPct, label, city }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`set collaborator bonus failed (${res.status}): ${body}`);
+  }
+}
+
+/** Remove a custom collaborator, or revert a built-in's bonus to its default. */
 export async function deleteCollaborator(key: string): Promise<void> {
   const res = await fetch(`${BASE}/collaborators/${encodeURIComponent(key)}`, {
     method: "DELETE",
