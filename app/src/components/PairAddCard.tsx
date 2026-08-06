@@ -26,6 +26,19 @@ const MAX_IMAGES = 120;
  *  preselected next time so the common case is one click on "Trimite". */
 const LS_UPLOAD_COLLABORATOR = "centralizator.uploadCollaborator";
 
+/** Files the upload flow accepts: photos AND PDFs. The server rasterizes a
+ *  PDF into one image per page at ingest, so a scanned/exported PDF works
+ *  exactly like a photo (a 2-page PDF pairs its AWB with its invoice).
+ *  Some file pickers report a PDF with an empty/generic type, so fall back
+ *  to the extension. */
+function isAcceptedUpload(f: { type: string; name?: string }): boolean {
+  return (
+    f.type.startsWith("image/") ||
+    f.type === "application/pdf" ||
+    /\.pdf$/i.test(f.name ?? "")
+  );
+}
+
 function readStoredCollaborator(): string | null {
   try {
     const s = localStorage.getItem(LS_UPLOAD_COLLABORATOR);
@@ -72,9 +85,9 @@ export function PairAddCard({ onScan, hero }: Props) {
   const handle = useCallback(
     (incoming: FileList | File[]) => {
       if (sending || pending) return; // one upload at a time — the next drop waits
-      const imgs = Array.from(incoming).filter((f) => f.type.startsWith("image/"));
+      const imgs = Array.from(incoming).filter(isAcceptedUpload);
       if (imgs.length === 0) {
-        setNotice({ kind: "warn", text: "Niciun fișier imagine detectat." });
+        setNotice({ kind: "warn", text: "Niciun fișier imagine sau PDF detectat." });
         return;
       }
       if (imgs.length > MAX_IMAGES) {
@@ -146,7 +159,7 @@ export function PairAddCard({ onScan, hero }: Props) {
         }}
         onPaste={(e) => {
           const imgs = Array.from(e.clipboardData.items)
-            .filter((i) => i.type.startsWith("image/"))
+            .filter((i) => isAcceptedUpload({ type: i.type }))
             .map((i) => i.getAsFile())
             .filter((f): f is File => !!f);
           if (imgs.length) handle(imgs);
@@ -163,7 +176,7 @@ export function PairAddCard({ onScan, hero }: Props) {
         <input
           ref={inputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,application/pdf,.pdf"
           multiple
           className="hidden"
           onChange={(e) => {
@@ -196,9 +209,9 @@ export function PairAddCard({ onScan, hero }: Props) {
               {sending ? "Se trimit imaginile…" : "Adaugă documente"}
             </p>
             <p className="mt-1.5 text-sm text-ink-500">
-              Drop toate pozele deodată (AWB-uri + facturi, în orice ordine) —
-              fiecare imagine este citită separat, apoi împerecheată după
-              destinatar și calculată automat.
+              Drop toate pozele sau PDF-urile deodată (AWB-uri + facturi, în
+              orice ordine) — fiecare pagină este citită separat, apoi
+              împerecheată după destinatar și calculată automat.
             </p>
           </>
         ) : (
@@ -223,7 +236,7 @@ export function PairAddCard({ onScan, hero }: Props) {
                   {sending ? "Se trimit imaginile…" : "Adaugă documente"}
                 </p>
                 <p className="text-xs text-ink-500">
-                  oricâte poze deodată · împerechere automată după destinatar
+                  poze sau PDF-uri · împerechere automată după destinatar
                 </p>
               </div>
             </div>

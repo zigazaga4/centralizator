@@ -29,6 +29,7 @@ import { verifyShipment } from "../verify.js";
 import { scrapingdogConfigured } from "../scrapingdog.js";
 import { getWeekendDay, insertPair, persistPairStatus, signalExtracting, type UnpairedDocType } from "../db.js";
 import { extraCollaboratorInputs, isKnownCollaborator } from "../collaborators.js";
+import { expandUploadToImages, isPdf, PDF_MIME } from "../pdf.js";
 
 const ACCEPTED_MIME = new Set([
   "image/jpeg",
@@ -37,6 +38,12 @@ const ACCEPTED_MIME = new Set([
   "image/webp",
   "image/heic",
   "image/heif",
+  // PDFs are accepted too — rasterized to one JPEG per page at ingest (pdf.ts)
+  // so everything downstream keeps seeing plain images.
+  PDF_MIME,
+  // Some phones/browsers send a generic type for a PDF picked from a file
+  // manager; `isPdf` sniffs the %PDF magic, so let these through to the check.
+  "application/octet-stream",
 ]);
 
 /** Hard cap on a single batch upload. A courier's daily stack is well
@@ -320,7 +327,22 @@ export default async function scanBatchRoutes(app: FastifyInstance) {
         return reply.code(415).send({ error: `Unsupported MIME type: ${mimeType}` });
       }
       const bytes = await part.toBuffer();
-      images.push({ name: part.filename || `scan-${images.length + 1}`, mimeType, bytes });
+      const name = part.filename || `scan-${images.length + 1}`;
+      // A PDF is expanded into one image per page here, at the ingest
+      // boundary, so classify/linker/dedup/storage never see a second format.
+      // A generic octet-stream that is NOT a PDF is rejected (we only allowed
+      // it through so the magic-byte sniff could run).
+      if (mimeType === "application/octet-stream" && !isPdf(mimeType, bytes)) {
+        return reply.code(415).send({ error: `Unsupported MIME type: ${mimeType}` });
+      }
+      let expanded;
+      try {
+        expanded = await expandUploadToImages({ name, mimeType, bytes });
+      } catch (err) {
+        req.log.warn({ err, file: name }, "scan-batch: PDF rasterization failed");
+        return reply.code(415).send({ error: (err as Error).message });
+      }
+      images.push(...expanded);
       if (images.length > MAX_BATCH_IMAGES) {
         return reply.code(413).send({ error: `Too many images: cap is ${MAX_BATCH_IMAGES} per batch.` });
       }

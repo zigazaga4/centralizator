@@ -14,6 +14,7 @@ import { calculatePrice, type PricingBreakdown } from "../pricing.js";
 import { type Service } from "../tariffs.js";
 import { extractAndPrice, PipelineError, todayFilingDay } from "../pipeline.js";
 import { extraCollaboratorInputs } from "../collaborators.js";
+import { expandUploadToImages, isPdf, PDF_MIME } from "../pdf.js";
 import {
   PricingRequestSchema,
   type Extracted,
@@ -27,6 +28,11 @@ const ACCEPTED_MIME = new Set([
   "image/webp",
   "image/heic",
   "image/heif",
+  // PDFs are rasterized to one image per page at ingest (see pdf.ts).
+  PDF_MIME,
+  // Generic type from some file pickers — allowed through so the %PDF magic
+  // sniff can run; rejected below if it isn't actually a PDF.
+  "application/octet-stream",
 ]);
 
 /** Hard cap on images per pair. Generous enough for any realistic AWB
@@ -61,7 +67,21 @@ export default async function extractRoutes(app: FastifyInstance) {
         return reply.code(415).send({ error: `Unsupported MIME type: ${mimeType}` });
       }
       const buf = await part.toBuffer();
-      images.push({ data: buf, mimeType });
+      if (mimeType === "application/octet-stream" && !isPdf(mimeType, buf)) {
+        return reply.code(415).send({ error: `Unsupported MIME type: ${mimeType}` });
+      }
+      // A PDF becomes one image per page here, so the vision call only ever
+      // receives images (same boundary rule as /scan-batch).
+      try {
+        const expanded = await expandUploadToImages({
+          name: part.filename || "upload",
+          mimeType,
+          bytes: buf,
+        });
+        for (const e of expanded) images.push({ data: e.bytes, mimeType: e.mimeType });
+      } catch (err) {
+        return reply.code(415).send({ error: (err as Error).message });
+      }
       if (images.length > MAX_IMAGES) {
         return reply.code(413).send({
           error: `Too many images: cap is ${MAX_IMAGES} per pair (1 AWB + up to ${MAX_IMAGES - 1} invoices).`,
